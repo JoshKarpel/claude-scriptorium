@@ -14,20 +14,33 @@ cargo install claude-scriptorium
 
 ## Usage
 
-Render the most recent session recorded for the current directory:
+Pick a session interactively (a project list, then its sessions, each labelled
+with Claude's own title for it):
 
 ```bash
 claude-scriptorium render
 ```
 
-Render a specific session file, to a chosen path:
+The current project floats to the top and every list starts on its first row,
+so pressing Enter twice renders the current project's most recent session. To
+get that same session without the prompt (for scripts, or over SSH with no
+terminal), pass `--latest`:
+
+```bash
+claude-scriptorium render --latest --open
+```
+
+`--open` opens the rendered folio in your browser. Render a specific session
+file to a chosen path, or into a directory:
 
 ```bash
 claude-scriptorium render ~/.claude/projects/-home-me-work/<session-id>.jsonl -o folio.html
+claude-scriptorium render --latest -o folios/
 ```
 
 Serve a session over HTTP with live reload, for watching a session or iterating
-on the rendering:
+on the rendering (the same session selection applies, so `serve --latest` or a
+bare `serve` picker both work):
 
 ```bash
 claude-scriptorium serve <session-id>.jsonl

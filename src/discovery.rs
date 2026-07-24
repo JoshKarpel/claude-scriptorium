@@ -4,6 +4,7 @@ use std::{
     cmp::Reverse,
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -23,6 +24,37 @@ impl Quire {
             .map(PathBuf::as_path)
             .ok_or_else(|| anyhow!("no sessions recorded in {}", self.dir.display()))
     }
+
+    /// When the most recently touched session in this quire was modified,
+    /// used to order projects by activity. `sessions` is already sorted
+    /// most-recent first, so the head carries the answer.
+    fn latest_modified(&self) -> SystemTime {
+        self.sessions
+            .first()
+            .and_then(|session| session.metadata().ok())
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(UNIX_EPOCH)
+    }
+}
+
+/// Every project's quire, most recently active first, for browsing across
+/// projects. Directories that hold no session files are left out: an empty
+/// quire is nothing to pick.
+pub fn all_quires(root: &Path) -> Result<Vec<Quire>> {
+    let mut quires = Vec::new();
+    for entry in fs::read_dir(root).with_context(|| format!("listing {}", root.display()))? {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let sessions = sessions_in(&dir)?;
+        if sessions.is_empty() {
+            continue;
+        }
+        quires.push(Quire { dir, sessions });
+    }
+    quires.sort_by_key(|quire| Reverse(quire.latest_modified()));
+    Ok(quires)
 }
 
 /// The root Claude Code writes project transcripts under.
@@ -105,5 +137,60 @@ mod tests {
             encode_project_path(Path::new("/srv/quire_two")),
             "-srv-quire_two"
         );
+    }
+
+    /// Builds a throwaway projects root and removes it when dropped, so the
+    /// filesystem-facing enumeration can be exercised without a temp-dir crate.
+    struct TempRoot {
+        path: PathBuf,
+    }
+
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("scriptorium-{tag}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn project(&self, name: &str, files: &[&str]) {
+            let dir = self.path.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            for file in files {
+                fs::write(dir.join(file), "{}\n").unwrap();
+            }
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn all_quires_lists_projects_holding_sessions() {
+        let root = TempRoot::new("with-sessions");
+        root.project("-srv-alpha", &["one.jsonl", "two.jsonl"]);
+
+        let quires = all_quires(&root.path).unwrap();
+
+        let dirs: Vec<_> = quires.iter().map(|quire| quire.dir.clone()).collect();
+        assert_eq!(dirs, [root.path.join("-srv-alpha")]);
+        assert_eq!(quires[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn all_quires_skips_empty_and_subagent_only_projects() {
+        let root = TempRoot::new("empty-and-subagent");
+        root.project("-srv-empty", &[]);
+        root.project("-srv-subagent", &["agent-7f.jsonl"]);
+        root.project("-srv-real", &["session.jsonl"]);
+
+        let quires = all_quires(&root.path).unwrap();
+
+        let dirs: Vec<_> = quires.iter().map(|quire| quire.dir.clone()).collect();
+        assert_eq!(dirs, [root.path.join("-srv-real")]);
     }
 }

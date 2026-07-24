@@ -51,6 +51,53 @@ impl Folio {
             .unwrap_or("session")
     }
 
+    /// Cheaply scans a session's listing metadata (its title and working
+    /// directory) without parsing the conversation, tolerating malformed lines
+    /// so one bad session never breaks a picker that lists every session. This
+    /// is deliberately lenient where [`Folio::read`] is strict: a label is
+    /// best-effort, a render is not.
+    pub fn peek(source: &Path) -> SessionPeek {
+        let Ok(text) = fs::read_to_string(source) else {
+            return SessionPeek::default();
+        };
+
+        let mut cwd = None;
+        let mut ai_title = None;
+        let mut first_prompt = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if cwd.is_none()
+                && let Some(dir) = value.get("cwd").and_then(Value::as_str)
+            {
+                cwd = Some(PathBuf::from(dir));
+            }
+            match value.get("type").and_then(Value::as_str) {
+                // Claude rewrites the title as the session evolves, so the last
+                // one wins: it is the summary Claude Code shows in terminals.
+                Some("ai-title") => {
+                    if let Some(title) = value.get("aiTitle").and_then(Value::as_str) {
+                        ai_title = Some(title.to_owned());
+                    }
+                }
+                Some("user") if first_prompt.is_none() && !is_meta(&value) => {
+                    first_prompt = user_prompt(&value);
+                }
+                _ => {}
+            }
+        }
+
+        SessionPeek {
+            cwd,
+            title: ai_title.or(first_prompt),
+        }
+    }
+
     /// Folds the raw turns into the display stream: drops `/clear` boundaries
     /// and merges each tool-result turn back into the assistant turn it
     /// answers, so a call and its result render as one panel.
@@ -70,6 +117,53 @@ impl Folio {
         }
         panels
     }
+}
+
+/// A session's listing metadata, scanned by [`Folio::peek`] for pickers and
+/// indexes that show sessions without rendering them.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SessionPeek {
+    /// The directory the session ran in, recovered from the transcript because
+    /// the encoded project-dir name flattens separators and can't be decoded
+    /// back to a real path.
+    pub cwd: Option<PathBuf>,
+    /// A human label for the session: Claude's own `ai-title`, falling back to
+    /// the first prose the user typed when the session has no title yet.
+    pub title: Option<String>,
+}
+
+/// True when a turn was injected by the harness rather than typed by the user.
+fn is_meta(entry: &Value) -> bool {
+    entry
+        .get("isMeta")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The first prose from a user turn, or `None` when it carries only a
+/// harness-injected command wrapper, notification, or reminder: those open with
+/// an XML-ish tag rather than something the user actually wrote.
+fn user_prompt(entry: &Value) -> Option<String> {
+    const WRAPPERS: [&str; 4] = [
+        "<command-",
+        "<local-command-",
+        "<task-notification>",
+        "<system-reminder>",
+    ];
+
+    let content = entry.get("message")?.get("content")?;
+    let text = match content {
+        Value::String(text) => text.trim(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .find_map(|block| block.get("text").and_then(Value::as_str))?
+            .trim(),
+        _ => return None,
+    };
+
+    let is_wrapper = WRAPPERS.iter().any(|tag| text.starts_with(tag));
+    (!text.is_empty() && !is_wrapper).then(|| text.to_owned())
 }
 
 /// A conversation turn, with the role lifted out of the JSONL's `type` tag.

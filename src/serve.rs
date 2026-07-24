@@ -39,12 +39,22 @@ const LIVE_RELOAD: &str = r#"<script>
 
 /// Serves the folio at `http://127.0.0.1:<port>`, re-rendering `render` on
 /// every full page load and reloading the browser when `session` changes or
-/// the server restarts. Runs until interrupted.
-pub fn run(port: u16, session: &Path, render: impl Fn() -> Result<String>) -> Result<()> {
+/// the server restarts. With `open`, launches the default browser once the
+/// port is bound. Runs until interrupted.
+pub fn run(
+    port: u16,
+    session: &Path,
+    open: bool,
+    render: impl Fn() -> Result<String>,
+) -> Result<()> {
     let boot = now_nanos();
     let address = format!("127.0.0.1:{port}");
     let server = bind(&address)?;
     println!("serving http://{address}  (Ctrl-C to stop)");
+
+    if open {
+        let _ = open::that(format!("http://{address}"));
+    }
 
     for request in server.incoming_requests() {
         if request.url() == "/livereload" {

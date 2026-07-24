@@ -81,8 +81,18 @@ Strictness belongs only where a field is genuinely required.
   code unfurls past the reading measure so diffs fit without sideways scrolling.
   The self-contained invariant is now framed as gist-shareable bundle size, not
   script-freeness; transcript content is still escaped, never executed.
-- **M4, CLI ergonomics.** Interactive session picker, `--open`, output
-  path handling.
+- **M4, CLI ergonomics.** Done. With no session named and a terminal
+  attached, a two-stage `inquire` picker (project, then session) opens: the
+  current project floats to the top and every list starts on its first row, so
+  Enter, Enter lands on the current project's most recent session. Projects
+  show the real working directory (recovered from the transcript, since the
+  encoded directory name is lossy) and sessions show a relative time plus
+  Claude's own `ai-title` (the summary it puts in terminal titles), read by a
+  lenient `Folio::peek` that tolerates malformed lines. `--latest` resolves that
+  same current-project/most-recent session non-interactively (the old default,
+  now what CI and non-TTY invocations get, with a clear error otherwise). `-o`
+  accepts a directory to write `<session-id>.html` into and creates missing
+  parents; `--open` opens the written folio (or, for `serve`, the served URL).
 - **M5, optional.** Gist publishing, browsable archive of all sessions.
 
 ## Decisions
@@ -111,8 +121,8 @@ Strictness belongs only where a field is genuinely required.
   It reloads when the session file grows or
   the server restarts, so `just serve` (rebuild + restart on source change)
   gives a live edit loop. Uses `tiny_http`, no async runtime.
-- **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve), picker
-  via `inquire` or `dialoguer` (M4), `open` for the browser (M4).
+- **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve),
+  `inquire` for the two-stage picker, `open` for launching the browser.
 
 ## Theming vocabulary
 

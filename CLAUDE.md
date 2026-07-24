@@ -34,17 +34,27 @@ module each:
 - `discovery`: finds session files under `~/.claude/projects/`, where each
   project directory is named after its path with everything outside
   `[A-Za-z0-9_]` flattened to a dash. `CLAUDE_CONFIG_DIR` relocates the root.
+  `all_quires` enumerates every project for the cross-project picker.
 - `transcript`: parses JSONL lines into a `Folio` of raw `Turn`s, then folds
-  those into a stream of display `Panel`s (`Folio::panels`).
+  those into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
+  separate, deliberately lenient scan of a session's listing metadata (its
+  `ai-title` and working directory) that tolerates malformed lines, because a
+  picker label is best-effort where a render is strict.
+- `picker`: the interactive two-stage selector (project, then session) the
+  shell opens when no session is named and a terminal is attached.
 - `render`: `Scribe` turns a folio's panels into `Markup`.
 
 `src/main.rs` is the imperative shell: it dispatches the `render` and `serve`
-subcommands, resolves paths, reads the clock and system timezone, builds the
-syntect adapter, and writes the file. Everything those decisions feed into is
+subcommands, resolves which session to show, reads the clock and system
+timezone, builds the syntect adapter, and writes the file. Session resolution
+is layered: an explicit path wins, then `--latest` (the current project's most
+recent session), then the interactive picker on a TTY, then a loud error when
+there's no terminal to pick from. Everything the render decisions feed into is
 passed as an argument, so `Scribe` and the markup functions stay pure and
 testable without mocks. Keep it that way when adding features: a renderer that
 reads the clock or touches the filesystem breaks the test suite's ability to
-assert on exact output.
+assert on exact output. Interactive I/O (the picker, browser-opening) lives in
+the shell and its modules, never in the renderer.
 
 `serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
 load and injects a live-reload snippet so the browser refreshes when the
