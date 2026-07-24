@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Accept explicit version tags; still flag a floating @main.
+        "*": ref-pin

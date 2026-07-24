@@ -13,7 +13,13 @@ repos:
     rev: 0.37.4
     hooks:
       - id: check-github-workflows
+      - id: check-github-actions
       - id: check-dependabot
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.28.0
+    hooks:
+      - id: zizmor
 
   - repo: local
     hooks:

@@ -1,17 +1,17 @@
-name: Release
+name: release
 
 on:
   release:
     types: [published]
+
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   binaries:
-    permissions:
-      contents: write
-
+    name: Build binaries
     strategy:
       fail-fast: false
       matrix:
@@ -26,14 +26,18 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-
     runs-on: ${{ matrix.os }}
-
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build and attach to the release
-        uses: taiki-e/upload-rust-binary-action@v1
+        uses: taiki-e/upload-rust-binary-action@v1.30.2
         with:
           bin: claude-scriptorium
           target: ${{ matrix.target }}
@@ -41,22 +45,31 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   crates-io:
+    name: Publish to crates.io
     needs: [binaries]
-
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: crates-io
-
     # Trusted publishing: crates.io mints a short-lived token from this job's
     # OIDC identity, so there is no long-lived registry token to store.
     permissions:
+      contents: read
       id-token: write
-
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+        with:
+          # A publish job builds the artifact that ships; a cache is writable by
+          # other workflows on the repo, so restoring one could poison it.
+          cache: false
 
-      - uses: rust-lang/crates-io-auth-action@v1
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1.0.5
         id: auth
 
       - name: Publish to crates.io
