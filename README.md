@@ -30,17 +30,16 @@ terminal), pass `--latest`:
 claude-scriptorium render --latest --open
 ```
 
-`--open` opens the rendered folio in your browser. Render a specific session
-file to a chosen path, or into a directory:
+`--open` opens the rendered folio in your browser.
+Pass `--output`/`-o` to render to a chosen path, or into a directory:
 
 ```bash
 claude-scriptorium render ~/.claude/projects/-home-me-work/<session-id>.jsonl -o folio.html
 claude-scriptorium render --latest -o folios/
 ```
 
-Serve a session over HTTP with live reload, for watching a session or iterating
-on the rendering (the same session selection applies, so `serve --latest` or a
-bare `serve` picker both work):
+Locally serve a session over HTTP with live reload, for watching a session
+(the same session selection applies, so `serve --latest` or a bare `serve` picker both work):
 
 ```bash
 claude-scriptorium serve <session-id>.jsonl
@@ -60,21 +59,54 @@ claude-scriptorium publish <session-id>.jsonl
 
 The same session selection as `render`/`serve` applies. A gist over ~1 MB
 (every folio, once fonts are embedded) won't render inline on GitHub, so viewing
-one means either downloading it or routing it through a rendering proxy.
+a published one takes one of the two paths below.
 
-To view a published folio offline with nothing but a browser, download its files
-and open the HTML locally:
+#### View offline
+
+Download the gist's files and open the HTML locally, with no network rendering
+in the loop:
 
 ```bash
 claude-scriptorium fetch <gist-url-or-id> --open
 ```
 
-`publish` prints this exact command for the gist it just created. For a quick
-link that renders in a browser without downloading, `--preview` additionally
-prints a [githack](https://raw.githack.com/) proxy URL, after confirming that
-the proxy fetches and caches the full transcript. It is off by default so
-nothing leaves for a third party unless you ask, which matters for
-sensitive sessions: prefer `fetch` for those.
+`publish` prints this exact command for the gist it just created. This is the
+path to prefer for sensitive sessions.
+
+#### View in a browser
+
+`--preview` additionally prints a link to a **viewer** page that renders the
+folio in a browser. The viewer is a small static page (this project's
+[Pages site](https://joshkarpel.github.io/claude-scriptorium/) by default); the
+reader's browser fetches the gist straight from GitHub's API and writes it into
+the page, so the viewer's host never receives the transcript. It is off by
+default and asks to confirm, so nothing is surfaced for browser viewing unless
+you ask.
+
+```bash
+claude-scriptorium publish <session-id>.jsonl --preview
+```
+
+Point `--preview` at a different viewer with `--preview-base <url>`, or set
+`CLAUDE_SCRIPTORIUM_VIEWER_BASE` to default it on a machine that always publishes
+to the same one. A github.com gist falls back to this project's viewer; any
+other host has no built-in viewer, so supply your own.
+
+#### Self-hosting a viewer (and GHES)
+
+For full control, or for a GitHub Enterprise instance (whose gists this
+project's viewer can't reach), scaffold your own viewer site and serve it from
+GitHub Pages:
+
+```bash
+claude-scriptorium scaffold-viewer ./folio-viewer               # for github.com
+claude-scriptorium scaffold-viewer ./folio-viewer --host ghe.example.com
+```
+
+That writes a small git repo (a viewer `index.html`, its GitHub API base set to
+the chosen host, plus a README with deploy steps). Push it, enable Pages, then
+publish with `--preview-base <your Pages URL>`. The viewer is vendored from
+[GistHost](https://github.com/gisthost/gisthost.github.io) (MIT).
 
 Claude Code stores transcripts under `~/.claude/projects/`, one directory per
 project path, one JSONL file per session. Set `CLAUDE_CONFIG_DIR` to read from

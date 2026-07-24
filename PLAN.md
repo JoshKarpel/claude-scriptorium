@@ -99,10 +99,16 @@ Strictness belongs only where a field is genuinely required.
   has no `--hostname` and targets gh's default host, `publish` resolves that
   account up front and confirms it before pushing, warning that a secret gist is
   unlisted but readable by anyone with the URL. A bundled folio exceeds GitHub's
-  ~1 MB inline-render cutoff, so viewing a shared one needs either a download or
-  a proxy: `fetch <gist>` downloads the files to view offline with no third
-  party (the safe path for sensitive sessions, and what `publish` prints), while
-  `--preview` opts into a githack proxy URL behind a second confirmation.
+  ~1 MB inline-render cutoff, so viewing a shared one takes one of two paths:
+  `fetch <gist>` downloads the files to view offline with no network rendering
+  (the safe path for sensitive sessions, and what `publish` prints), or
+  `--preview` opts into a **viewer** link. The viewer is a small static page
+  (this project's own Pages site by default) whose script fetches the gist from
+  the GitHub API in the reader's browser, so no server but GitHub ever sees the
+  transcript. `scaffold-viewer` writes a self-hostable copy of that viewer (with
+  its API base pointed at github.com or a named GHES host) for full control or
+  for enterprise gists this project's viewer can't reach; `--preview-base` /
+  `$CLAUDE_SCRIPTORIUM_VIEWER_BASE` point `--preview` at it.
   Still open: a browsable archive (codex) of all sessions.
 
 ## Decisions
@@ -135,10 +141,19 @@ Strictness belongs only where a field is genuinely required.
   rather than calling the GitHub API with a token, so credentials, host
   selection, and account resolution stay gh's responsibility and nothing
   secret lives in this code. The rendered HTML is piped to `gh gist create` on
-  stdin (never a temp file). The preview link routes through a public proxy
-  (githack re-serves the raw gist as `text/html`; GitHub's own raw endpoint
-  serves `text/plain`, which browsers show as source), so it is opt-in behind
-  `--preview` and a confirmation, never emitted by default.
+  stdin (never a temp file).
+- **Browser viewing via a client-side viewer, not a re-serving proxy:** GitHub
+  serves a gist's raw content as `text/plain` (browsers show source, not a
+  render), and a >1 MB gist won't render inline at all. Rather than route the
+  transcript through a third-party proxy that re-serves it as `text/html` (and
+  caches it), the preview link points at a small static **viewer** page whose
+  script fetches the gist from the GitHub API and `document.write`s it, falling
+  back to the raw URL for content past GitHub's ~1 MB API truncation limit. The
+  content path is GitHub to the reader's browser; the viewer's host only serves
+  ~6 KB of static HTML. The viewer is vendored from GistHost (MIT) as
+  `docs/index.html`, served from this project's own Pages site and embedded via
+  `include_str!` so `scaffold-viewer` can emit a self-hostable copy from the
+  same source. Preview is still opt-in behind `--preview` and a confirmation.
 - **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve),
   `inquire` for the two-stage picker and the publish confirmations, `open` for
   launching the browser.

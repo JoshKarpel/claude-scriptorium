@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<!--
+  Gist loader for claude-scriptorium folios.
+
+  Vendored and lightly rebranded from GistHost by Simon Willison
+  (https://github.com/gisthost/gisthost.github.io), itself a fork of gistpreview
+  by Leon Huang. Retained under its MIT license:
+
+    The MIT License (MIT)
+    Copyright (c) 2025 Simon Willison
+    Copyright (c) 2016-2025 gistpreview / Leon Huang
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+  The transcript itself never reaches this page's host: the browser fetches the
+  gist straight from GitHub's API (and, for a folio over GitHub's ~1 MB API
+  truncation limit, its raw URL) and writes it into the document here. Serving
+  this loader from the project's own Pages site keeps the one moving part under
+  the project's control rather than a third party's.
+-->
+<html lang="en">
+<head>
+  <title>claude-scriptorium folio viewer</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      margin: 0;
+      padding: 0;
+      color: #333;
+    }
+    .container {
+      width: 100%;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 0 15px;
+    }
+    .text-center { text-align: center; }
+    .hide { display: none; }
+    .lead {
+      font-size: 1.25em;
+      color: #666;
+    }
+    h2 {
+      font-size: 2em;
+      font-weight: 500;
+      margin: 20px 0;
+    }
+    .form-inline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .form-group {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    label {
+      font-weight: normal;
+      margin: 0;
+      white-space: nowrap;
+    }
+    input[type="text"] {
+      padding: 5px 10px;
+      font-size: 12px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      height: 30px;
+    }
+    input[type="text"]:focus {
+      border-color: #66afe9;
+      outline: none;
+      box-shadow: 0 0 5px rgba(102, 175, 233, 0.6);
+    }
+    .btn {
+      display: inline-block;
+      padding: 6px 12px;
+      font-size: 14px;
+      font-weight: 400;
+      text-align: center;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      background-color: #337ab7;
+      color: #fff;
+    }
+    .btn:hover {
+      background-color: #286090;
+    }
+    .alert {
+      padding: 15px;
+      margin-bottom: 20px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      position: relative;
+    }
+    .alert-danger {
+      color: #a94442;
+      background-color: #f2dede;
+      border-color: #ebccd1;
+    }
+    .close {
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      font-size: 21px;
+      font-weight: bold;
+      color: inherit;
+      opacity: 0.5;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+    }
+    .close:hover { opacity: 0.8; }
+    ins { text-decoration: none; background-color: #fcf8e3; padding: 0 3px; }
+  </style>
+</head>
+<body>
+  <div id="loading" class="container text-center">
+    <br>
+    <p class="lead">Loading folio…</p>
+  </div>
+
+  <div id="main" class="container hide">
+    <h2>claude-scriptorium folio viewer</h2>
+    <p class="lead">Renders an HTML folio published as a GitHub gist. If <ins>File Name</ins> is empty, it previews <ins>index.html</ins> or <ins>the first file</ins>.</p>
+    <div class="form-inline" role="form">
+      <div class="form-group">
+        <label for="gist_id">?</label>
+        <input type="text" id="gist_id" placeholder="Gist ID">
+      </div>
+      <div class="form-group">
+        <label for="file_name">/</label>
+        <input type="text" id="file_name" placeholder="File Name (optional)">
+      </div>
+      <button id="submit" class="btn">Submit</button>
+    </div>
+    <br>
+    <div id="alert-box"></div>
+  </div>
+
+  <script>
+    (function () {
+      // The GitHub API this viewer reads gists from. github.com by default; a
+      // scaffolded GHES viewer rewrites this to https://<host>/api/v3.
+      var API_BASE = 'https://api.github.com';
+
+      function showMainPage() {
+        document.getElementById('main').classList.remove('hide');
+        document.getElementById('loading').classList.add('hide');
+      }
+
+      function showError(message) {
+        var alertBox = document.getElementById('alert-box');
+        var alert = document.createElement('div');
+        alert.className = 'alert alert-danger';
+        alert.innerHTML = '<button class="close" aria-label="close">&times;</button>' + message;
+        alert.querySelector('.close').onclick = function() {
+          alert.remove();
+        };
+        alertBox.appendChild(alert);
+      }
+
+      function submit() {
+        var query = document.getElementById('gist_id').value;
+        var fileName = document.getElementById('file_name').value;
+        if (fileName) {
+          query += '/' + fileName;
+        }
+        location.search = query;
+      }
+
+      document.getElementById('submit').onclick = submit;
+      document.onkeypress = function (e) {
+        if (e.keyCode === 13) submit();
+      };
+
+      // 1. check query string
+      var query = location.search.substring(1);
+      if (query.length === 0) {
+        showMainPage();
+        return;
+      }
+
+      // 2. get gist id and file name
+      query = query.split('/');
+      var gistId = query[0].split(/[=&]/)[0];
+      var fileName = decodeURIComponent(query[1] || '');
+
+      // 3. write data to inputs
+      document.getElementById('gist_id').value = gistId;
+      document.getElementById('file_name').value = fileName;
+
+      // 4. fetch data
+      fetch(API_BASE + '/gists/' + gistId)
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (res.status === 200) {
+              return body;
+            }
+            console.log(res, body);
+            throw new Error('Gist <strong>' + gistId + '</strong>, ' + body.message.replace(/\(.*\)/, ''));
+          });
+        })
+        .then(function (info) {
+          if (fileName === '') {
+            for (var file in info.files) {
+              if (fileName === '' || file === 'index.html') {
+                fileName = file;
+              }
+            }
+          }
+
+          if (info.files.hasOwnProperty(fileName) === false) {
+            throw new Error('File <strong>' + fileName + '</strong> is not exist');
+          }
+
+          var fileInfo = info.files[fileName];
+
+          // 5. fetch full content if truncated, otherwise use inline content
+          if (fileInfo.truncated && fileInfo.raw_url) {
+            return fetch(fileInfo.raw_url)
+              .then(function (res) {
+                if (!res.ok) {
+                  throw new Error('Failed to fetch full content for <strong>' + fileName + '</strong>');
+                }
+                return res.text();
+              });
+          } else {
+            return fileInfo.content;
+          }
+        })
+        .then(function (content) {
+          // 6. write data
+          document.write(content);
+        })
+        .catch(function (err) {
+          showMainPage();
+          showError(err.message);
+        });
+    })();
+  </script>
+</body>
+</html>

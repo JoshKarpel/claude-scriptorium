@@ -17,6 +17,21 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+/// This project's own viewer, served from its GitHub Pages site, used to render
+/// a published github.com gist. The viewer's host never receives the transcript:
+/// the reader's browser fetches the gist from the GitHub API and writes it into
+/// the page (see `docs/index.html`).
+pub const DEFAULT_VIEWER_BASE: &str = "https://joshkarpel.github.io/claude-scriptorium/";
+
+/// The viewer page, embedded so `scaffold_viewer` can write a self-hostable copy.
+/// It is the very file this project serves from its own Pages site, so the two
+/// never drift.
+const VIEWER_TEMPLATE: &str = include_str!("../docs/index.html");
+
+/// The GitHub API the embedded viewer reads gists from by default. A scaffolded
+/// enterprise viewer rewrites this to the GHES instance's API.
+const DEFAULT_API_BASE: &str = "https://api.github.com";
+
 /// The GitHub account `gh gist create` will publish as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
@@ -153,20 +168,34 @@ fn parse_identity(status: &str, host: &str) -> Result<Identity> {
     })
 }
 
-/// The public-proxy URL that renders a gist's HTML in a browser, or `None` for a
-/// gist not on github.com (an enterprise host the public proxy can't reach).
-/// githack re-serves the raw gist content as `text/html` (GitHub's own raw
-/// endpoint hands it back as `text/plain`, which browsers show as source), so a
-/// shared folio renders instead of displaying its markup. Routing content
-/// through a third party is why callers opt into this rather than getting it by
-/// default. The owner and id come straight from the gist page URL.
-pub fn preview_url(gist_url: &str, filename: &str) -> Option<String> {
-    let (login, id) = gist_url
-        .strip_prefix("https://gist.github.com/")?
-        .split_once('/')?;
-    Some(format!(
-        "https://gist.githack.com/{login}/{id}/raw/{filename}"
-    ))
+/// The URL that renders a published gist through a viewer page. `viewer_base` is
+/// the Pages site hosting the viewer (this project's by default, or a
+/// self-hosted one). The viewer only needs the gist id and file name, since its
+/// own script fetches the content from the GitHub API; a folio over GitHub's
+/// ~1 MB API truncation limit is fetched from its raw URL by the same script.
+/// Unlike a re-serving proxy, the viewer's host never receives the transcript.
+pub fn preview_url(viewer_base: &str, gist_url: &str, filename: &str) -> String {
+    let id = gist_id(gist_url);
+    let base = viewer_base.trim_end_matches('/');
+    format!("{base}/?{id}/{filename}")
+}
+
+/// A self-hostable copy of the viewer page. With no `ghes_host`, it is the
+/// github.com viewer verbatim; with one, its API base is rewritten to the
+/// enterprise instance (`https://<host>/api/v3`) so a viewer served from that
+/// instance's Pages can read its gists.
+pub fn scaffold_viewer(ghes_host: Option<&str>) -> Result<String> {
+    let Some(host) = ghes_host else {
+        return Ok(VIEWER_TEMPLATE.to_owned());
+    };
+
+    let api_base = format!("https://{host}/api/v3");
+    let rewritten =
+        VIEWER_TEMPLATE.replace(&format!("'{DEFAULT_API_BASE}'"), &format!("'{api_base}'"));
+    if rewritten == VIEWER_TEMPLATE {
+        bail!("viewer template no longer contains the API base to rewrite for a GHES host");
+    }
+    Ok(rewritten)
 }
 
 /// The hosts gh has an authenticated account for, in gh's own order.
@@ -272,12 +301,26 @@ mod tests {
     }
 
     #[test]
-    fn preview_url_points_at_githack_for_the_gist_file() {
-        let preview = preview_url("https://gist.github.com/scribe/abc123", "session-7.html");
-        assert_eq!(
-            preview.as_deref(),
-            Some("https://gist.githack.com/scribe/abc123/raw/session-7.html")
+    fn preview_url_addresses_the_gist_through_the_viewer_base() {
+        let preview = preview_url(
+            "https://joshkarpel.github.io/claude-scriptorium/",
+            "https://gist.github.com/scribe/abc123",
+            "session-7.html",
         );
+        assert_eq!(
+            preview,
+            "https://joshkarpel.github.io/claude-scriptorium/?abc123/session-7.html"
+        );
+    }
+
+    #[test]
+    fn preview_url_tolerates_a_viewer_base_without_a_trailing_slash() {
+        let preview = preview_url(
+            "https://viewer.example.com",
+            "https://gist.github.com/scribe/abc123",
+            "session-7.html",
+        );
+        assert_eq!(preview, "https://viewer.example.com/?abc123/session-7.html");
     }
 
     #[test]
@@ -288,13 +331,14 @@ mod tests {
     }
 
     #[test]
-    fn preview_url_is_absent_for_a_non_github_gist_host() {
-        assert_eq!(
-            preview_url(
-                "https://gist.ghe.example.com/scribe/abc123",
-                "session-7.html"
-            ),
-            None
-        );
+    fn scaffold_viewer_is_the_template_verbatim_for_github_com() {
+        assert_eq!(scaffold_viewer(None).unwrap(), VIEWER_TEMPLATE);
+    }
+
+    #[test]
+    fn scaffold_viewer_rewrites_the_api_base_for_a_ghes_host() {
+        let viewer = scaffold_viewer(Some("ghe.example.com")).unwrap();
+        assert!(viewer.contains("'https://ghe.example.com/api/v3'"));
+        assert!(!viewer.contains("'https://api.github.com'"));
     }
 }

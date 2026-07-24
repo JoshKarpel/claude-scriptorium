@@ -27,3 +27,6 @@ target
 
 # Rendered folios: this tool's own output
 *.html
+
+# ...but the viewer page is source: served from Pages and embedded in the binary
+!docs/index.html

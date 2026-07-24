@@ -66,16 +66,33 @@ but never the reload snippet (see below).
 
 `gist` (`src/gist.rs`) is the sharing path: `publish` renders a session and
 pipes the HTML to `gh gist create`, `fetch` downloads a gist's files for offline
-viewing. It shells out to the `gh` CLI rather than calling the GitHub API, so
-authentication, host selection, and account resolution stay gh's job and no
-token lives in this code. `gh gist create` has no `--hostname` and targets gh's
-default host, so `resolve_identity` recovers that account (mirroring gh's own
-host precedence) and the shell confirms it before pushing. The preview link
-routes the gist through a public proxy (githack re-serves it as `text/html`;
-GitHub's raw endpoint serves `text/plain`), so it is opt-in behind `--preview`
-and a second confirmation, never emitted by default: `fetch` is the no-third-party
-path for sensitive sessions. The pure helpers (host precedence, identity
-parsing, URL construction) are unit-tested; the `gh`-shelling stays in the shell.
+viewing, and `scaffold-viewer` writes a self-hostable viewer site. It shells out
+to the `gh` CLI rather than calling the GitHub API, so authentication, host
+selection, and account resolution stay gh's job and no token lives in this code.
+`gh gist create` has no `--hostname` and targets gh's default host, so
+`resolve_identity` recovers that account (mirroring gh's own host precedence) and
+the shell confirms it before pushing.
+
+A folio over GitHub's ~1 MB inline-render cutoff can't be viewed on the gist
+page, so browser viewing goes through a **viewer**: a ~6 KB static page
+(`docs/index.html`, vendored from GistHost under MIT) whose script fetches the
+gist from the GitHub API in the reader's browser and `document.write`s it. The
+transcript's path is GitHub to the reader; the viewer's host never receives it,
+unlike a re-serving proxy. That one file is both served from this project's own
+Pages site and `include_str!`'d into the binary, so `scaffold_viewer` emits a
+self-hostable copy from the same source (rewriting the API base for a GHES host).
+The preview link is opt-in behind `--preview` and a confirmation; its base comes
+from `--preview-base`, then `$CLAUDE_SCRIPTORIUM_VIEWER_BASE`, then this
+project's viewer for github.com. `fetch` stays the no-network-rendering path for
+sensitive sessions. The pure helpers (host precedence, identity parsing, URL and
+viewer construction) are unit-tested; the `gh`-shelling and prompts stay in the
+shell.
+
+`docs/index.html` is dual-purpose: this repo's own GitHub Pages viewer (Pages
+serves from `main`'s `/docs`) and the template `scaffold_viewer` copies. Editing
+it changes both, so keep the `API_BASE` line's exact `'https://api.github.com'`
+literal intact: `scaffold_viewer` string-replaces it for GHES and fails loudly
+if it's gone.
 
 The crate is split into `src/lib.rs` plus a thin `src/main.rs` so integration
 tests in `tests/` can import the modules. Adding a module means adding it to
@@ -120,16 +137,17 @@ distinguishes user from assistant, so the label names the content instead,
   no external CSS, JS, fonts, or image files, so the one written file works
   offline and travels as a single artifact. The delivery path is a GitHub gist,
   and a bundled folio (~3 MB, mostly the embedded Junicode faces) already
-  exceeds GitHub's ~1 MB inline-render cutoff, so a shared folio renders through
-  a preview proxy (raw.githack, htmlpreview) rather than GitHub's own file view.
-  The constraint to respect is therefore **total bundle size** (keep it within
-  what a gist plus preview proxy will serve), *not* scripts: those proxies serve
-  `text/html` and run inlined JS. Interactive behaviour (search, copy, collapse,
-  jump) lives in a trusted app script inlined the same way the stylesheet is;
-  keep it small. Do **not** reintroduce a "no scripts" rule, it was dropped
-  deliberately; the live invariant below is that *transcript* content is never
-  executed, which is a different thing. `serve` still injects its live-reload
-  snippet only into the *served* response, never persisting it to the file.
+  exceeds GitHub's ~1 MB inline-render cutoff, so a shared folio is viewed
+  through the `gist` module's viewer (or downloaded with `fetch`) rather than
+  GitHub's own file view. The constraint to respect is therefore **total bundle
+  size** (keep it within what a gist and viewer will serve), *not* scripts: the
+  viewer `document.write`s the folio and runs its inlined JS. Interactive
+  behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
+  the same way the stylesheet is; keep it small. Do **not** reintroduce a "no
+  scripts" rule, it was dropped deliberately; the live invariant below is that
+  *transcript* content is never executed, which is a different thing. `serve`
+  still injects its live-reload snippet only into the *served* response, never
+  persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings) are woff2 vendored
   under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
@@ -201,6 +219,44 @@ PY
 
 Read the PNG back to check the illumination. For an interactive loop, `just
 serve <session>` reloads the browser as you edit the renderer or CSS.
+
+### Verifying the gist viewer end to end
+
+`docs/index.html` renders a folio in the browser by fetching the gist from the
+GitHub API and `document.write`-ing it, so a `file://` screenshot of a rendered
+folio never exercises it. Confirming a change to the viewer (or to a folio big
+enough to trip GitHub's ~1 MB API truncation) means going through a real gist.
+This publishes to a real account, so treat it as outward-facing: get the user's
+go-ahead first, and delete the gist afterward.
+
+1. `cargo run -q -- publish tests/fixtures/session.jsonl --yes` and capture the
+   gist id from the printed URL.
+2. Serve `docs/` over local **HTTP** (not `file://`, or the loader's `fetch`
+   hits a null origin) and load `?<id>/<file>` in Playwright. `document.write`
+   replaces the page *after* the API fetch resolves, so wait on a folio element
+   (`.colophon`) rather than `load`, then assert the folio is there and
+   screenshot it:
+
+```python
+import functools, threading, sys
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from playwright.sync_api import sync_playwright
+
+gid, docs_dir, png = sys.argv[1], sys.argv[2], sys.argv[3]
+server = ThreadingHTTPServer(
+    ("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=docs_dir)
+)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+with sync_playwright() as p:
+    page = p.chromium.launch().new_page(viewport={"width": 1500, "height": 2000})
+    page.goto(f"http://127.0.0.1:{server.server_address[1]}/?{gid}/session.html")
+    page.wait_for_selector(".colophon", timeout=30000)
+    assert page.title() == "folio session" and page.query_selector(".folio")
+    page.screenshot(path=png)
+```
+
+3. `gh gist delete <id> --yes`, then read the PNG back to confirm the
+   illumination rendered through the viewer, not just that the DOM is present.
 
 ## Roadmap
 

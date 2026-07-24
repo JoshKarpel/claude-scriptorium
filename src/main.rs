@@ -16,6 +16,11 @@ use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
 use inquire::{Confirm, InquireError};
 use jiff::{Timestamp, tz::TimeZone};
 
+/// Environment variable holding a default `--preview` viewer base, so a machine
+/// that always publishes to one viewer (a work laptop on a GHES instance) can
+/// set it once instead of passing `--preview-base` every time.
+const VIEWER_BASE_ENV: &str = "CLAUDE_SCRIPTORIUM_VIEWER_BASE";
+
 /// Render Claude Code sessions as self-contained HTML.
 #[derive(Parser)]
 #[command(version, about)]
@@ -34,6 +39,9 @@ enum Command {
     Publish(PublishArgs),
     /// Download a published gist's files to view a folio offline.
     Fetch(FetchArgs),
+    /// Scaffold a self-hostable folio-viewer site to serve from GitHub Pages
+    /// (including a GHES instance).
+    ScaffoldViewer(ScaffoldViewerArgs),
 }
 
 /// How to choose the session when the user doesn't name a file. Shared by the
@@ -88,11 +96,18 @@ struct PublishArgs {
     #[arg(long)]
     public: bool,
 
-    /// Also print a preview link that renders the folio through a public
-    /// third-party proxy (gist.githack.com). Off by default so nothing routes
-    /// through a third party unless asked.
+    /// Also print a preview link that renders the folio in a browser through a
+    /// viewer page (this project's Pages site by default). Off by default; the
+    /// reader's browser fetches the gist from GitHub, so the viewer host never
+    /// sees the transcript.
     #[arg(long)]
     preview: bool,
+
+    /// Viewer base URL for `--preview`, e.g. a self-hosted or GHES viewer from
+    /// `scaffold-viewer`. Falls back to $CLAUDE_SCRIPTORIUM_VIEWER_BASE, then to
+    /// this project's viewer for github.com gists.
+    #[arg(long, value_name = "URL")]
+    preview_base: Option<String>,
 
     /// Skip all confirmation prompts (for non-interactive use).
     #[arg(long)]
@@ -120,12 +135,24 @@ struct FetchArgs {
     open: bool,
 }
 
+#[derive(Args)]
+struct ScaffoldViewerArgs {
+    /// Directory to create the viewer repo in. Missing parents are created.
+    output: PathBuf,
+
+    /// GitHub Enterprise host the viewer will read gists from, e.g.
+    /// `ghe.example.com`. Defaults to github.com.
+    #[arg(long, value_name = "HOST")]
+    host: Option<String>,
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Render(args) => render(args),
         Command::Serve(args) => serve(args),
         Command::Publish(args) => publish(args),
         Command::Fetch(args) => fetch(args),
+        Command::ScaffoldViewer(args) => scaffold_viewer(args),
     }
 }
 
@@ -165,7 +192,12 @@ fn publish(args: PublishArgs) -> Result<()> {
 
     let identity = gist::resolve_identity()?;
     confirm_publish(&identity, args.public, args.yes)?;
-    let include_preview = resolve_preview(&identity, args.preview, args.yes)?;
+    let base_override = args.preview_base.or_else(|| {
+        std::env::var(VIEWER_BASE_ENV)
+            .ok()
+            .filter(|value| !value.is_empty())
+    });
+    let viewer_base = resolve_viewer(&identity, args.preview, base_override, args.yes)?;
 
     let highlighter = highlighter();
     let scribe = Scribe::new(&highlighter, TimeZone::system());
@@ -176,9 +208,7 @@ fn publish(args: PublishArgs) -> Result<()> {
     let gist_url = gist::publish(&html, &filename, &description, args.public)?;
 
     println!("{gist_url}");
-    let preview = include_preview
-        .then(|| gist::preview_url(&gist_url, &filename))
-        .flatten();
+    let preview = viewer_base.map(|base| gist::preview_url(&base, &gist_url, &filename));
     if let Some(preview) = &preview {
         println!("{preview}");
     }
@@ -225,28 +255,45 @@ fn confirm_publish(identity: &gist::Identity, public: bool, assume_yes: bool) ->
     Ok(())
 }
 
-/// Decides whether to emit the third-party preview link. Requested with
-/// `--preview`, it takes a second confirmation because the proxy fetches and
-/// caches the full transcript. The public proxy can't reach a non-github.com
-/// gist, so there it is skipped with a note rather than a pointless prompt.
-fn resolve_preview(identity: &gist::Identity, requested: bool, assume_yes: bool) -> Result<bool> {
+/// Chooses the viewer base for the preview link, or `None` to publish without
+/// one. Requested with `--preview`, an explicit base (`--preview-base` or the
+/// env var, resolved by the caller) wins; otherwise a github.com gist falls back
+/// to this project's own viewer, and any other host (a GHES instance) has no
+/// built-in viewer, so it is skipped with a pointer to `scaffold-viewer`. The
+/// choice is confirmed, since the link renders the folio through a viewer page
+/// even though its content stays between GitHub and the reader's browser.
+fn resolve_viewer(
+    identity: &gist::Identity,
+    requested: bool,
+    base_override: Option<String>,
+    assume_yes: bool,
+) -> Result<Option<String>> {
     if !requested {
-        return Ok(false);
-    }
-    if identity.host != "github.com" {
-        eprintln!(
-            "note: the public preview proxy can't reach {} gists; publishing without a preview link.",
-            identity.host
-        );
-        return Ok(false);
-    }
-    if assume_yes {
-        return Ok(true);
+        return Ok(None);
     }
 
-    println!("The preview link renders the folio through gist.githack.com, a public");
-    println!("third-party proxy that fetches and caches the full transcript.");
-    ask("Include the public preview link?")
+    let base = match base_override {
+        Some(base) => base,
+        None if identity.host == "github.com" => gist::DEFAULT_VIEWER_BASE.to_owned(),
+        None => {
+            eprintln!(
+                "note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and pass --preview-base. Publishing without a preview link.",
+                identity.host,
+                env!("CARGO_PKG_NAME")
+            );
+            return Ok(None);
+        }
+    };
+
+    if assume_yes {
+        return Ok(Some(base));
+    }
+
+    println!("The preview link renders the folio through a viewer page at {base}.");
+    println!(
+        "The reader's browser fetches the gist straight from GitHub; the viewer's host never sees it."
+    );
+    Ok(ask("Include the preview link?")?.then_some(base))
 }
 
 /// Prompts a yes/no question, treating a cancellation (Esc / Ctrl-C) as "no".
@@ -278,6 +325,80 @@ fn fetch(args: FetchArgs) -> Result<()> {
         open::that(&folio).with_context(|| format!("opening {}", folio.display()))?;
     }
     Ok(())
+}
+
+fn scaffold_viewer(args: ScaffoldViewerArgs) -> Result<()> {
+    let viewer = gist::scaffold_viewer(args.host.as_deref())?;
+
+    fs::create_dir_all(&args.output)
+        .with_context(|| format!("creating {}", args.output.display()))?;
+    let index = args.output.join("index.html");
+    fs::write(&index, viewer).with_context(|| format!("writing {}", index.display()))?;
+    let readme = args.output.join("README.md");
+    fs::write(&readme, viewer_readme(args.host.as_deref()))
+        .with_context(|| format!("writing {}", readme.display()))?;
+
+    git_init(&args.output);
+
+    println!("{}", index.display());
+    println!("{}", readme.display());
+    println!(
+        "next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then publish with --preview-base <your Pages URL>",
+        args.output.display()
+    );
+    Ok(())
+}
+
+/// Initializes a git repo in `dir`, since the scaffold is meant to be pushed to
+/// GitHub Pages. A missing or failing git is a note, not a failure: the viewer
+/// files are already written and the user can run `git init` themselves.
+fn git_init(dir: &Path) {
+    let ran = std::process::Command::new("git")
+        .arg("init")
+        .arg(dir)
+        .stdout(std::process::Stdio::null())
+        .status();
+    if !matches!(ran, Ok(status) if status.success()) {
+        eprintln!(
+            "note: could not run `git init` in {}; do it yourself",
+            dir.display()
+        );
+    }
+}
+
+/// The README written alongside a scaffolded viewer: how to deploy it and point
+/// `publish --preview-base` at it, with the GHES caveats spelled out.
+fn viewer_readme(host: Option<&str>) -> String {
+    let reads_from = host.unwrap_or("github.com");
+    let ghes_note = match host {
+        Some(host) => format!(
+            "\nThis viewer reads gists from `{host}` (its `/api/v3` endpoint). It must be \
+             served from that instance's Pages, and the instance must allow cross-origin \
+             requests from the Pages origin to its API and enable GitHub Pages.\n"
+        ),
+        None => String::new(),
+    };
+
+    format!(
+        "# Folio viewer\n\n\
+         A self-hostable page that renders a Claude Code folio published as a gist on \
+         `{reads_from}`. The reader's browser fetches the gist from the GitHub API and \
+         writes it into the page, so this site's host never receives the transcript.\n\
+         {ghes_note}\n\
+         ## Deploy\n\n\
+         1. Push this directory to a repository.\n\
+         2. Enable GitHub Pages for it: Settings, Pages, Deploy from a branch, your \
+         branch, `/` (root).\n\
+         3. The viewer is then served at your Pages URL, e.g. \
+         `https://<owner>.github.io/<repo>/`.\n\n\
+         ## Use\n\n\
+         Point `publish` at it:\n\n\
+         ```\n\
+         {} publish --preview --preview-base https://<owner>.github.io/<repo>/\n\
+         ```\n\n\
+         Vendored from GistHost (MIT); see the license header in `index.html`.\n",
+        env!("CARGO_PKG_NAME")
+    )
 }
 
 /// A gist description recovered from the session's own title, falling back to
