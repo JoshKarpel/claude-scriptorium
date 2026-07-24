@@ -30,11 +30,16 @@ jobs:
           components: clippy
 
       # rustfmt.toml uses unstable options, which only nightly rustfmt honours.
+      # `override: false` keeps this from pointing the directory's default
+      # toolchain at nightly, so bare `cargo clippy` still resolves to the
+      # clippy-bearing stable pin from rust-toolchain.toml; `cargo +nightly fmt`
+      # selects nightly explicitly.
       - name: Install nightly rustfmt
         uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
         with:
           toolchain: nightly
           components: rustfmt
+          override: false
 
       - name: Install just
         uses: extractions/setup-just@v4.0.0
