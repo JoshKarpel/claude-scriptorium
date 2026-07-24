@@ -113,6 +113,50 @@ fn tool_calls_carry_a_gist_of_their_subject() {
     assert!(html.contains("/scriptorium/quire.rs"));
 }
 
+fn tools() -> Folio {
+    Folio::read(Path::new("tests/fixtures/tools.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn bash_calls_show_their_description_and_highlighted_command() {
+    let html = render(&tools(), &highlighter());
+
+    assert!(html.contains(r#"<p class="tool__caption">Scaffold the crate</p>"#));
+    // The command is a highlighted shell block, not raw JSON.
+    assert!(html.contains("ink-shell"));
+    assert!(html.contains("cargo"));
+}
+
+#[test]
+fn write_calls_highlight_content_by_file_extension() {
+    let html = render(&tools(), &highlighter());
+
+    // main.rs resolves to the Rust lexer via the bare extension.
+    assert!(html.contains("ink-rust"));
+    assert!(html.contains("scriptorium"));
+}
+
+#[test]
+fn edit_calls_render_before_and_after_as_a_diff() {
+    let html = render(&tools(), &highlighter());
+
+    assert!(html.contains(r#"<p class="tool__caption">replace all occurrences</p>"#));
+    // The old line is a deletion and the new line an insertion in the diff.
+    assert!(html.contains("ink-deleted"));
+    assert!(html.contains("ink-inserted"));
+}
+
+#[test]
+fn todo_writes_render_as_a_status_marked_checklist() {
+    let html = render(&tools(), &highlighter());
+
+    assert!(
+        html.contains(r#"<li class="tool__todo" data-status="completed">Scaffold the crate</li>"#)
+    );
+    assert!(html.contains(r#"data-status="in_progress">Wire the CLI</li>"#));
+    assert!(html.contains(r#"data-status="pending">Add coverage</li>"#));
+}
+
 #[test]
 fn failed_tool_results_are_flagged() {
     let html = render(&fixture(), &highlighter());
@@ -134,8 +178,40 @@ fn transcript_html_is_escaped_rather_than_executed() {
 
     let html = render(&folio, &highlighter());
 
-    assert!(!html.contains("<script>"));
+    // The folio carries its own trusted app script, so "no <script> at all" is
+    // no longer the invariant. What must hold is that transcript-provided
+    // markup is inert: every <script> the session mentions is escaped to text,
+    // and none survives as an executable tag.
     assert!(html.contains("&lt;script&gt;"));
+    assert!(!html.contains("<script>alert"));
+}
+
+#[test]
+fn the_folio_carries_its_trusted_app_script() {
+    let html = render(&fixture(), &highlighter());
+
+    // The app script is inlined in <head> (theme applies before first paint).
+    assert!(html.contains("<script>"));
+    assert!(html.contains("scriptorium-theme"));
+}
+
+#[test]
+fn the_folio_carries_a_search_widget() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"class="search""#));
+    assert!(html.contains(r#"class="search__input""#));
+    assert!(html.contains(r#"data-search-nav="next""#));
+}
+
+#[test]
+fn the_header_offers_a_light_dark_system_theme_toggle() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"class="theme-toggle""#));
+    assert!(html.contains(r#"data-theme-choice="light""#));
+    assert!(html.contains(r#"data-theme-choice="system""#));
+    assert!(html.contains(r#"data-theme-choice="dark""#));
 }
 
 #[test]

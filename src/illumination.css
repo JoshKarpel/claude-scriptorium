@@ -12,28 +12,33 @@
  */
 
 :root {
-  color-scheme: light;
+  /* Every colour is a light-dark() pair, resolved by `color-scheme`. System
+   * preference is the default (`light dark`); the theme toggle forces one side
+   * by setting color-scheme to `light` or `dark` on <html> (see [data-theme]
+   * below), so the whole palette swaps without a duplicated token block. */
+  color-scheme: light dark;
 
-  --page: #e7dcc0;
-  --leaf: #f7f1e1;
-  --leaf-sunk: #f1e9d4;
-  --ink: #2b2620;
-  --ink-soft: #6f6656;
-  --ink-faint: #9a9080;
-  --rule: #d8ccae;
-  --rule-soft: #e6dcc3;
+  --page: light-dark(#e7dcc0, #171310);
+  --leaf: light-dark(#f7f1e1, #201a14);
+  --leaf-sunk: light-dark(#f1e9d4, #29221a);
+  --ink: light-dark(#2b2620, #ece2cf);
+  --ink-soft: light-dark(#6f6656, #b6ab93);
+  --ink-faint: light-dark(#9a9080, #857b66);
+  --rule: light-dark(#d8ccae, #3b3327);
+  --rule-soft: light-dark(#e6dcc3, #2e2820);
 
   /* The mineral pigments a scribe actually ground: vermilion and red lead,
-   * lapis lazuli, malachite, Tyrian purple, ochre, and burnished gold. */
-  --rubric: #b0281d; /* vermilion / red lead */
-  --sienna: #9a6410; /* yellow ochre / raw sienna */
-  --gold: #b8860b; /* solid gold, for small marks */
-  --verdigris: #2f7a4d; /* malachite green */
-  --lapis: #274690; /* lapis lazuli / ultramarine */
-  --tyrian: #6b2f74; /* Tyrian purple / folium */
+   * lapis lazuli, malachite, Tyrian purple, ochre, and burnished gold. The
+   * dark side lifts each hue so it holds its chroma against a dark vellum. */
+  --rubric: light-dark(#b0281d, #e0715f); /* vermilion / red lead */
+  --sienna: light-dark(#9a6410, #cf9a4c); /* yellow ochre / raw sienna */
+  --gold: light-dark(#b8860b, #d9ad4e); /* solid gold, for small marks */
+  --verdigris: light-dark(#2f7a4d, #58b783); /* malachite green */
+  --lapis: light-dark(#274690, #7f9fe6); /* lapis lazuli / ultramarine */
+  --tyrian: light-dark(#6b2f74, #bd83c8); /* Tyrian purple / folium */
 
   /* Not a manuscript pigment, but the assistant's own hue. */
-  --claude: #d97757;
+  --claude: light-dark(#d97757, #e08a6a);
 
   --user-edge: var(--lapis);
   --assistant-edge: var(--claude);
@@ -56,7 +61,7 @@
   --vine: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='230' viewBox='0 0 46 230'><g fill='none' stroke='%23a8811f' stroke-width='1.4' stroke-linecap='round'><path d='M23 0 C23 30 10 40 10 62 C10 86 36 96 36 120 C36 144 10 154 10 176 C10 200 23 210 23 230'/><path d='M10 62 C1 56 -1 45 3 39'/><path d='M36 120 C45 114 47 103 43 97'/><path d='M10 176 C1 170 -1 159 3 153'/></g><g fill='%23b0281d'><circle cx='4' cy='41' r='2.6'/><circle cx='42' cy='99' r='2.6'/><circle cx='4' cy='155' r='2.6'/></g><g fill='%232f7a4d'><path d='M13 31 C24 27 31 33 29 44 C21 46 13 41 13 31 Z'/><path d='M33 89 C22 85 15 91 17 102 C25 104 33 99 33 89 Z'/><path d='M13 145 C24 141 31 147 29 158 C21 160 13 155 13 145 Z'/></g></svg>");
 
   /* Syntax tokens, all resolved against the parchment ground. */
-  --syn-comment: #948a74;
+  --syn-comment: light-dark(#948a74, #7f765f);
   --syn-string: var(--verdigris);
   --syn-keyword: var(--rubric);
   --syn-storage: var(--rubric);
@@ -66,6 +71,17 @@
   --syn-support: var(--lapis);
   --syn-inserted: var(--verdigris);
   --syn-deleted: var(--rubric);
+}
+
+/* The theme toggle forces one side of every light-dark() pair by pinning
+ * color-scheme; absent the attribute (or with data-theme="system") the :root
+ * default of `light dark` follows the OS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 *,
@@ -79,13 +95,19 @@ html {
   font-size: 17px;
   /* Parchment ground with faint mottling, so the page isn't a flat fill. */
   background-color: var(--page);
+  /* The parchment mottling inverts for dark: a warm highlight and a deepening
+   * shadow rather than the light page's bright bloom. */
   background-image:
     radial-gradient(
       ellipse at 20% 15%,
-      rgba(255, 255, 255, 0.35),
+      light-dark(rgba(255, 255, 255, 0.35), rgba(255, 244, 214, 0.06)),
       transparent 55%
     ),
-    radial-gradient(ellipse at 85% 80%, rgba(120, 96, 48, 0.12), transparent 60%);
+    radial-gradient(
+      ellipse at 85% 80%,
+      light-dark(rgba(120, 96, 48, 0.12), rgba(0, 0, 0, 0.28)),
+      transparent 60%
+    );
 }
 
 /* The body is the leaf itself: a centered parchment page. */
@@ -144,6 +166,115 @@ body::after {
   }
 }
 
+/* --- Search: a fixed widget that steps through matches --------------- */
+
+.search {
+  position: fixed;
+  top: 0.8rem;
+  right: 0.8rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.28rem 0.5rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.search__input {
+  width: 9rem;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.search__input::placeholder {
+  color: var(--ink-faint);
+}
+
+.search__count {
+  min-width: 3.4rem;
+  text-align: right;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.search__nav {
+  padding: 0 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search__nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+mark.search__hit {
+  color: inherit;
+  background: color-mix(in srgb, var(--gold) 34%, transparent);
+  border-radius: 2px;
+}
+
+mark.search__hit.is-current {
+  background: color-mix(in srgb, var(--gold) 68%, transparent);
+  outline: 1px solid var(--gold);
+}
+
+/* On narrow screens the widget would crowd the leaf; let it shrink. */
+@media (max-width: 34rem) {
+  .search__input {
+    width: 6rem;
+  }
+}
+
+/* --- Dock: fixed jump / fold controls -------------------------------- */
+
+.dock {
+  position: fixed;
+  right: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.3rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+
+.dock__btn {
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dock__btn:hover,
+.dock__btn:focus-visible {
+  background: var(--leaf-sunk);
+  color: var(--rubric);
+}
+
 /* --- The page head --------------------------------------------------- */
 
 .folio__head {
@@ -195,6 +326,7 @@ body::after {
   margin: 1.6rem 0;
   padding: 0.2rem 0 0.2rem 1.1rem;
   border-left: 2px solid var(--rule);
+  scroll-margin-top: 1rem;
 }
 
 .turn--user {
@@ -240,6 +372,38 @@ body:has(#show-meta:checked) .turn[data-meta] {
 
 .meta-toggle label {
   cursor: pointer;
+}
+
+/* A segmented light / dark / system control, wired by the app script. */
+.theme-toggle {
+  display: inline-flex;
+  margin-top: 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.theme-toggle button {
+  padding: 0.28rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.theme-toggle button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.theme-toggle button[aria-pressed="true"] {
+  background: var(--leaf-sunk);
+  color: var(--rubric);
 }
 
 .turn__meta {
@@ -419,6 +583,125 @@ body:has(#show-meta:checked) .turn[data-meta] {
   padding: 0.6rem 0.8rem;
   background: transparent;
   border-radius: 0;
+}
+
+/* On wide viewports, an open marginalia that holds a code, diff, or JSON block
+ * unfurls past the reading measure, so wide content (diffs especially) fits
+ * without sideways scrolling. Prose keeps the narrow column; only these panels
+ * break out, lifting above the marginal vines on their own shadow. Scoped with
+ * :has(pre) so a short text result stays in column. */
+@media (min-width: 64rem) {
+  .marginalia[open]:has(pre) {
+    position: relative;
+    z-index: 1;
+    width: min(66rem, 92vw);
+    margin-inline: calc((100% - min(66rem, 92vw)) / 2);
+    box-shadow: 0 3px 20px rgba(40, 30, 12, 0.16);
+  }
+}
+
+/* --- Tool bodies: the bespoke views for common tools ----------------- */
+
+.tool {
+  padding: 0.55rem 0.7rem;
+}
+
+/* The highlighted code a tool body emits is the body itself; drop its default
+ * block margins so it sits flush inside the marginalia. */
+.tool > pre {
+  margin: 0;
+}
+
+.tool__caption {
+  margin: 0 0 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--ink-faint);
+}
+
+.tool--todos {
+  margin: 0;
+  padding: 0.3rem 0.8rem;
+  list-style: none;
+}
+
+.tool__todo {
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.12rem 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.tool__todo::before {
+  content: "☐";
+  color: var(--ink-faint);
+}
+
+.tool__todo[data-status="in_progress"]::before {
+  content: "◐";
+  color: var(--sienna);
+}
+
+.tool__todo[data-status="completed"]::before {
+  content: "☑";
+  color: var(--verdigris);
+}
+
+.tool__todo[data-status="completed"] {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+/* --- Copy buttons: injected by the app script ------------------------ */
+
+.folio pre {
+  position: relative;
+}
+
+.copy-button {
+  padding: 0.1rem 0.42rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--leaf);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* On a code block the button floats in the corner; reveal it on hover. */
+.folio pre > .copy-button {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+}
+
+.folio pre:hover > .copy-button,
+.copy-button:focus-visible {
+  opacity: 1;
+}
+
+/* In a turn header the button rides at the end of the meta row. */
+.copy-button--meta {
+  margin-left: 0.2rem;
+}
+
+.turn:hover .copy-button--meta,
+.copy-button--meta:focus-visible {
+  opacity: 1;
+}
+
+.copy-button.is-done {
+  color: var(--verdigris);
+  border-color: var(--verdigris);
+  opacity: 1;
 }
 
 /* --- Prose the markdown renderer emits ------------------------------- */

@@ -63,6 +63,25 @@ because a new block type is a producer adding something optional, not malformed
 input. Lines that carry no conversation at all (attachments, hook output, mode
 changes, file-history snapshots) are skipped.
 
+## Reading a folio
+
+A folio is interactive, driven by one small script inlined alongside the
+styles, so the file stays a single self-contained artifact:
+
+- **Search** the session from the fixed box: matches are highlighted, and
+  `‹ ›` or Enter steps through them, opening any collapsed tool call that holds
+  a hit.
+- **Theme** it light, dark, or system; the default follows your OS preference
+  and the choice is remembered across visits.
+- **Copy** any code block, or a whole message, from the button that appears on
+  hover.
+- **Navigate** from the corner dock: jump between turns, and collapse or expand
+  every tool call at once.
+
+On wide screens an expanded tool call holding a diff or code block unfurls past
+the reading column so wide content fits without sideways scrolling, while prose
+stays in a narrow, legible measure.
+
 ## Vocabulary
 
 The code names things after the scriptorium that produced manuscripts by hand:

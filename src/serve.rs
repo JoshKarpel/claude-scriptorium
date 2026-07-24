@@ -1,8 +1,9 @@
 //! A tiny development server that serves a folio with live reload.
 //!
-//! This is dev-loop tooling, not the artifact: the written `.html` stays
-//! self-contained and script-free. Only the served response carries the reload
-//! snippet, injected before `</body>`. The page reloads when the server's
+//! The reload snippet is dev-loop tooling, not part of the artifact: the
+//! written `.html` carries the folio's own app script but never this one. Only
+//! the served response gets it, injected before `</body>`. The page reloads
+//! when the server's
 //! identity changes: a fresh boot id means the binary restarted with new code,
 //! and a fresh session mtime means the transcript grew, so a live session and
 //! a live edit loop both refresh on their own.

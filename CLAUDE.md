@@ -49,8 +49,9 @@ assert on exact output.
 `serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
 load and injects a live-reload snippet so the browser refreshes when the
 session file grows or the server restarts with fresh code. `just serve`
-rebuilds and restarts it on source changes. The snippet is injected only into
-the *served* response; the written file stays script-free (see below).
+rebuilds and restarts it on source changes. The reload snippet is injected only
+into the *served* response; the written file carries the folio's own app script
+but never the reload snippet (see below).
 
 The crate is split into `src/lib.rs` plus a thin `src/main.rs` so integration
 tests in `tests/` can import the modules. Adding a module means adding it to
@@ -91,10 +92,20 @@ distinguishes user from assistant, so the label names the content instead,
 
 ### Rendering invariants worth preserving
 
-- **Self-contained.** Everything the folio needs is inlined: no external CSS,
-  JS, fonts, or image files, and the written file has no scripts at all.
-  Adding an asset means inlining it. The one script anywhere is the live-reload
-  snippet `serve` injects into its *served* response, never into the file.
+- **Self-contained and gist-shareable.** Everything the folio needs is inlined:
+  no external CSS, JS, fonts, or image files, so the one written file works
+  offline and travels as a single artifact. The delivery path is a GitHub gist,
+  and a bundled folio (~3 MB, mostly the embedded Junicode faces) already
+  exceeds GitHub's ~1 MB inline-render cutoff, so a shared folio renders through
+  a preview proxy (raw.githack, htmlpreview) rather than GitHub's own file view.
+  The constraint to respect is therefore **total bundle size** (keep it within
+  what a gist plus preview proxy will serve), *not* scripts: those proxies serve
+  `text/html` and run inlined JS. Interactive behaviour (search, copy, collapse,
+  jump) lives in a trusted app script inlined the same way the stylesheet is;
+  keep it small. Do **not** reintroduce a "no scripts" rule, it was dropped
+  deliberately; the live invariant below is that *transcript* content is never
+  executed, which is a different thing. `serve` still injects its live-reload
+  snippet only into the *served* response, never persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings) are woff2 vendored
   under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
@@ -117,8 +128,8 @@ Markup carries `data-sidechain` for subagent turns and `data-meta` for
 harness-injected ones so a stylesheet can distinguish them. Meta turns are
 command caveats, skill scaffolding, and context dumps, not conversation, so
 the stylesheet hides them by default; a pure-CSS checkbox (`#show-meta`, keyed
-off `:has()`, rendered only when the folio has any) reveals them without
-breaking the JS-free invariant.
+off `:has()`, rendered only when the folio has any) reveals them with no script
+of its own, even though the folio now carries an app script for other features.
 
 ### Vocabulary
 

@@ -69,8 +69,18 @@ Strictness belongs only where a field is genuinely required.
   TextMate scope roots (`ink-comment`, `ink-keyword`, `ink-string`, ...) that
   syntect emits as the first class on every span, so the palette covers every
   language without enumerating finer scopes.
-- **M3, niceties.** In-page search, dark mode, per-tool rendering for
-  `TodoWrite`, `Write`, `Edit`, `Bash`.
+- **M3, niceties.** Done. Dark mode is a `light-dark()` token swap driven by
+  `color-scheme`, defaulting to the reader's system preference with a
+  light/dark/system toggle that persists. Per-tool rendering gives `Bash`,
+  `Write`, `Edit` (as a diff), and `TodoWrite` bespoke views, with the JSON
+  fallback kept for everything else. These pulled in a trusted app script
+  (`src/illumination.js`, inlined like the stylesheet) that also carries in-page
+  search (highlight every match, step through with `‹ ›`/Enter), copy buttons on
+  code blocks and messages, and a corner dock for jumping between turns and
+  folding all tool calls at once. On wide screens an expanded tool call holding
+  code unfurls past the reading measure so diffs fit without sideways scrolling.
+  The self-contained invariant is now framed as gist-shareable bundle size, not
+  script-freeness; transcript content is still escaped, never executed.
 - **M4, CLI ergonomics.** Interactive session picker, `--open`, output
   path handling.
 - **M5, optional.** Gist publishing, browsable archive of all sessions.
@@ -87,7 +97,8 @@ Strictness belongs only where a field is genuinely required.
 - **Markdown:** `comrak`, for full GFM (tables, task lists,
   strikethrough, autolinks) matching what Claude emits.
 - **Syntax highlighting:** `syntect` at render time, emitting classed
-  spans plus shipped CSS, so the artifact stays JS-free and offline.
+  spans plus shipped CSS, so highlighting is baked in and works offline
+  without a client-side highlighter.
 - **Display panels:** raw turns are folded into a stream of `Panel`s
   (`Folio::panels`) before rendering. This is the single place for
   display-level filtering and grouping: tool-result turns (modelled as `user`
@@ -96,7 +107,8 @@ Strictness belongs only where a field is genuinely required.
   (`tool`, `thinking`, or the speaker) rather than a bare role.
 - **Live-reload dev server:** the `serve` subcommand serves a session over
   HTTP and injects a reload snippet into the *served* response only (the
-  written file stays script-free). It reloads when the session file grows or
+  written file carries the folio's app script but never the reload snippet).
+  It reloads when the session file grows or
   the server restarts, so `just serve` (rebuild + restart on source change)
   gives a live edit loop. Uses `tiny_http`, no async runtime.
 - **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve), picker
