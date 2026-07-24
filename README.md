@@ -3,8 +3,8 @@
 Render Claude Code sessions as self-contained HTML.
 
 Each session becomes one **folio**: a single `.html` file with its markup,
-styles, and images inlined, so it can be mailed, gisted, or opened offline
-without dragging an asset directory along.
+styles, and images inlined. It can be mailed, gisted, or opened offline as one
+file.
 
 ## Install
 
@@ -47,11 +47,13 @@ claude-scriptorium serve <session-id>.jsonl
 
 ### Sharing a folio
 
-Publish a folio to a GitHub gist (via the [`gh`](https://cli.github.com/) CLI,
-which handles authentication). `gh gist create` has no host override, so it
-publishes as whichever account `gh` resolves; `publish` resolves that account up
-front and confirms it, along with the reminder that a secret gist is unlisted
-but still readable by anyone with the URL:
+Publish a folio to a GitHub gist via the [`gh`](https://cli.github.com/) CLI,
+which handles authentication. It publishes as whichever account `gh` resolves:
+set `GH_HOST` to target a different GitHub host, and switch the active account
+with `gh auth switch` (`gh gist create` has no flags of its own for either).
+`publish` confirms the resolved account before pushing, so you can abort if it is
+not the one you meant, and reminds you that a secret gist is unlisted but still
+readable by anyone with the URL:
 
 ```bash
 claude-scriptorium publish <session-id>.jsonl
@@ -70,8 +72,10 @@ in the loop:
 claude-scriptorium fetch <gist-url-or-id> --open
 ```
 
-`publish` prints this exact command for the gist it just created. This is the
-path to prefer for sensitive sessions.
+`publish` prints this exact command for the gist it just created. It keeps the
+browser viewer out of the loop, but the gist itself already lives on GitHub; for
+a truly sensitive session, don't publish at all: `render` the folio and share the
+HTML file directly.
 
 #### View in a browser
 
