@@ -93,3 +93,15 @@ just render <session>
 
 Formatting runs under nightly rustfmt, since `rustfmt.toml` uses unstable
 options. Committing runs the same formatting and linting through pre-commit.
+
+## Fonts
+
+Each folio embeds its typefaces so it renders identically anywhere with no
+network fetch:
+[Junicode](https://github.com/psb1558/Junicode-font) for body text,
+[Fira Code](https://github.com/tonsky/FiraCode) for code, and
+[UnifrakturCook](https://github.com/cyrealtype/UnifracturCook) for headings.
+All three are licensed under the
+[SIL Open Font License 1.1](https://openfontlicense.org); their license texts
+are vendored in `src/fonts/licenses/`. `just fonts` re-vendors the woff2 files
+and licenses from those upstreams.

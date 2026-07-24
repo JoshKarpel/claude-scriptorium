@@ -7,6 +7,11 @@ pre-commit-args := ""
 cargo-test-args := ""
 watch-paths := "src Cargo.toml justfile"
 
+fonts-dir := "src/fonts"
+junicode-ref := "v2.226"
+firacode-version := "6.2"
+unifrakturcook-ref := "e98889587d96e21ad9d93030fe37ccd9f6c50995"
+
 [default]
 [doc("List available recipes")]
 list:
@@ -85,6 +90,46 @@ watch recipe *args:
     fswatch -o {{ watch-paths }} | while read -r _; do run; done
 
 alias w := watch
+
+[doc("Vendor the embedded web fonts and their licenses from upstream")]
+[group("rust")]
+fonts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tool in curl unzip uvx; do
+      command -v "$tool" >/dev/null 2>&1 || { echo "just fonts needs $tool" >&2; exit 1; }
+    done
+    dir="{{ fonts-dir }}"
+    lic="$dir/licenses"
+    mkdir -p "$lic"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    get() { echo "  ${2#"$dir"/}" >&2; curl -sSfL "$1" -o "$2"; }
+
+    # Junicode 2 (SIL OFL): humanist medievalist serif for body text. One
+    # variable file per posture spans every weight; italic is a separate face.
+    juni="https://raw.githubusercontent.com/psb1558/Junicode-font/{{ junicode-ref }}"
+    get "$juni/webfiles/JunicodeVF-Roman.woff2" "$dir/JunicodeVF-Roman.woff2"
+    get "$juni/webfiles/JunicodeVF-Italic.woff2" "$dir/JunicodeVF-Italic.woff2"
+    get "$juni/OFL.txt" "$lic/Junicode-OFL.txt"
+
+    # Fira Code (SIL OFL): monospace for code and tool output. The variable
+    # woff2 ships only inside the release zip; its license lives in the repo.
+    fira="https://github.com/tonsky/FiraCode"
+    get "$fira/releases/download/{{ firacode-version }}/Fira_Code_v{{ firacode-version }}.zip" "$tmp/fira.zip"
+    unzip -p "$tmp/fira.zip" "woff2/FiraCode-VF.woff2" > "$dir/FiraCode-VF.woff2"
+    echo "  FiraCode-VF.woff2" >&2
+    get "https://raw.githubusercontent.com/tonsky/FiraCode/{{ firacode-version }}/LICENSE" "$lic/FiraCode-OFL.txt"
+
+    # UnifrakturCook (SIL OFL): single-weight blackletter for headings. Cyreal's
+    # repo is the upstream and carries the license beside the font, but ships a
+    # TTF, so compress it to woff2 here.
+    uc="https://raw.githubusercontent.com/cyrealtype/UnifracturCook/{{ unifrakturcook-ref }}"
+    get "$uc/UnifrakturCook-Regular-nohints.ttf" "$tmp/UnifrakturCook.ttf"
+    get "$uc/OFL.txt" "$lic/UnifrakturCook-OFL.txt"
+    echo "  UnifrakturCook.woff2" >&2
+    uvx --with brotli --from fonttools fonttools ttLib.woff2 compress \
+      -o "$dir/UnifrakturCook.woff2" "$tmp/UnifrakturCook.ttf"
 
 [doc("Clean build artifacts")]
 [group("rust")]

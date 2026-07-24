@@ -1,5 +1,8 @@
 //! Turning a parsed folio into a self-contained HTML document.
 
+use std::sync::LazyLock;
+
+use base64::{Engine, engine::general_purpose::STANDARD};
 use comrak::{
     Options, markdown_to_html_with_plugins, options::Plugins, plugins::syntect::SyntectAdapter,
 };
@@ -8,6 +11,90 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde_json::Value;
 
 use crate::transcript::{Block, Folio, ImageSource, Known, Panel, ToolResultContent};
+
+/// One embedded web font: the family and posture the stylesheet asks for, the
+/// weight range the variable file covers, and the woff2 bytes themselves.
+struct Face {
+    family: &'static str,
+    style: &'static str,
+    weight: &'static str,
+    woff2: &'static [u8],
+}
+
+/// The fonts are inlined so a folio stays self-contained (see the rendering
+/// invariants in CLAUDE.md). `just fonts` vendors these from upstream.
+///
+/// Junicode 2 (serif body, roman + italic) and Fira Code (monospace) are
+/// variable, so one file per posture spans every weight; UnifrakturCook is the
+/// single-weight blackletter used only for headings.
+const FACES: [Face; 4] = [
+    Face {
+        family: "Junicode",
+        style: "normal",
+        weight: "300 700",
+        woff2: include_bytes!("fonts/JunicodeVF-Roman.woff2"),
+    },
+    Face {
+        family: "Junicode",
+        style: "italic",
+        weight: "300 700",
+        woff2: include_bytes!("fonts/JunicodeVF-Italic.woff2"),
+    },
+    Face {
+        family: "UnifrakturCook",
+        style: "normal",
+        weight: "400",
+        woff2: include_bytes!("fonts/UnifrakturCook.woff2"),
+    },
+    Face {
+        family: "Fira Code",
+        style: "normal",
+        weight: "300 700",
+        woff2: include_bytes!("fonts/FiraCode-VF.woff2"),
+    },
+];
+
+/// Copyright notices for the embedded fonts, emitted into every folio. The SIL
+/// OFL requires each copy of the font to carry its copyright and license; the
+/// woff2 metadata does for most faces, but this notice covers every artifact
+/// uniformly. Full license texts are vendored under src/fonts/licenses.
+const FONT_NOTICES: [(&str, &str); 3] = [
+    ("Junicode", "Copyright 2025 Peter S. Baker"),
+    ("Fira Code", "Copyright 2014 The Fira Code Project Authors"),
+    (
+        "UnifrakturCook",
+        "Copyright 2010 j. 'mach' wust (Reserved Font Name UnifrakturCook), Copyright 2009 Peter Wiegel",
+    ),
+];
+
+/// The font attribution as an HTML comment for the top of every folio.
+fn font_notice() -> String {
+    let mut notice = String::from(
+        "<!-- Embedded fonts, SIL Open Font License 1.1 (https://openfontlicense.org):",
+    );
+    for (family, copyright) in FONT_NOTICES {
+        notice.push_str(&format!("\n     {family}: {copyright}"));
+    }
+    notice.push_str("\n-->");
+    notice
+}
+
+/// The `@font-face` block, built once: base64 is deterministic and the bytes
+/// are compile-time constants, so encoding on every render would be wasted work
+/// on the `serve` hot path.
+static FONT_FACES: LazyLock<String> = LazyLock::new(|| {
+    FACES
+        .iter()
+        .map(|face| {
+            let data = STANDARD.encode(face.woff2);
+            format!(
+                "@font-face{{font-family:\"{}\";font-style:{};font-weight:{};font-display:swap;\
+                 src:url(data:font/woff2;base64,{}) format(\"woff2\")}}",
+                face.family, face.style, face.weight, data,
+            )
+        })
+        .collect()
+});
 
 /// The generation metadata stamped at the foot of every folio.
 pub struct Colophon {
@@ -61,12 +148,16 @@ impl<'a> Scribe<'a> {
         let panels = folio.panels();
         html! {
             (DOCTYPE)
+            (PreEscaped(font_notice()))
             html lang="en" {
                 head {
                     meta charset="utf-8";
                     meta name="viewport" content="width=device-width, initial-scale=1";
                     title { (title) }
-                    style { (PreEscaped(include_str!("illumination.css"))) }
+                    style {
+                        (PreEscaped(FONT_FACES.as_str()))
+                        (PreEscaped(include_str!("illumination.css")))
+                    }
                 }
                 body {
                     header .folio__head {
@@ -173,6 +264,10 @@ impl<'a> Scribe<'a> {
                 p {
                     "Written by " (colophon.tool) " " (colophon.version)
                     " on " (self.stamp(colophon.generated)) "."
+                }
+                p .colophon__fonts {
+                    "Set in Junicode, Fira Code, and UnifrakturCook, under the "
+                    a href="https://openfontlicense.org" { "SIL Open Font License" } "."
                 }
             }
         }

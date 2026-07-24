@@ -2,12 +2,18 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # src/fonts holds verbatim vendored fonts and license texts (see just
+      # fonts); leave them exactly as upstream ships them.
       - id: trailing-whitespace
+        exclude: ^src/fonts/
       - id: end-of-file-fixer
+        exclude: ^src/fonts/
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
+        # The vendored Junicode woff2 files are ~1 MB each (see just fonts).
+        args: ['--maxkb=1200']
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.37.4

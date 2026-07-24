@@ -12,6 +12,7 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.22.1"
 clap = { version = "4.6.4", features = ["derive"] }
 comrak = { version = "0.54.0", default-features = false, features = ["syntect-fancy"] }
 jiff = { version = "0.2.34", features = ["serde"] }

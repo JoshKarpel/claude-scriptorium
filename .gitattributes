@@ -1,0 +1,3 @@
+# Vendored fonts and their license texts (see `just fonts`): store byte-for-byte
+# as upstream ships them, with no line-ending normalization.
+src/fonts/** -text

@@ -95,6 +95,15 @@ distinguishes user from assistant, so the label names the content instead,
   JS, fonts, or image files, and the written file has no scripts at all.
   Adding an asset means inlining it. The one script anywhere is the live-reload
   snippet `serve` injects into its *served* response, never into the file.
+- **Fonts embedded, licensed.** The three families (`Junicode` serif body,
+  `Fira Code` mono, `UnifrakturCook` blackletter headings) are woff2 vendored
+  under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
+  `@font-face` data URIs at render time (once, via a `LazyLock`). `just fonts`
+  re-vendors them from pinned upstreams; it needs `uvx` because UnifrakturCook
+  ships only a TTF and gets compressed to woff2 with `fonttools`. All four are
+  SIL OFL 1.1: the license texts live in `src/fonts/licenses/`, and every folio
+  carries the copyright notice (a comment above `<html>`) plus a colophon
+  credit, so each artifact satisfies the OFL's redistribution terms on its own.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.

@@ -43,10 +43,14 @@
   --measure: 44rem;
   --radius: 4px;
 
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
-    Georgia, serif;
-  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo,
-    Consolas, monospace;
+  /* Junicode, Fira Code, and UnifrakturCook are embedded as @font-face rules
+   * (see render.rs); the stacks behind them are fallbacks for glyphs the
+   * bundled faces lack, since transcripts carry arbitrary Unicode. */
+  --serif: "Junicode", "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Book Antiqua", Georgia, serif;
+  --mono: "Fira Code", ui-monospace, "SF Mono", "Cascadia Code",
+    "JetBrains Mono", Menlo, Consolas, monospace;
+  --display: "UnifrakturCook", var(--serif);
 
   /* An illuminated vine, drawn once and mirrored into the far margin. */
   --vine: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='230' viewBox='0 0 46 230'><g fill='none' stroke='%23a8811f' stroke-width='1.4' stroke-linecap='round'><path d='M23 0 C23 30 10 40 10 62 C10 86 36 96 36 120 C36 144 10 154 10 176 C10 200 23 210 23 230'/><path d='M10 62 C1 56 -1 45 3 39'/><path d='M36 120 C45 114 47 103 43 97'/><path d='M10 176 C1 170 -1 159 3 153'/></g><g fill='%23b0281d'><circle cx='4' cy='41' r='2.6'/><circle cx='42' cy='99' r='2.6'/><circle cx='4' cy='155' r='2.6'/></g><g fill='%232f7a4d'><path d='M13 31 C24 27 31 33 29 44 C21 46 13 41 13 31 Z'/><path d='M33 89 C22 85 15 91 17 102 C25 104 33 99 33 89 Z'/><path d='M13 145 C24 141 31 147 29 158 C21 160 13 155 13 145 Z'/></g></svg>");
@@ -159,10 +163,9 @@ body::after {
 
 .folio__head h1 {
   margin: 0 0 0.9rem;
-  font-size: 1.7rem;
-  font-weight: 600;
-  font-variant: small-caps;
-  letter-spacing: 0.03em;
+  font-family: var(--display);
+  font-size: 2.1rem;
+  font-weight: 400;
   color: var(--rubric);
 }
 
@@ -427,8 +430,15 @@ body:has(#show-meta:checked) .turn[data-meta] {
   color: var(--ink);
 }
 
+/* Blackletter is a display face at one weight: reserve it for the larger
+ * headings and let it stand at its native weight rather than faux-bolded. */
+.folio :is(h1, h2, h3) {
+  font-family: var(--display);
+  font-weight: 400;
+}
+
 .folio h1 {
-  font-size: 1.35rem;
+  font-size: 1.6rem;
 }
 
 .folio h2 {

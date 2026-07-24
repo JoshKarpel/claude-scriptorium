@@ -242,6 +242,30 @@ fn the_stylesheet_is_inlined_not_linked() {
 }
 
 #[test]
+fn fonts_are_embedded_not_linked() {
+    let html = render(&fixture(), &highlighter());
+
+    // Every face is inlined as a woff2 data URI, so the folio stays
+    // self-contained: Junicode (roman + italic), UnifrakturCook, Fira Code.
+    assert_eq!(html.matches("data:font/woff2;base64,").count(), 4);
+    assert!(html.contains(r#"font-family:"Junicode""#));
+    assert!(html.contains(r#"font-family:"UnifrakturCook""#));
+    assert!(html.contains(r#"font-family:"Fira Code""#));
+    assert!(!html.contains("fonts.googleapis.com"));
+    assert!(!html.contains("fonts.gstatic.com"));
+}
+
+#[test]
+fn embedded_fonts_carry_their_open_font_license_notice() {
+    let html = render(&fixture(), &highlighter());
+
+    // The SIL OFL requires every copy to carry the copyright and license; the
+    // notice comment and colophon credit put both in every generated folio.
+    assert!(html.contains("Copyright 2010 j. 'mach' wust"));
+    assert!(html.contains("SIL Open Font License"));
+}
+
+#[test]
 fn the_colophon_stamps_the_run() {
     let html = render(&fixture(), &highlighter());
 
