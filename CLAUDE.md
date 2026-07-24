@@ -193,8 +193,7 @@ for f in ~/.claude/projects/*/*.jsonl; do
 done
 ```
 
-Verify format claims against those files rather than from memory; `PLAN.md`
-records what the survey found, including where earlier assumptions were wrong.
+Verify format claims against those files rather than from memory.
 
 ### Visual verification
 
@@ -257,9 +256,3 @@ with sync_playwright() as p:
 
 3. `gh gist delete <id> --yes`, then read the PNG back to confirm the
    illumination rendered through the viewer, not just that the DOM is present.
-
-## Roadmap
-
-`PLAN.md` holds the milestones and the decisions already settled (output
-artifact, HTML generation, markdown renderer, highlighting). Read it before
-proposing a different approach to any of them.

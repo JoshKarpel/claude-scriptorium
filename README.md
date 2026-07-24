@@ -169,7 +169,6 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | --- | --- |
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
-| codex | A full archive across projects |
 | marginalia | A collapsible tool call or result |
 | colophon | The generation-metadata footer |
 | illumination | The theme layer |
