@@ -93,7 +93,17 @@ Strictness belongs only where a field is genuinely required.
   now what CI and non-TTY invocations get, with a clear error otherwise). `-o`
   accepts a directory to write `<session-id>.html` into and creates missing
   parents; `--open` opens the written folio (or, for `serve`, the served URL).
-- **M5, optional.** Gist publishing, browsable archive of all sessions.
+- **M5, optional.** Gist publishing is done. `publish` renders a session and
+  pushes it to a GitHub gist through `gh` (so authentication and host selection
+  stay gh's job, and no token ever touches this code). Because `gh gist create`
+  has no `--hostname` and targets gh's default host, `publish` resolves that
+  account up front and confirms it before pushing, warning that a secret gist is
+  unlisted but readable by anyone with the URL. A bundled folio exceeds GitHub's
+  ~1 MB inline-render cutoff, so viewing a shared one needs either a download or
+  a proxy: `fetch <gist>` downloads the files to view offline with no third
+  party (the safe path for sensitive sessions, and what `publish` prints), while
+  `--preview` opts into a githack proxy URL behind a second confirmation.
+  Still open: a browsable archive (codex) of all sessions.
 
 ## Decisions
 
@@ -121,8 +131,17 @@ Strictness belongs only where a field is genuinely required.
   It reloads when the session file grows or
   the server restarts, so `just serve` (rebuild + restart on source change)
   gives a live edit loop. Uses `tiny_http`, no async runtime.
+- **Gist publishing via `gh`:** `publish`/`fetch` shell out to the `gh` CLI
+  rather than calling the GitHub API with a token, so credentials, host
+  selection, and account resolution stay gh's responsibility and nothing
+  secret lives in this code. The rendered HTML is piped to `gh gist create` on
+  stdin (never a temp file). The preview link routes through a public proxy
+  (githack re-serves the raw gist as `text/html`; GitHub's own raw endpoint
+  serves `text/plain`, which browsers show as source), so it is opt-in behind
+  `--preview` and a confirmation, never emitted by default.
 - **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve),
-  `inquire` for the two-stage picker, `open` for launching the browser.
+  `inquire` for the two-stage picker and the publish confirmations, `open` for
+  launching the browser.
 
 ## Theming vocabulary
 

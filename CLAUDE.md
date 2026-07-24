@@ -44,8 +44,9 @@ module each:
   shell opens when no session is named and a terminal is attached.
 - `render`: `Scribe` turns a folio's panels into `Markup`.
 
-`src/main.rs` is the imperative shell: it dispatches the `render` and `serve`
-subcommands, resolves which session to show, reads the clock and system
+`src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
+`publish`, and `fetch` subcommands, resolves which session to show, reads the
+clock and system
 timezone, builds the syntect adapter, and writes the file. Session resolution
 is layered: an explicit path wins, then `--latest` (the current project's most
 recent session), then the interactive picker on a TTY, then a loud error when
@@ -62,6 +63,19 @@ session file grows or the server restarts with fresh code. `just serve`
 rebuilds and restarts it on source changes. The reload snippet is injected only
 into the *served* response; the written file carries the folio's own app script
 but never the reload snippet (see below).
+
+`gist` (`src/gist.rs`) is the sharing path: `publish` renders a session and
+pipes the HTML to `gh gist create`, `fetch` downloads a gist's files for offline
+viewing. It shells out to the `gh` CLI rather than calling the GitHub API, so
+authentication, host selection, and account resolution stay gh's job and no
+token lives in this code. `gh gist create` has no `--hostname` and targets gh's
+default host, so `resolve_identity` recovers that account (mirroring gh's own
+host precedence) and the shell confirms it before pushing. The preview link
+routes the gist through a public proxy (githack re-serves it as `text/html`;
+GitHub's raw endpoint serves `text/plain`), so it is opt-in behind `--preview`
+and a second confirmation, never emitted by default: `fetch` is the no-third-party
+path for sensitive sessions. The pure helpers (host precedence, identity
+parsing, URL construction) are unit-tested; the `gh`-shelling stays in the shell.
 
 The crate is split into `src/lib.rs` plus a thin `src/main.rs` so integration
 tests in `tests/` can import the modules. Adding a module means adding it to

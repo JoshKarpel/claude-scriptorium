@@ -46,6 +46,36 @@ bare `serve` picker both work):
 claude-scriptorium serve <session-id>.jsonl
 ```
 
+### Sharing a folio
+
+Publish a folio to a GitHub gist (via the [`gh`](https://cli.github.com/) CLI,
+which handles authentication). `gh gist create` has no host override, so it
+publishes as whichever account `gh` resolves; `publish` resolves that account up
+front and confirms it, along with the reminder that a secret gist is unlisted
+but still readable by anyone with the URL:
+
+```bash
+claude-scriptorium publish <session-id>.jsonl
+```
+
+The same session selection as `render`/`serve` applies. A gist over ~1 MB
+(every folio, once fonts are embedded) won't render inline on GitHub, so viewing
+one means either downloading it or routing it through a rendering proxy.
+
+To view a published folio offline with nothing but a browser, download its files
+and open the HTML locally:
+
+```bash
+claude-scriptorium fetch <gist-url-or-id> --open
+```
+
+`publish` prints this exact command for the gist it just created. For a quick
+link that renders in a browser without downloading, `--preview` additionally
+prints a [githack](https://raw.githack.com/) proxy URL, after confirming that
+the proxy fetches and caches the full transcript. It is off by default so
+nothing leaves for a third party unless you ask, which matters for
+sensitive sessions: prefer `fetch` for those.
+
 Claude Code stores transcripts under `~/.claude/projects/`, one directory per
 project path, one JSONL file per session. Set `CLAUDE_CONFIG_DIR` to read from
 somewhere other than `~/.claude`.
