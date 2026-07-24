@@ -139,6 +139,109 @@ fn transcript_html_is_escaped_rather_than_executed() {
 }
 
 #[test]
+fn a_turns_role_is_one_class_attribute_not_two() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"class="turn turn--assistant""#));
+    assert!(!html.contains(r#"class="turn" class="#));
+}
+
+#[test]
+fn thinking_blocks_render_their_markdown() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"<section class="block block--thinking">"#));
+    assert!(html.contains("The gathering is four folded sheets."));
+}
+
+#[test]
+fn redacted_thinking_blocks_are_marked_not_shown_as_an_empty_box() {
+    let folio =
+        Folio::read(Path::new("tests/fixtures/redacted_thinking.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    assert!(!html.contains(r#"<section class="block block--thinking">"#));
+    assert!(html.contains("block--redacted"));
+    assert!(html.contains("The reasoning was redacted."));
+}
+
+#[test]
+fn tool_result_turns_fold_into_the_assistant_panel() {
+    let html = render(&fixture(), &highlighter());
+
+    // The opening user turn, the assistant panel that absorbs the tool
+    // results, and the closing assistant panel: three articles, one "user".
+    assert_eq!(html.matches("<article").count(), 3);
+    assert_eq!(html.matches(r#"turn__role">user"#).count(), 1);
+    assert!(html.contains("pub struct Quire"));
+}
+
+#[test]
+fn panels_are_labelled_by_their_content_kind() {
+    let folio = Folio::read(Path::new("tests/fixtures/kinds.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // A tool call plus its folded result reads as tool; bare reasoning as
+    // thinking; prose keeps the speaker's name.
+    assert!(html.contains(r#"turn__role">tool<"#));
+    assert!(html.contains(r#"turn__role">thinking<"#));
+    assert!(html.contains(r#"turn__role">assistant<"#));
+}
+
+#[test]
+fn each_panel_is_numbered_by_its_leading_turn() {
+    let html = render(&fixture(), &highlighter());
+
+    // Turns 1, 2, and 5 lead panels; turns 3 and 4 fold into turn 2's panel,
+    // so their numbers never appear as labels.
+    assert!(html.contains(r#"turn__index">#1<"#));
+    assert!(html.contains(r#"turn__index">#2<"#));
+    assert!(html.contains(r#"turn__index">#5<"#));
+    assert!(!html.contains(r#"turn__index">#3<"#));
+}
+
+#[test]
+fn meta_turns_are_marked_and_offer_a_reveal_toggle() {
+    let folio = Folio::read(Path::new("tests/fixtures/meta.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    assert!(html.contains("data-meta"));
+    assert!(html.contains(r#"id="show-meta""#));
+    assert!(html.contains("Base directory for this skill"));
+}
+
+#[test]
+fn folios_without_meta_turns_omit_the_toggle() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(!html.contains(r#"id="show-meta""#));
+}
+
+#[test]
+fn clear_command_turns_are_dropped() {
+    let folio = Folio::read(Path::new("tests/fixtures/clear.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    assert!(!html.contains("command-name"));
+    assert!(!html.contains("command-message"));
+    assert!(html.contains("Explain the quire layout."));
+    assert_eq!(html.matches("<article").count(), 1);
+}
+
+#[test]
+fn the_stylesheet_is_inlined_not_linked() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains("<style>"));
+    assert!(html.contains(".ink-keyword"));
+    assert!(!html.contains("<link"));
+}
+
+#[test]
 fn the_colophon_stamps_the_run() {
     let html = render(&fixture(), &highlighter());
 

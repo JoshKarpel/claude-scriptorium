@@ -59,10 +59,16 @@ Strictness belongs only where a field is genuinely required.
   `.html`, semantically structured and entirely unstyled. Syntax
   highlighting and collapsible tool calls came along for free, since both
   are markup rather than theme.
-- **M2, own the markup and CSS.** The actual point. The classes are
-  already emitted (`turn`, `block--thinking`, `marginalia`, `colophon`,
-  `ink-*` for highlighted code, plus `data-sidechain` / `data-meta` /
-  `data-error`), so this is writing the stylesheet and inlining it.
+- **M2, own the markup and CSS.** Done. `src/illumination.css` is inlined
+  into every folio's `<head>` as an illuminated-manuscript theme: a parchment
+  leaf with gilt vine marginalia climbing the outer margins, rubricated
+  small-caps headings, and fleuron dividers. The palette is real manuscript
+  pigments (lapis lazuli, vermilion, malachite, Tyrian purple, ochre, gold)
+  plus Claude orange for the assistant, held in CSS custom properties so the
+  dark variant (M3) is a token swap. Syntax colors target the canonical
+  TextMate scope roots (`ink-comment`, `ink-keyword`, `ink-string`, ...) that
+  syntect emits as the first class on every span, so the palette covers every
+  language without enumerating finer scopes.
 - **M3, niceties.** In-page search, dark mode, per-tool rendering for
   `TodoWrite`, `Write`, `Edit`, `Bash`.
 - **M4, CLI ergonomics.** Interactive session picker, `--open`, output
@@ -82,8 +88,19 @@ Strictness belongs only where a field is genuinely required.
   strikethrough, autolinks) matching what Claude emits.
 - **Syntax highlighting:** `syntect` at render time, emitting classed
   spans plus shipped CSS, so the artifact stays JS-free and offline.
-- **Other crates:** `clap`, `serde`/`serde_json`, picker via `inquire`
-  or `dialoguer` (M4), `open` for the browser (M4).
+- **Display panels:** raw turns are folded into a stream of `Panel`s
+  (`Folio::panels`) before rendering. This is the single place for
+  display-level filtering and grouping: tool-result turns (modelled as `user`
+  on the wire) merge into the assistant turn that called the tool, `/clear`
+  boundary turns drop out, and each panel is labelled by its content kind
+  (`tool`, `thinking`, or the speaker) rather than a bare role.
+- **Live-reload dev server:** the `serve` subcommand serves a session over
+  HTTP and injects a reload snippet into the *served* response only (the
+  written file stays script-free). It reloads when the session file grows or
+  the server restarts, so `just serve` (rebuild + restart on source change)
+  gives a live edit loop. Uses `tiny_http`, no async runtime.
+- **Other crates:** `clap`, `serde`/`serde_json`, `tiny_http` (serve), picker
+  via `inquire` or `dialoguer` (M4), `open` for the browser (M4).
 
 ## Theming vocabulary
 

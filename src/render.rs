@@ -7,7 +7,7 @@ use jiff::{Timestamp, Zoned, tz::TimeZone};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde_json::Value;
 
-use crate::transcript::{Block, Content, Folio, ImageSource, Known, ToolResultContent, Turn};
+use crate::transcript::{Block, Folio, ImageSource, Known, Panel, ToolResultContent};
 
 /// The generation metadata stamped at the foot of every folio.
 pub struct Colophon {
@@ -58,6 +58,7 @@ impl<'a> Scribe<'a> {
 
     pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> Markup {
         let title = format!("folio {}", folio.session_id());
+        let panels = folio.panels();
         html! {
             (DOCTYPE)
             html lang="en" {
@@ -65,21 +66,31 @@ impl<'a> Scribe<'a> {
                     meta charset="utf-8";
                     meta name="viewport" content="width=device-width, initial-scale=1";
                     title { (title) }
+                    style { (PreEscaped(include_str!("illumination.css"))) }
                 }
                 body {
                     header .folio__head {
                         h1 { (title) }
                         dl .folio__facts {
                             dt { "source" } dd { code { (folio.source.display().to_string()) } }
-                            dt { "turns" } dd { (folio.turns.len()) }
-                            @if let Some(first) = folio.turns.first() {
+                            dt { "turns" } dd { (panels.len()) }
+                            @if let Some(first) = panels.first() {
                                 dt { "opened" } dd { (self.stamp(first.timestamp)) }
+                            }
+                        }
+                        // Harness-injected panels are hidden by default; the
+                        // checkbox drives a pure-CSS reveal, so only offer it
+                        // when the folio actually carries any.
+                        @if panels.iter().any(|panel| panel.is_meta) {
+                            p .meta-toggle {
+                                input #show-meta type="checkbox";
+                                label for="show-meta" { "show harness notes" }
                             }
                         }
                     }
                     main .folio {
-                        @for turn in &folio.turns {
-                            (self.turn(turn))
+                        @for panel in &panels {
+                            (self.panel(panel))
                         }
                     }
                     (self.colophon(colophon))
@@ -94,20 +105,21 @@ impl<'a> Scribe<'a> {
             .to_string()
     }
 
-    fn turn(&self, turn: &Turn) -> Markup {
+    fn panel(&self, panel: &Panel) -> Markup {
+        let kind = panel.kind();
         html! {
-            article .turn class={ "turn--" (turn.role.as_str()) }
-                data-sidechain[turn.is_sidechain] data-meta[turn.is_meta] {
+            article class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
+                data-sidechain[panel.is_sidechain] data-meta[panel.is_meta] {
                 header .turn__meta {
-                    span .turn__role { (turn.role.as_str()) }
-                    time .turn__time datetime=(turn.timestamp.to_string()) { (self.stamp(turn.timestamp)) }
-                    @if let Some(model) = &turn.model {
+                    span .turn__role { (kind.label()) }
+                    @if let Some(model) = &panel.model {
                         span .turn__model { (model) }
                     }
+                    time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
+                    span .turn__index { "#" (panel.turn_number) }
                 }
-                @match &turn.content {
-                    Content::Text(text) => div .block.block--text { (self.markdown(text)) },
-                    Content::Blocks(blocks) => @for block in blocks { (self.block(block)) },
+                @for block in &panel.blocks {
+                    (self.block(block))
                 }
             }
         }
@@ -120,9 +132,14 @@ impl<'a> Scribe<'a> {
         };
         match known {
             Known::Text { text } => html! { div .block.block--text { (self.markdown(text)) } },
+            // Redacted thinking arrives as an empty string with only a
+            // signature: the reasoning happened but wasn't recorded. Mark it
+            // rather than dropping it to nothing (which leaves a bare turn).
+            Known::Thinking { thinking } if thinking.trim().is_empty() => html! {
+                p .block.block--redacted { "reasoning redacted" }
+            },
             Known::Thinking { thinking } => html! {
                 section .block.block--thinking {
-                    h2 .block__label { "thinking" }
                     (self.markdown(thinking))
                 }
             },

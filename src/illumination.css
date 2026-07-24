@@ -1,0 +1,629 @@
+/*
+ * illumination: the theme layer for a folio.
+ *
+ * A parchment leaf with an illuminated border: rubricated initials, vine
+ * ornaments in the outer margins, and fleuron dividers, all drawn in CSS and
+ * inline SVG so the folio stays self-contained. A single light palette lives
+ * in the token block, so the dark variant (M3) is a swap of those values.
+ *
+ * Syntax colors target the canonical TextMate scope roots (comment, string,
+ * keyword, ...) that syntect emits as the first class on every span, so the
+ * palette covers every language without enumerating their finer scopes.
+ */
+
+:root {
+  color-scheme: light;
+
+  --page: #e7dcc0;
+  --leaf: #f7f1e1;
+  --leaf-sunk: #f1e9d4;
+  --ink: #2b2620;
+  --ink-soft: #6f6656;
+  --ink-faint: #9a9080;
+  --rule: #d8ccae;
+  --rule-soft: #e6dcc3;
+
+  /* The mineral pigments a scribe actually ground: vermilion and red lead,
+   * lapis lazuli, malachite, Tyrian purple, ochre, and burnished gold. */
+  --rubric: #b0281d; /* vermilion / red lead */
+  --sienna: #9a6410; /* yellow ochre / raw sienna */
+  --gold: #b8860b; /* solid gold, for small marks */
+  --verdigris: #2f7a4d; /* malachite green */
+  --lapis: #274690; /* lapis lazuli / ultramarine */
+  --tyrian: #6b2f74; /* Tyrian purple / folium */
+
+  /* Not a manuscript pigment, but the assistant's own hue. */
+  --claude: #d97757;
+
+  --user-edge: var(--lapis);
+  --assistant-edge: var(--claude);
+  --sidechain-edge: var(--tyrian);
+  --error-edge: var(--rubric);
+
+  --measure: 44rem;
+  --radius: 4px;
+
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+    Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo,
+    Consolas, monospace;
+
+  /* An illuminated vine, drawn once and mirrored into the far margin. */
+  --vine: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='230' viewBox='0 0 46 230'><g fill='none' stroke='%23a8811f' stroke-width='1.4' stroke-linecap='round'><path d='M23 0 C23 30 10 40 10 62 C10 86 36 96 36 120 C36 144 10 154 10 176 C10 200 23 210 23 230'/><path d='M10 62 C1 56 -1 45 3 39'/><path d='M36 120 C45 114 47 103 43 97'/><path d='M10 176 C1 170 -1 159 3 153'/></g><g fill='%23b0281d'><circle cx='4' cy='41' r='2.6'/><circle cx='42' cy='99' r='2.6'/><circle cx='4' cy='155' r='2.6'/></g><g fill='%232f7a4d'><path d='M13 31 C24 27 31 33 29 44 C21 46 13 41 13 31 Z'/><path d='M33 89 C22 85 15 91 17 102 C25 104 33 99 33 89 Z'/><path d='M13 145 C24 141 31 147 29 158 C21 160 13 155 13 145 Z'/></g></svg>");
+
+  /* Syntax tokens, all resolved against the parchment ground. */
+  --syn-comment: #948a74;
+  --syn-string: var(--verdigris);
+  --syn-keyword: var(--rubric);
+  --syn-storage: var(--rubric);
+  --syn-constant: var(--sienna);
+  --syn-entity: var(--lapis);
+  --syn-variable: var(--tyrian);
+  --syn-support: var(--lapis);
+  --syn-inserted: var(--verdigris);
+  --syn-deleted: var(--rubric);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  font-size: 17px;
+  /* Parchment ground with faint mottling, so the page isn't a flat fill. */
+  background-color: var(--page);
+  background-image:
+    radial-gradient(
+      ellipse at 20% 15%,
+      rgba(255, 255, 255, 0.35),
+      transparent 55%
+    ),
+    radial-gradient(ellipse at 85% 80%, rgba(120, 96, 48, 0.12), transparent 60%);
+}
+
+/* The body is the leaf itself: a centered parchment page. */
+body {
+  position: relative;
+  max-width: var(--measure);
+  margin: 2.5rem auto 3rem;
+  padding: 3rem 3.25rem 2.5rem;
+  background: var(--leaf);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.6;
+  border: 1px solid var(--rule);
+  box-shadow:
+    0 0 0 1px var(--leaf) inset,
+    0 0 0 4px var(--rule-soft) inset,
+    0 6px 26px rgba(60, 46, 20, 0.18);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Illuminated vines climbing the outer margins. */
+body::before,
+body::after {
+  content: "";
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 46px;
+  background: var(--vine) repeat-y center top;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+body::before {
+  right: 100%;
+  margin-right: 1rem;
+}
+
+body::after {
+  left: 100%;
+  margin-left: 1rem;
+  transform: scaleX(-1);
+}
+
+@media (max-width: 62rem) {
+  body::before,
+  body::after {
+    display: none;
+  }
+}
+
+@media (max-width: 34rem) {
+  body {
+    padding: 1.75rem 1.25rem;
+  }
+}
+
+/* --- The page head --------------------------------------------------- */
+
+.folio__head {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--rule);
+  text-align: center;
+}
+
+.folio__head::after {
+  content: "❦";
+  display: block;
+  margin-top: 1rem;
+  color: var(--gold);
+  font-size: 1.2rem;
+}
+
+.folio__head h1 {
+  margin: 0 0 0.9rem;
+  font-size: 1.7rem;
+  font-weight: 600;
+  font-variant: small-caps;
+  letter-spacing: 0.03em;
+  color: var(--rubric);
+}
+
+.folio__facts {
+  display: inline-grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0;
+  font-size: 0.82rem;
+  text-align: left;
+  color: var(--ink-soft);
+}
+
+.folio__facts dt {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.folio__facts dd {
+  margin: 0;
+}
+
+/* --- Turns ----------------------------------------------------------- */
+
+.turn {
+  margin: 1.6rem 0;
+  padding: 0.2rem 0 0.2rem 1.1rem;
+  border-left: 2px solid var(--rule);
+}
+
+.turn--user {
+  border-left-color: var(--user-edge);
+}
+
+.turn--assistant {
+  border-left-color: var(--assistant-edge);
+}
+
+.turn[data-sidechain] {
+  border-left-color: var(--sidechain-edge);
+  border-left-style: dashed;
+  margin-left: 1.5rem;
+}
+
+/* Harness-injected turns are hidden until the reveal toggle is checked. */
+.turn[data-meta] {
+  display: none;
+  border-left-color: var(--rule-soft);
+  opacity: 0.72;
+  font-size: 0.92em;
+}
+
+body:has(#show-meta:checked) .turn[data-meta] {
+  display: block;
+}
+
+.meta-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 1rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.meta-toggle input {
+  accent-color: var(--sienna);
+}
+
+.meta-toggle label {
+  cursor: pointer;
+}
+
+.turn__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.9rem;
+  margin-bottom: 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  color: var(--ink-faint);
+}
+
+.turn__index {
+  color: var(--ink-faint);
+}
+
+.turn__role {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-soft);
+}
+
+.turn--user .turn__role {
+  color: var(--user-edge);
+}
+
+.turn--assistant .turn__role {
+  color: var(--assistant-edge);
+}
+
+/* Tool and thinking labels are secondary to prose, so mute them and reserve
+ * the role colour for panels that actually speak to the reader. */
+.turn[data-kind="tool"] .turn__role,
+.turn[data-kind="thinking"] .turn__role {
+  color: var(--ink-faint);
+}
+
+/* Push the timestamp and turn number to the panel's top-right corner. */
+.turn__time {
+  margin-left: auto;
+}
+
+/* --- Blocks ---------------------------------------------------------- */
+
+.block {
+  margin: 0.7rem 0;
+}
+
+.block--text > :first-child,
+.block--thinking > :first-child {
+  margin-top: 0;
+}
+
+.block--text > :last-child,
+.block--thinking > :last-child {
+  margin-bottom: 0;
+}
+
+.block--thinking {
+  padding: 0.6rem 1rem;
+  border-left: 2px solid var(--rule-soft);
+  background: var(--leaf-sunk);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* A slim note where extended reasoning was redacted from the transcript. */
+.block--redacted {
+  margin: 0.5rem 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.block--redacted::before {
+  content: "※ ";
+  color: var(--gold);
+}
+
+.block--image {
+  margin: 1rem 0;
+}
+
+.block--image img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.block--unknown {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.block--unknown > summary {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* --- Marginalia: collapsible tool calls and their results ------------ */
+
+.marginalia {
+  margin: 0.55rem 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--leaf-sunk);
+  font-size: 0.86rem;
+}
+
+.marginalia > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  list-style: none;
+}
+
+.marginalia > summary::-webkit-details-marker {
+  display: none;
+}
+
+.marginalia > summary::before {
+  content: "❧";
+  color: var(--gold);
+  font-size: 0.9em;
+}
+
+.marginalia[open] > summary::before {
+  content: "❧";
+  transform: rotate(90deg);
+}
+
+.marginalia[open] > summary {
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.marginalia__tool {
+  font-weight: 600;
+  color: var(--sienna);
+}
+
+.marginalia__gist {
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marginalia--result > summary {
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.marginalia[data-error] {
+  border-color: var(--error-edge);
+  background: color-mix(in srgb, var(--rubric) 7%, var(--leaf-sunk));
+}
+
+.marginalia[data-error] > summary {
+  color: var(--rubric);
+}
+
+.marginalia__body {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* --- Prose the markdown renderer emits ------------------------------- */
+
+.folio :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.3em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.folio h1 {
+  font-size: 1.35rem;
+}
+
+.folio h2 {
+  font-size: 1.2rem;
+}
+
+.folio h3 {
+  font-size: 1.05rem;
+}
+
+.folio :is(h4, h5, h6) {
+  font-size: 1rem;
+}
+
+.folio p {
+  margin: 0.6em 0;
+}
+
+.folio a {
+  color: var(--lapis);
+  text-underline-offset: 0.15em;
+  text-decoration-color: color-mix(in srgb, var(--lapis) 40%, transparent);
+}
+
+.folio a:hover {
+  text-decoration-color: currentColor;
+}
+
+.folio blockquote {
+  margin: 0.9em 0;
+  padding: 0.1em 1rem;
+  border-left: 3px solid var(--rule);
+  color: var(--ink-soft);
+}
+
+.folio ul,
+.folio ol {
+  padding-left: 1.4rem;
+}
+
+.folio li {
+  margin: 0.15em 0;
+}
+
+.folio li::marker {
+  color: var(--gold);
+}
+
+.folio hr {
+  margin: 1.5em 0;
+  border: none;
+  text-align: center;
+}
+
+.folio hr::before {
+  content: "❧";
+  color: var(--gold);
+  font-size: 0.95rem;
+}
+
+.folio table {
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.folio :is(th, td) {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  text-align: left;
+}
+
+.folio th {
+  background: var(--leaf-sunk);
+  font-weight: 600;
+}
+
+/* Inline code, distinct from fenced blocks. */
+.folio :not(pre) > code {
+  padding: 0.1em 0.35em;
+  background: var(--leaf-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.folio pre {
+  overflow-x: auto;
+  padding: 0.7rem 0.9rem;
+  background: var(--leaf-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.folio pre code {
+  font-family: var(--mono);
+}
+
+.marginalia__body {
+  border: none;
+}
+
+/* --- Syntax highlighting: the canonical scope roots ------------------ */
+
+pre.syntax-highlighting {
+  color: var(--ink);
+}
+
+.ink-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.ink-string {
+  color: var(--syn-string);
+}
+
+.ink-constant {
+  color: var(--syn-constant);
+}
+
+.ink-keyword {
+  color: var(--syn-keyword);
+}
+
+.ink-storage {
+  color: var(--syn-storage);
+}
+
+.ink-entity {
+  color: var(--syn-entity);
+}
+
+.ink-variable {
+  color: var(--syn-variable);
+}
+
+.ink-support {
+  color: var(--syn-support);
+}
+
+/* Operators and structural punctuation read as ink, not as color. */
+.ink-keyword.ink-operator,
+.ink-punctuation {
+  color: var(--ink-soft);
+}
+
+/* Markup scopes (Markdown, diff) carry weight and hue rather than a palette. */
+.ink-markup.ink-bold {
+  font-weight: 700;
+}
+
+.ink-markup.ink-italic {
+  font-style: italic;
+}
+
+.ink-markup.ink-heading {
+  color: var(--rubric);
+  font-weight: 700;
+}
+
+.ink-markup.ink-raw {
+  color: var(--sienna);
+}
+
+.ink-markup.ink-inserted {
+  color: var(--syn-inserted);
+}
+
+.ink-markup.ink-deleted {
+  color: var(--syn-deleted);
+}
+
+/* --- Colophon -------------------------------------------------------- */
+
+.colophon {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.colophon::before {
+  content: "❦";
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--gold);
+  font-size: 1rem;
+}
+
+.colophon p {
+  margin: 0;
+}

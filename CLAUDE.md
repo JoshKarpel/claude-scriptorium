@@ -8,11 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 recipes.
 
 ```bash
-just setup            # nightly rustfmt + the pre-commit hook (after cloning)
+just setup            # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
 just check            # format, lint, then test
 just test             # cargo test --all-features
 just test <name>      # single test, e.g. just test markdown_becomes_html
-just render <session> # cargo run against a session JSONL
+just render <session> # write a session to HTML (CLI `render` subcommand)
+just serve <session>  # live-reload dev server, rebuilds on source change
 just fix              # pre-commit across the staged tree
 ```
 
@@ -33,15 +34,23 @@ module each:
 - `discovery`: finds session files under `~/.claude/projects/`, where each
   project directory is named after its path with everything outside
   `[A-Za-z0-9_]` flattened to a dash. `CLAUDE_CONFIG_DIR` relocates the root.
-- `transcript`: parses JSONL lines into a `Folio` of `Turn`s.
-- `render`: `Scribe` turns a `Folio` into `Markup`.
+- `transcript`: parses JSONL lines into a `Folio` of raw `Turn`s, then folds
+  those into a stream of display `Panel`s (`Folio::panels`).
+- `render`: `Scribe` turns a folio's panels into `Markup`.
 
-`src/main.rs` is the imperative shell: it resolves paths, reads the clock and
-system timezone, builds the syntect adapter, and writes the file. Everything
-those decisions feed into is passed as an argument, so `Scribe` and the
-markup functions stay pure and testable without mocks. Keep it that way when
-adding features: a renderer that reads the clock or touches the filesystem
-breaks the test suite's ability to assert on exact output.
+`src/main.rs` is the imperative shell: it dispatches the `render` and `serve`
+subcommands, resolves paths, reads the clock and system timezone, builds the
+syntect adapter, and writes the file. Everything those decisions feed into is
+passed as an argument, so `Scribe` and the markup functions stay pure and
+testable without mocks. Keep it that way when adding features: a renderer that
+reads the clock or touches the filesystem breaks the test suite's ability to
+assert on exact output.
+
+`serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
+load and injects a live-reload snippet so the browser refreshes when the
+session file grows or the server restarts with fresh code. `just serve`
+rebuilds and restarts it on source changes. The snippet is injected only into
+the *served* response; the written file stays script-free (see below).
 
 The crate is split into `src/lib.rs` plus a thin `src/main.rs` so integration
 tests in `tests/` can import the modules. Adding a module means adding it to
@@ -65,10 +74,27 @@ Strictness belongs only where a field is genuinely required. A line that isn't
 JSON, or an assistant turn missing its `timestamp`, is a contract violation and
 fails loudly with the file and line number.
 
+### Folding turns into panels
+
+`Folio::panels` is the one place display-level filtering and categorization
+happen, so the renderer walks an already-clean stream and never re-derives any
+of it. The wire format models a tool result as a `user` turn (it comes back in
+the user role), but it isn't the user typing: `panels` merges each
+tool-response turn's blocks back into the assistant turn that called the tool,
+so a call and its result render inside one `Panel` (one bordered article) with
+no intervening `user` heading. The same pass drops `/clear` boundary turns.
+Add new turn-level filtering or grouping here, not in the renderer.
+
+Each panel is labelled by its `kind` (`Panel::kind`): the border colour already
+distinguishes user from assistant, so the label names the content instead,
+`tool` or `thinking` when that's all the panel carries, otherwise the speaker.
+
 ### Rendering invariants worth preserving
 
 - **Self-contained.** Everything the folio needs is inlined: no external CSS,
-  JS, fonts, or image files. Adding an asset means inlining it.
+  JS, fonts, or image files, and the written file has no scripts at all.
+  Adding an asset means inlining it. The one script anywhere is the live-reload
+  snippet `serve` injects into its *served* response, never into the file.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -79,7 +105,11 @@ fails loudly with the file and line number.
   the C oniguruma one.
 
 Markup carries `data-sidechain` for subagent turns and `data-meta` for
-harness-injected ones so a stylesheet can distinguish them.
+harness-injected ones so a stylesheet can distinguish them. Meta turns are
+command caveats, skill scaffolding, and context dumps, not conversation, so
+the stylesheet hides them by default; a pure-CSS checkbox (`#show-meta`, keyed
+off `:has()`, rendered only when the folio has any) reveals them without
+breaking the JS-free invariant.
 
 ### Vocabulary
 
@@ -97,12 +127,36 @@ check nothing fails:
 
 ```bash
 for f in ~/.claude/projects/*/*.jsonl; do
-  cargo run -q -- "$f" -o "/tmp/$(basename "$f" .jsonl).html" || echo "FAILED: $f"
+  cargo run -q -- render "$f" -o "/tmp/$(basename "$f" .jsonl).html" || echo "FAILED: $f"
 done
 ```
 
 Verify format claims against those files rather than from memory; `PLAN.md`
 records what the survey found, including where earlier assumptions were wrong.
+
+### Visual verification
+
+The stylesheet is the deliverable, so a styling change isn't done until it has
+been looked at, not just asserted on in a string test. `just setup` installs a
+Playwright-managed headless Chromium; render a folio and screenshot it:
+
+```bash
+cargo run -q -- render <session.jsonl> -o /tmp/folio.html
+uvx --from playwright python - /tmp/folio.html /tmp/folio.png <<'PY'
+import sys
+from playwright.sync_api import sync_playwright
+html, png = sys.argv[1], sys.argv[2]
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page(viewport={"width": 1500, "height": 2600})
+    page.goto(f"file://{html}")
+    page.screenshot(path=png)
+    browser.close()
+PY
+```
+
+Read the PNG back to check the illumination. For an interactive loop, `just
+serve <session>` reloads the browser as you edit the renderer or CSS.
 
 ## Roadmap
 

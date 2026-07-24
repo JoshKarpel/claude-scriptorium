@@ -17,13 +17,20 @@ cargo install claude-scriptorium
 Render the most recent session recorded for the current directory:
 
 ```bash
-claude-scriptorium
+claude-scriptorium render
 ```
 
 Render a specific session file, to a chosen path:
 
 ```bash
-claude-scriptorium ~/.claude/projects/-home-me-work/<session-id>.jsonl -o folio.html
+claude-scriptorium render ~/.claude/projects/-home-me-work/<session-id>.jsonl -o folio.html
+```
+
+Serve a session over HTTP with live reload, for watching a session or iterating
+on the rendering:
+
+```bash
+claude-scriptorium serve <session-id>.jsonl
 ```
 
 Claude Code stores transcripts under `~/.claude/projects/`, one directory per
