@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4]
+
+### Added
+
+- A folio's plaque states what the render cost: how long the scribe took, and
+  how large the folio came out. `render`, `serve`, and `publish` report the same
+  two figures on stderr, leaving stdout the folio's path alone.
+
+### Changed
+
+- A render no longer base64s the embedded fonts. They are constants, so they are
+  encoded into their `@font-face` block at compile time, and every render starts
+  from the finished block.
+
 ## [0.1.3]
 
 ### Added

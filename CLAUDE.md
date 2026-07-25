@@ -14,8 +14,21 @@ just test             # cargo test --all-features
 just test <name>      # single test, e.g. just test markdown_becomes_html
 just render <session> # write a session to HTML (CLI `render` subcommand)
 just serve <session>  # live-reload dev server, rebuilds on source change
+just bench            # hyperfine over the release binary rendering the fixtures
 just fix              # pre-commit across the staged tree
 ```
+
+`just render` and `just serve` build with `--release`, and so should any render
+you run by hand. A render is heavy enough (highlighting, base64'ing the fonts,
+megabytes of markup) that an unoptimized build takes longer to render a session
+than an optimized one takes to compile *and* render it, so a debug render is
+slower even counting the build. Tests still run unoptimized.
+
+`just bench` times that binary with [hyperfine](https://github.com/sharkdp/hyperfine)
+over the fixtures, so a run measures the whole artifact a reader waits on
+(parse, render, write) rather than a library call. It is the check for a change
+that claims to make rendering faster; take a reading before and after, since a
+folio's own plaque reports a single run and says nothing about variance.
 
 `just format` runs `cargo +nightly fmt`, not stable. `rustfmt.toml` sets
 unstable options (`imports_granularity`, `group_imports`,
@@ -62,6 +75,18 @@ testable without mocks. Keep it that way when adding features: a renderer that
 reads the clock or touches the filesystem breaks the test suite's ability to
 assert on exact output. Interactive I/O (the picker, browser-opening) lives in
 the shell and its modules, never in the renderer.
+
+A folio states what its own render cost, in the plaque's colophon. Neither
+figure can be known while the markup is being written, so `Scribe::folio` leaves
+an HTML-comment placeholder for each and `render::inscribe` fills them in once
+the markup exists (a transcript can't forge one: raw HTML in transcript content
+is escaped, so only the scribe's own markup reaches the document unescaped).
+Substituting shifts the document's length, so the size a folio carries is the
+markup it measured itself from rather than the file on disk, a difference the
+human-readable figure rounds away. The shell measures the render alone, so the
+figure means the same thing under every subcommand, and prints it (with the
+finished document's exact size) on **stderr**, keeping stdout the folio's path
+alone for a script to consume.
 
 `serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
 load and injects a live-reload snippet so the browser refreshes when the
@@ -290,8 +315,10 @@ selections joined into one answer, and a timeout), each with a test.
   persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings and versals) are woff2 vendored
-  under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
-  `@font-face` data URIs at render time (once, via a `LazyLock`). `just fonts`
+  under `src/fonts/` and base64'd into `@font-face` data URIs by `build.rs`,
+  which `render.rs` `include_str!`s from `OUT_DIR` as one constant: the faces
+  never change between renders, so no render pays to encode them, and adding or
+  swapping a face means editing `build.rs`'s `FACES`. `just fonts`
   re-vendors them from pinned upstreams; it needs `uvx` because UnifrakturCook
   ships only a TTF and gets compressed to woff2 with `fonttools`. All four are
   SIL OFL 1.1: the license texts live in `src/fonts/licenses/`, and every folio
@@ -406,7 +433,7 @@ been looked at, not just asserted on in a string test. `just setup` installs a
 Playwright-managed headless Chromium; render a folio and screenshot it:
 
 ```bash
-cargo run -q -- render <session.jsonl> -o /tmp/folio.html
+cargo run -q --release -- render <session.jsonl> -o /tmp/folio.html
 uvx --from playwright python - /tmp/folio.html /tmp/folio.png <<'PY'
 import sys
 from playwright.sync_api import sync_playwright
@@ -432,7 +459,7 @@ enough to trip GitHub's ~1 MB API truncation) means going through a real gist.
 This publishes to a real account, so treat it as outward-facing: get the user's
 go-ahead first, and delete the gist afterward.
 
-1. `cargo run -q -- publish tests/fixtures/session.jsonl --yes` and capture the
+1. `cargo run -q --release -- publish tests/fixtures/session.jsonl --yes` and capture the
    gist id from the printed URL.
 2. Serve `docs/` over local **HTTP** (not `file://`, or the loader's `fetch`
    hits a null origin) and load `?<id>/<file>` in Playwright. `document.write`

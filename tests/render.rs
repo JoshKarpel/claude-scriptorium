@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use claude_scriptorium::{
-    render::{Colophon, Scribe},
+    render,
+    render::{Colophon, Labour, Scribe},
     transcript::{Content, Folio, Role},
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
@@ -25,7 +26,13 @@ fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
         version: "0.1.0",
         home: "https://example.invalid/scriptorium",
     };
-    scribe.folio(folio, &colophon).into_string()
+    // A folio states what its own render cost, which is only known once the
+    // markup exists; fixed values stand in for a real run's here.
+    let labour = Labour {
+        took: Duration::from_millis(412),
+        bytes: 2_947_312,
+    };
+    render::inscribe(scribe.folio(folio, &colophon).into_string(), &labour)
 }
 
 #[test]
@@ -777,6 +784,23 @@ fn the_colophon_stamps_the_run() {
 
     assert!(html.contains("claude-scriptorium"));
     assert!(html.contains("2026-03-12 09:15:00 UTC"));
+}
+
+#[test]
+fn the_colophon_states_what_the_render_cost() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains("taking 412 ms to set 2.9 MB."));
+}
+
+#[test]
+fn an_inscribed_folio_keeps_no_placeholder() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(
+        !html.contains("<!--folio:"),
+        "a placeholder outlived inscription"
+    );
 }
 
 #[test]

@@ -144,11 +144,11 @@ Assistant and user turns, in order, with:
 - Pasted images inlined as data URLs
 
 The reading column is pure transcript. The folio's title, facts, and a
-**colophon** (what wrote it, and when) live in a plaque you open from the
-corner, and the parchment leaf is bordered with illuminated vines threaded with
-marginal **drolleries**: colourful little beasts (snail, frog, cat, butterfly,
-stag, and more) seated among the vine at intervals, cycling through the whole
-bestiary so a long folio keeps turning up new ones.
+**colophon** (what wrote it, when, and what the render cost) live in a plaque
+you open from the corner, and the parchment leaf is bordered with illuminated
+vines threaded with marginal **drolleries**: colourful little beasts (snail,
+frog, cat, butterfly, stag, and more) seated among the vine at intervals,
+cycling through the whole bestiary so a long folio keeps turning up new ones.
 
 Turns a subagent produced carry `data-sidechain`, and turns the harness injected
 carry `data-meta`, so a stylesheet can treat them differently.
@@ -215,6 +215,7 @@ just setup   # installs nightly rustfmt and the pre-commit hook
 just check   # format, lint, and test
 just test
 just render <session>
+just bench   # time rendering the fixtures, with hyperfine
 ```
 
 Formatting runs under nightly rustfmt, since `rustfmt.toml` uses unstable

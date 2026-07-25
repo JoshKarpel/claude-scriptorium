@@ -6,6 +6,7 @@ set ignore-comments
 pre-commit-args := ""
 cargo-test-args := ""
 watch-paths := "src Cargo.toml justfile"
+bench-fixtures := "session,playground"
 
 fonts-dir := "src/fonts"
 junicode-ref := "v2.226"
@@ -43,12 +44,35 @@ lint:
     cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged
     cargo clippy --all-targets --all-features -- -D warnings
 
+# Optimized on purpose: a render is heavy enough (highlighting, base64'ing the
+# fonts, megabytes of markup) that an unoptimized build takes longer to render
+# than an optimized one takes to compile and render.
+
 [doc("Render a session to an HTML file")]
 [group("rust")]
 render *args:
-    cargo run -- render {{ args }}
+    cargo run --release -- render {{ args }}
 
 alias r := render
+
+[doc("Benchmark rendering the fixtures, e.g. `just bench --export-markdown bench.md`")]
+[group("rust")]
+bench *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v hyperfine >/dev/null 2>&1; then
+      echo "just bench needs hyperfine (cargo install hyperfine / brew install hyperfine)" >&2
+      exit 1
+    fi
+    cargo build --release -q
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    # Timed through the binary rather than in-process, so a run measures the
+    # whole artifact a reader waits on: parse, render, and write.
+    hyperfine --warmup 3 --parameter-list fixture {{ bench-fixtures }} {{ args }} \
+      "target/release/claude-scriptorium render tests/fixtures/{fixture}.jsonl -o $out/"
+
+alias b := bench
 
 [doc("Serve a session with live reload, rebuilding and restarting on source changes")]
 [group("rust")]
@@ -59,11 +83,11 @@ serve *args:
       echo "just serve needs fswatch (apt install fswatch / brew install fswatch)" >&2
       exit 1
     fi
-    bin="target/debug/claude-scriptorium"
+    bin="target/release/claude-scriptorium"
     trap 'kill "${pid:-}" 2>/dev/null || true' EXIT
     while true; do
       pid=""
-      if cargo build -q; then
+      if cargo build -q --release; then
         "$bin" serve {{ args }} &
         pid=$!
       else

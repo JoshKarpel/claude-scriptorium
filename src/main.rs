@@ -2,13 +2,14 @@ use std::{
     fs,
     io::IsTerminal,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use claude_scriptorium::{
-    discovery, gist, picker,
-    render::{Colophon, Scribe},
+    discovery, gist, picker, render,
+    render::{Colophon, Labour, Scribe},
     serve,
     transcript::Folio,
 };
@@ -178,11 +179,11 @@ fn render(args: RenderArgs) -> Result<()> {
 
     let highlighter = highlighter();
     let scribe = Scribe::new(&highlighter, TimeZone::system());
-    let markup = scribe.folio(&folio, &colophon());
+    let (html, labour) = inscribe(&scribe, &folio);
 
-    fs::write(&output, markup.into_string())
-        .with_context(|| format!("writing {}", output.display()))?;
+    fs::write(&output, &html).with_context(|| format!("writing {}", output.display()))?;
     println!("{}", output.display());
+    report(&html, &labour);
 
     if args.open {
         open::that(&output).with_context(|| format!("opening {}", output.display()))?;
@@ -197,7 +198,9 @@ fn serve(args: ServeArgs) -> Result<()> {
 
     serve::run(args.port, &session, args.open, || {
         let folio = Folio::read(&session)?;
-        Ok(scribe.folio(&folio, &colophon()).into_string())
+        let (html, labour) = inscribe(&scribe, &folio);
+        report(&html, &labour);
+        Ok(html)
     })
 }
 
@@ -216,7 +219,8 @@ fn publish(args: PublishArgs) -> Result<()> {
 
     let highlighter = highlighter();
     let scribe = Scribe::new(&highlighter, TimeZone::system());
-    let html = scribe.folio(&folio, &colophon()).into_string();
+    let (html, labour) = inscribe(&scribe, &folio);
+    report(&html, &labour);
 
     let session_id = folio.session_id();
     let filename = format!("{session_id}.html");
@@ -559,6 +563,32 @@ fn highlighter() -> SyntectAdapter {
     SyntectAdapterBuilder::new()
         .css_with_class_prefix("ink-")
         .build()
+}
+
+/// Sets a folio and records what setting it cost, filling both figures into the
+/// plaque's placeholders. The time is the render alone, so it means the same
+/// thing under every subcommand; the size is of the markup the figures are
+/// substituted into, which is the whole folio bar the substitution itself.
+fn inscribe(scribe: &Scribe, folio: &Folio) -> (String, Labour) {
+    let started = Instant::now();
+    let markup = scribe.folio(folio, &colophon()).into_string();
+    let labour = Labour {
+        took: started.elapsed(),
+        bytes: markup.len(),
+    };
+    (render::inscribe(markup, &labour), labour)
+}
+
+/// Reports what a render cost, in the same words the folio's own plaque uses.
+/// The size is the finished document's, so it is exact where the plaque's is
+/// the pre-substitution measure it could take of itself. It goes to stderr so
+/// stdout stays the folio's path alone, for a script to consume.
+fn report(html: &str, labour: &Labour) {
+    eprintln!(
+        "{} in {}",
+        render::size(html.len()),
+        render::elapsed(labour.took)
+    );
 }
 
 fn colophon() -> Colophon {
