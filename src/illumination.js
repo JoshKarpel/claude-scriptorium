@@ -17,6 +17,7 @@
 
   const THEME_KEY = "scriptorium-theme";
   const THEMES = ["system", "light", "dark"];
+  const FOLD_KEY = "scriptorium-folds";
 
   const readTheme = () => {
     try {
@@ -78,7 +79,20 @@
     container.normalize();
   };
 
-  const markHits = (container, query) => {
+  // Which kind of message a text node belongs to, judged by the block it sits
+  // in rather than its panel's label: a tool call folded into an assistant
+  // panel is still "tool", and reasoning is "thinking", so scoping is precise.
+  const scopeOf = (node) => {
+    const el = node.parentElement;
+    if (!el) return "assistant";
+    if (el.closest(".marginalia")) return "tool";
+    if (el.closest(".block--thinking")) return "thinking";
+    const turn = el.closest(".turn");
+    if (turn && turn.classList.contains("turn--user")) return "user";
+    return "assistant";
+  };
+
+  const markHits = (container, query, scopes) => {
     const needle = query.toLowerCase();
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
@@ -87,6 +101,15 @@
       if (!node.nodeValue.trim()) continue;
       // Copy-button labels are chrome, not transcript; don't match them.
       if (node.parentElement && node.parentElement.closest(".copy-button")) {
+        continue;
+      }
+      // Harness-note panels are hidden with no way to reveal them, so a hit
+      // inside one could never be scrolled into view; skip them.
+      if (node.parentElement && node.parentElement.closest("[data-meta]")) {
+        continue;
+      }
+      // Restrict to the kinds of message the reader left enabled.
+      if (scopes && !scopes.has(scopeOf(node))) {
         continue;
       }
       nodes.push(node);
@@ -122,10 +145,6 @@
   const revealHit = (hit) => {
     for (let node = hit.parentElement; node; node = node.parentElement) {
       if (node.tagName === "DETAILS") node.open = true;
-      if (node.matches("[data-meta]")) {
-        const reveal = document.getElementById("show-meta");
-        if (reveal) reveal.checked = true;
-      }
     }
   };
 
@@ -137,6 +156,17 @@
     const count = search.querySelector(".search__count");
     const prev = search.querySelector('[data-search-nav="prev"]');
     const next = search.querySelector('[data-search-nav="next"]');
+    const scopeButtons = search.querySelectorAll(".search__scope");
+
+    const enabledScopes = () => {
+      const scopes = new Set();
+      scopeButtons.forEach((button) => {
+        if (button.getAttribute("aria-pressed") === "true") {
+          scopes.add(button.dataset.scope);
+        }
+      });
+      return scopes;
+    };
 
     let hits = [];
     let index = -1;
@@ -164,7 +194,7 @@
     const run = () => {
       clearHits(container);
       const query = input.value;
-      hits = query ? markHits(container, query) : [];
+      hits = query ? markHits(container, query, enabledScopes()) : [];
       index = hits.length ? 0 : -1;
       paint();
     };
@@ -183,6 +213,13 @@
     });
     prev.addEventListener("click", () => step(-1));
     next.addEventListener("click", () => step(1));
+    scopeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const active = button.getAttribute("aria-pressed") === "true";
+        button.setAttribute("aria-pressed", String(!active));
+        run();
+      });
+    });
   };
 
   // --- Copy: a button on every code block and every message --------------
@@ -252,25 +289,31 @@
     });
   };
 
-  // --- Dock: jump between turns, fold every marginalia -------------------
+  // --- Dock: jump between messages, fold every marginalia ---------------
 
   const wireDock = () => {
     const dock = document.querySelector(".dock");
     const container = document.querySelector("main.folio");
     if (!dock || !container) return;
-    // Only visible turns: a hidden meta panel (display:none) reports top 0 and
-    // would otherwise hijack the "current turn" search.
-    const turns = () =>
-      Array.from(container.querySelectorAll(".turn")).filter(
-        (turn) => turn.getClientRects().length > 0,
-      );
+    // Step between the substantive messages, skipping tool-call and thinking
+    // panels: those are the noise a reader wants to jump over. Only visible
+    // ones, since a hidden meta panel reports top 0 and would hijack "current".
+    // Scoped to one speaker when a role is given, otherwise every message.
+    const messages = (role) =>
+      Array.from(
+        container.querySelectorAll(
+          role
+            ? `.turn[data-kind="${role}"]`
+            : '.turn[data-kind="user"], .turn[data-kind="assistant"]',
+        ),
+      ).filter((turn) => turn.getClientRects().length > 0);
 
-    const jump = (direction) => {
-      // The turn at the top of the viewport is the last one whose top has
+    const jump = (direction, role) => {
+      // The message at the top of the viewport is the last one whose top has
       // scrolled to or above the threshold; the threshold clears a turn's own
       // scroll-margin so the one just navigated to counts as current, not next.
       const threshold = 40;
-      const panels = turns();
+      const panels = messages(role);
       let current = -1;
       panels.forEach((turn, index) => {
         if (turn.getBoundingClientRect().top <= threshold) current = index;
@@ -289,12 +332,55 @@
     dock.addEventListener("click", (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { nav, fold: foldTo } = button.dataset;
-      if (nav === "prev") jump(-1);
-      else if (nav === "next") jump(1);
+      const { nav, role, fold: foldTo } = button.dataset;
+      if (nav === "prev") jump(-1, role);
+      else if (nav === "next") jump(1, role);
       else if (foldTo === "expand") fold(true);
       else if (foldTo === "collapse") fold(false);
     });
+
+    // Remember each marginalia's open/closed state across reloads, keyed per
+    // message so a live session that grows keeps the folds a reader set: the
+    // raw stream is append-only, so a panel's turn number and a marginalia's
+    // index within it stay stable as new turns arrive. Only open keys are
+    // stored; the markup default is collapsed.
+    const foldKey = (details) => {
+      const turn = details.closest(".turn");
+      const marginalia = turn ? turn.querySelectorAll("details") : [details];
+      const index = Array.prototype.indexOf.call(marginalia, details);
+      return `${turn ? turn.dataset.turn : "?"}:${index}`;
+    };
+
+    const readOpenFolds = () => {
+      try {
+        const stored = JSON.parse(localStorage.getItem(FOLD_KEY) || "[]");
+        return new Set(Array.isArray(stored) ? stored : []);
+      } catch {
+        return new Set();
+      }
+    };
+
+    const open = readOpenFolds();
+    container.querySelectorAll("details").forEach((details) => {
+      if (open.has(foldKey(details))) details.open = true;
+    });
+
+    // `toggle` fires on both a reader's click and the fold-all buttons, and does
+    // not bubble, so listen in the capture phase.
+    container.addEventListener(
+      "toggle",
+      (event) => {
+        const details = event.target;
+        if (!(details instanceof HTMLDetailsElement)) return;
+        const folds = readOpenFolds();
+        if (details.open) folds.add(foldKey(details));
+        else folds.delete(foldKey(details));
+        try {
+          localStorage.setItem(FOLD_KEY, JSON.stringify([...folds]));
+        } catch {}
+      },
+      true,
+    );
   };
 
   const onReady = (fn) => {

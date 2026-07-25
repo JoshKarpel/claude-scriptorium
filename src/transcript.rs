@@ -34,6 +34,7 @@ impl Folio {
             match entry {
                 Entry::User(turn) => turns.push(turn.into_turn(Role::User)),
                 Entry::Assistant(turn) => turns.push(turn.into_turn(Role::Assistant)),
+                Entry::Attachment(attachment) => turns.extend(attachment.into_turn()),
                 Entry::Bookkeeping => {}
             }
         }
@@ -281,8 +282,14 @@ enum Entry {
     User(RawTurn),
     #[serde(rename = "assistant")]
     Assistant(RawTurn),
-    /// Lines that carry no conversation: attachments, hook output, mode
-    /// changes, file-history snapshots, and whatever else gets added later.
+    /// Attachment lines. Most are scaffolding (hook output, task reminders,
+    /// memory), but a `queued_command` carries a message the user typed while
+    /// the assistant was still working: real conversation the harness records
+    /// here rather than as a `user` turn, so it must not be dropped.
+    #[serde(rename = "attachment")]
+    Attachment(RawAttachment),
+    /// Lines that carry no conversation: hook output, mode changes,
+    /// file-history snapshots, and whatever else gets added later.
     #[serde(other)]
     Bookkeeping,
 }
@@ -308,6 +315,44 @@ impl RawTurn {
             is_meta: self.is_meta,
         }
     }
+}
+
+/// An `attachment` line. Only a `queued_command` body becomes a turn; every
+/// other attachment kind is scaffolding this drops.
+#[derive(Debug, Deserialize)]
+struct RawAttachment {
+    timestamp: Timestamp,
+    attachment: AttachmentBody,
+}
+
+impl RawAttachment {
+    /// A turn for a message the user queued mid-response, or `None` for any
+    /// other attachment kind.
+    fn into_turn(self) -> Option<Turn> {
+        let AttachmentBody::QueuedCommand { prompt } = self.attachment else {
+            return None;
+        };
+        Some(Turn {
+            role: Role::User,
+            timestamp: self.timestamp,
+            model: None,
+            content: Content::Text(prompt),
+            is_sidechain: false,
+            is_meta: false,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AttachmentBody {
+    /// A message the user typed while the assistant was still working, dequeued
+    /// and processed later in the same session.
+    QueuedCommand { prompt: String },
+    /// Every other attachment kind: hook output, task reminders, memory, and
+    /// whatever else gets added later, none of it conversation.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -350,7 +395,7 @@ impl Block {
         matches!(self, Block::Known(Known::Thinking { .. }))
     }
 
-    fn is_visible_text(&self) -> bool {
+    pub(crate) fn is_visible_text(&self) -> bool {
         matches!(self, Block::Known(Known::Text { text }) if !text.trim().is_empty())
     }
 }

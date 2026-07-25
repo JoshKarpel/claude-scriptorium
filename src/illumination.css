@@ -57,9 +57,6 @@
     "JetBrains Mono", Menlo, Consolas, monospace;
   --display: "UnifrakturCook", var(--serif);
 
-  /* An illuminated vine, drawn once and mirrored into the far margin. */
-  --vine: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='230' viewBox='0 0 46 230'><g fill='none' stroke='%23a8811f' stroke-width='1.4' stroke-linecap='round'><path d='M23 0 C23 30 10 40 10 62 C10 86 36 96 36 120 C36 144 10 154 10 176 C10 200 23 210 23 230'/><path d='M10 62 C1 56 -1 45 3 39'/><path d='M36 120 C45 114 47 103 43 97'/><path d='M10 176 C1 170 -1 159 3 153'/></g><g fill='%23b0281d'><circle cx='4' cy='41' r='2.6'/><circle cx='42' cy='99' r='2.6'/><circle cx='4' cy='155' r='2.6'/></g><g fill='%232f7a4d'><path d='M13 31 C24 27 31 33 29 44 C21 46 13 41 13 31 Z'/><path d='M33 89 C22 85 15 91 17 102 C25 104 33 99 33 89 Z'/><path d='M13 145 C24 141 31 147 29 158 C21 160 13 155 13 145 Z'/></g></svg>");
-
   /* Syntax tokens, all resolved against the parchment ground. */
   --syn-comment: light-dark(#948a74, #7f765f);
   --syn-string: var(--verdigris);
@@ -129,33 +126,35 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Illuminated vines climbing the outer margins. */
-body::before,
-body::after {
-  content: "";
+/* Illuminated borders down the outer margins: a per-session strip of vine
+ * sections with drolleries seated among them (composed in render.rs, its data
+ * URI set inline), tiled to fill the leaf however tall it grows. The left copy
+ * flips so its creatures, drawn facing left, turn inward toward the text; the
+ * right copy keeps them facing left, which is inward on that side. */
+.margin {
   position: absolute;
   top: 0.5rem;
   bottom: 0.5rem;
-  width: 46px;
-  background: var(--vine) repeat-y center top;
-  opacity: 0.85;
+  width: 90px;
+  background-repeat: repeat-y;
+  background-position: center top;
+  opacity: 0.9;
   pointer-events: none;
 }
 
-body::before {
+.margin--left {
   right: 100%;
-  margin-right: 1rem;
-}
-
-body::after {
-  left: 100%;
-  margin-left: 1rem;
+  margin-right: 0.5rem;
   transform: scaleX(-1);
 }
 
+.margin--right {
+  left: 100%;
+  margin-left: 0.5rem;
+}
+
 @media (max-width: 62rem) {
-  body::before,
-  body::after {
+  .margin {
     display: none;
   }
 }
@@ -174,15 +173,59 @@ body::after {
   right: 0.8rem;
   z-index: 10;
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.28rem 0.5rem;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.34rem 0.5rem;
   background: var(--leaf);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 0.9rem;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   font-family: var(--mono);
   font-size: 0.7rem;
+}
+
+.search__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.search__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: center;
+}
+
+.search__scope {
+  --scope-hue: var(--ink-soft);
+  padding: 0.05rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--scope-hue) 45%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--scope-hue);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.search__scope--user {
+  --scope-hue: var(--user-edge);
+}
+
+.search__scope--assistant {
+  --scope-hue: var(--assistant-edge);
+}
+
+.search__scope[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--scope-hue) 20%, transparent);
+  border-color: var(--scope-hue);
+}
+
+/* Off reads as struck out: dimmed and no longer searched. */
+.search__scope[aria-pressed="false"] {
+  opacity: 0.5;
+  text-decoration: line-through;
 }
 
 .search__input {
@@ -251,73 +294,159 @@ mark.search__hit.is-current {
   padding: 0.3rem;
   background: var(--leaf);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 0.9rem;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
 }
 
+/* Three columns of up/down arrows: a user (blue) and assistant (orange)
+ * column seeking one speaker, flanking the middle column that steps all. */
+.dock__nav {
+  display: grid;
+  grid-template-columns: repeat(3, 2.2rem);
+  gap: 0.2rem;
+}
+
+.dock__fold {
+  display: flex;
+  justify-content: center;
+  gap: 0.2rem;
+}
+
 .dock__btn {
+  --dock-hue: var(--ink-soft);
   display: grid;
   place-items: center;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.2rem;
+  height: 2.2rem;
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--ink-soft);
-  font-size: 0.78rem;
+  color: var(--dock-hue);
+  font-size: 0.95rem;
   line-height: 1;
   cursor: pointer;
 }
 
+.dock__btn--user {
+  --dock-hue: var(--user-edge);
+}
+
+.dock__btn--assistant {
+  --dock-hue: var(--assistant-edge);
+}
+
+/* The fold buttons stack two chevrons: outward to unfold, inward to fold. */
+/* The chevron glyphs hug the direction they point, so outward and inward need
+ * different box gaps to read as the same visual separation. */
+.dock__btn--fold {
+  display: flex;
+  flex-direction: column;
+}
+
+.dock__btn--fold[data-fold="expand"] {
+  gap: 0.08rem;
+}
+
+.dock__btn--fold[data-fold="collapse"] {
+  gap: 0.32rem;
+}
+
+.dock__chevron {
+  font-size: 0.8rem;
+  line-height: 0.85;
+}
+
+/* Hover brightens each arrow's own hue rather than recolouring it, so a user
+ * (blue) or assistant (orange) arrow never flashes the other speaker's colour. */
 .dock__btn:hover,
 .dock__btn:focus-visible {
   background: var(--leaf-sunk);
-  color: var(--rubric);
+  color: color-mix(in srgb, var(--dock-hue), white 30%);
 }
 
-/* --- The page head --------------------------------------------------- */
+/* --- Plaque: title, facts, and colophon on demand -------------------- */
+/* A disclosure in the top corner, opposite the search widget: the reading
+ * column stays pure transcript, and the folio's metadata is a click away. */
 
-.folio__head {
-  margin-bottom: 2rem;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--rule);
-  text-align: center;
+.plaque {
+  position: fixed;
+  top: 0.8rem;
+  left: 0.8rem;
+  z-index: 10;
 }
 
-.folio__head::after {
-  content: "❦";
-  display: block;
-  margin-top: 1rem;
+.plaque__seal {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   color: var(--gold);
-  font-size: 1.2rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  list-style: none;
 }
 
-.folio__head h1 {
-  margin: 0 0 0.9rem;
-  font-family: var(--display);
-  font-size: 2.1rem;
-  font-weight: 400;
+.plaque__seal::-webkit-details-marker {
+  display: none;
+}
+
+.plaque[open] .plaque__seal {
   color: var(--rubric);
 }
 
-.folio__facts {
-  display: inline-grid;
+.plaque__panel {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.9rem 1.1rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 26px rgba(60, 46, 20, 0.22);
+}
+
+.plaque__title {
+  margin: 0 0 0.7rem;
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--rubric);
+  word-break: break-word;
+}
+
+.plaque__facts {
+  display: grid;
   grid-template-columns: max-content 1fr;
   gap: 0.15rem 1rem;
   margin: 0;
-  font-size: 0.82rem;
-  text-align: left;
+  font-size: 0.78rem;
   color: var(--ink-soft);
 }
 
-.folio__facts dt {
+.plaque__facts dt {
   font-variant: small-caps;
   letter-spacing: 0.04em;
   color: var(--ink-faint);
 }
 
-.folio__facts dd {
+.plaque__facts dd {
   margin: 0;
+  word-break: break-word;
+}
+
+.plaque__colophon {
+  margin: 0.7rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink-faint);
 }
 
 /* --- Turns ----------------------------------------------------------- */
@@ -343,44 +472,30 @@ mark.search__hit.is-current {
   margin-left: 1.5rem;
 }
 
-/* Harness-injected turns are hidden until the reveal toggle is checked. */
+/* Harness-injected turns (command caveats, skill scaffolding, context dumps)
+ * carry no reader value and are always hidden. */
 .turn[data-meta] {
   display: none;
-  border-left-color: var(--rule-soft);
-  opacity: 0.72;
-  font-size: 0.92em;
 }
 
-body:has(#show-meta:checked) .turn[data-meta] {
-  display: block;
-}
-
-.meta-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 1rem 0 0;
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  color: var(--ink-faint);
-}
-
-.meta-toggle input {
-  accent-color: var(--sienna);
-}
-
-.meta-toggle label {
-  cursor: pointer;
+/* --- Controls: the presentation cluster, opposite the dock ----------- */
+/* Bottom-left, mirroring the navigation dock at bottom-right. A bare anchor;
+ * the theme toggle inside carries its own floating pill. */
+.controls {
+  position: fixed;
+  left: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 10;
 }
 
 /* A segmented light / dark / system control, wired by the app script. */
 .theme-toggle {
   display: inline-flex;
-  margin-top: 1rem;
+  background: var(--leaf);
   border: 1px solid var(--rule);
   border-radius: 999px;
   overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   font-family: var(--mono);
   font-size: 0.6rem;
   letter-spacing: 0.09em;
@@ -463,6 +578,36 @@ body:has(#show-meta:checked) .turn[data-meta] {
 .block--text > :last-child,
 .block--thinking > :last-child {
   margin-bottom: 0;
+}
+
+/* Rubricated versal: the first letter of a speaker's opening paragraph, set as
+ * a dropped blackletter initial in the speaker's own colour. It opens each turn
+ * of the conversation the way a manuscript opens a division, doubling as a
+ * visual anchor for where the exchange turns. The renderer tags the leading
+ * text block of a speech panel with data-versal, so only that paragraph is
+ * decorated (and tool and thinking panels never are). The drop is two lines
+ * uniformly: enough to read as an initial, shallow enough to keep turns
+ * vertically compact and to never dangle far past a one-line message. The
+ * `> p:first-child` guard means an opener that leads with a heading or list
+ * (no paragraph) simply goes without. */
+.block--text[data-versal] > p:first-child::first-letter {
+  -webkit-initial-letter: 2 2;
+  initial-letter: 2 2;
+  margin-right: 0.4rem;
+  font-family: var(--display);
+  font-weight: 400;
+  /* Uppercase the displayed initial so a lowercased opener still gets a
+   * full-height capital; the DOM text stays as written, so copy and search
+   * still see the original letter. */
+  text-transform: uppercase;
+}
+
+.turn--user .block--text[data-versal] > p:first-child::first-letter {
+  color: var(--user-edge);
+}
+
+.turn--assistant .block--text[data-versal] > p:first-child::first-letter {
+  color: var(--assistant-edge);
 }
 
 .block--thinking {
@@ -896,27 +1041,4 @@ pre.syntax-highlighting {
 
 .ink-markup.ink-deleted {
   color: var(--syn-deleted);
-}
-
-/* --- Colophon -------------------------------------------------------- */
-
-.colophon {
-  margin-top: 2.5rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--rule);
-  color: var(--ink-faint);
-  font-size: 0.8rem;
-  text-align: center;
-}
-
-.colophon::before {
-  content: "❦";
-  display: block;
-  margin-bottom: 0.6rem;
-  color: var(--gold);
-  font-size: 1rem;
-}
-
-.colophon p {
-  margin: 0;
 }

@@ -126,7 +126,13 @@ Assistant and user turns, in order, with:
 - Tool calls and their results as collapsible **marginalia**, labelled with the
   tool name and the subject of the call
 - Pasted images inlined as data URLs
-- A **colophon** footer recording what wrote the folio, and when
+
+The reading column is pure transcript. The folio's title, facts, and a
+**colophon** (what wrote it, and when) live in a plaque you open from the
+corner, and the parchment leaf is bordered with illuminated vines threaded with
+marginal **drolleries**: colourful little beasts (snail, frog, cat, butterfly,
+stag, and more) seated among the vine at intervals, cycling through the whole
+bestiary so a long folio keeps turning up new ones.
 
 Turns a subagent produced carry `data-sidechain`, and turns the harness injected
 carry `data-meta`, so a stylesheet can treat them differently.
@@ -154,8 +160,10 @@ styles, so the file stays a single self-contained artifact:
   and the choice is remembered across visits.
 - **Copy** any code block, or a whole message, from the button that appears on
   hover.
-- **Navigate** from the corner dock: jump between turns, and collapse or expand
-  every tool call at once.
+- **Navigate** from the corner dock: jump between user and assistant messages
+  (skipping tool and thinking panels), and collapse or expand every tool call at
+  once.
+- **Open the plaque** in the corner for the folio's title, facts, and colophon.
 
 On wide screens an expanded tool call holding a diff or code block unfurls past
 the reading column so wide content fits without sideways scrolling, while prose
@@ -170,7 +178,8 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
 | marginalia | A collapsible tool call or result |
-| colophon | The generation-metadata footer |
+| drollery | A marginal creature drawn in the border |
+| colophon | Generation metadata, shown in the plaque |
 | illumination | The theme layer |
 
 ## Development
@@ -197,7 +206,8 @@ Each folio embeds its typefaces so it renders identically anywhere with no
 network fetch:
 [Junicode](https://github.com/psb1558/Junicode-font) for body text,
 [Fira Code](https://github.com/tonsky/FiraCode) for code, and
-[UnifrakturCook](https://github.com/cyrealtype/UnifracturCook) for headings.
+[UnifrakturCook](https://github.com/cyrealtype/UnifracturCook) for headings and
+dropped initials.
 All three are licensed under the
 [SIL Open Font License 1.1](https://openfontlicense.org); their license texts
 are vendored in `src/fonts/licenses/`. `just fonts` re-vendors the woff2 files

@@ -100,10 +100,20 @@ tests in `tests/` can import the modules. Adding a module means adding it to
 
 ### Parsing is where the invariants get established
 
-`Entry` is an internally-tagged enum over the JSONL `type` field. Only `user`
-and `assistant` become turns; `#[serde(other)]` collapses everything else
-(attachments, hook output, mode changes, file-history snapshots, and whatever
-gets added later) into `Bookkeeping` and drops it.
+`Entry` is an internally-tagged enum over the JSONL `type` field. `user` and
+`assistant` become turns; `#[serde(other)]` collapses everything else (hook
+output, mode changes, file-history snapshots, and whatever gets added later)
+into `Bookkeeping` and drops it.
+
+`attachment` lines are the exception that isn't pure scaffolding: most are
+(task reminders, hook output, memory), but a `queued_command` attachment is a
+message the user typed while the assistant was still working. The harness
+records it here, not as a `user` turn, so dropping all attachments silently
+loses real conversation. `RawAttachment` lifts `queued_command` into a `User`
+turn and drops every other attachment kind. These turns slot into the stream in
+file order, at the point the queued message was dequeued (after the tool
+results complete, before the next assistant turn), so they render as a user
+panel interjecting mid-response.
 
 Content blocks parse as `Block::Known(...)` or fall through to
 `Block::Unknown(Value)`, which renders as formatted JSON. This is deliberate
@@ -131,6 +141,14 @@ Each panel is labelled by its `kind` (`Panel::kind`): the border colour already
 distinguishes user from assistant, so the label names the content instead,
 `tool` or `thinking` when that's all the panel carries, otherwise the speaker.
 
+A speech panel's leading paragraph opens with a rubricated versal (a dropped
+blackletter initial). `Scribe::panel` finds the first visible-text block of a
+`User`/`Assistant` panel and tags it `data-versal`; the stylesheet draws the
+drop cap on that block's opening `<p>`, coloured by the speaker and uppercased
+so a lowercased opener still gets a full-height capital. The drop is a uniform
+two lines, so a one-line message just sets a two-line minimum height rather than
+leaving the initial dangling. Tool and thinking panels carry no versal.
+
 ### Rendering invariants worth preserving
 
 - **Self-contained and gist-shareable.** Everything the folio needs is inlined:
@@ -149,14 +167,15 @@ distinguishes user from assistant, so the label names the content instead,
   still injects its live-reload snippet only into the *served* response, never
   persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
-  `Fira Code` mono, `UnifrakturCook` blackletter headings) are woff2 vendored
+  `Fira Code` mono, `UnifrakturCook` blackletter headings and versals) are woff2 vendored
   under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
   `@font-face` data URIs at render time (once, via a `LazyLock`). `just fonts`
   re-vendors them from pinned upstreams; it needs `uvx` because UnifrakturCook
   ships only a TTF and gets compressed to woff2 with `fonttools`. All four are
   SIL OFL 1.1: the license texts live in `src/fonts/licenses/`, and every folio
-  carries the copyright notice (a comment above `<html>`) plus a colophon
-  credit, so each artifact satisfies the OFL's redistribution terms on its own.
+  carries the copyright notice (a comment above `<html>`) plus a colophon credit
+  (in the folio's plaque), so each artifact satisfies the OFL's redistribution
+  terms on its own.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -168,18 +187,66 @@ distinguishes user from assistant, so the label names the content instead,
 
 Markup carries `data-sidechain` for subagent turns and `data-meta` for
 harness-injected ones so a stylesheet can distinguish them. Meta turns are
-command caveats, skill scaffolding, and context dumps, not conversation, so
-the stylesheet hides them by default; a pure-CSS checkbox (`#show-meta`, keyed
-off `:has()`, rendered only when the folio has any) reveals them with no script
-of its own, even though the folio now carries an app script for other features.
+command caveats, skill scaffolding, and context dumps, not conversation, so the
+stylesheet hides them outright; they carry no reveal control, and the app script
+skips them when searching so a match can't land in a permanently hidden panel.
+
+The reading column is pure transcript; the folio's chrome floats in the four
+corners, all `position: fixed` and living in the shell of the markup rather than
+the panel stream. Reading controls sit on the right (search top, and a
+navigation dock bottom that steps between user/assistant messages, skipping tool
+and thinking panels, and folds every marginalia); appearance sits on the left (a
+metadata plaque, a top-corner disclosure holding the title, facts, and colophon;
+and the light/dark/system toggle bottom). There is no in-column header or footer.
+
+The outer margins are illuminated borders. Each is a per-session strip of vine
+sections with drolleries seated among them, composed in `render.rs`
+(`margin_strip`): a PRNG seeded from the session id (with a per-side salt, so the
+two borders differ) walks the cells, keeping most of them vine and seating a
+drollery at the occasional non-seam, non-adjacent cell. Drolleries are drawn
+from a shuffled bag of the whole bestiary that refills when drained, so a border
+cycles through every creature before any repeats rather than showing a fixed
+few, and the strip is long enough (`STRIP_CELLS`) that all of them appear before
+it recurs. The strip is base64'd into a data URI and set as an inline
+`background-image` the stylesheet tiles with `repeat-y`, so one strip fills a
+leaf of any height and re-tiles for free when a folio grows or a tool call
+expands (which is why this is a background, not DOM cells that couldn't tile a
+dynamic height). The cells live under `src/drolleries/` (one `.svg` each,
+authored in a 90x210 box); a `background-image` SVG can't reach the palette
+`var()`s, so their pigments are baked, chosen bright enough to read on either
+parchment. Each drollery carries a measured `(dx, dy)` nudge (`DROLLERIES`) that
+centres it in its cell: `dx` on the vine's line (x=45), `dy` in the gap between
+the trail above and its mirror below (creatures are drawn low in the box, so
+most lift toward the gap centre at y=105). The nudges are non-zero because a
+tail or ear pulls the bounding box off centre. A drollery cell is framed by
+`trail.svg`, a short vine stub baked above the creature and mirrored below, its
+stroke fading to transparent (a `userSpaceOnUse` gradient shared by every trail)
+as it nears the beast, so the vine dissolves in and coalesces back rather than
+stopping at a gap.
+
+**Centring a new drollery.** Don't eyeball the `(dx, dy)` nudge or hand-compute
+the centre of curved, stroked paths: measure it. Render the creature's `.svg`
+inside `<svg viewBox="0 0 90 210">` in a headless browser (the Playwright
+Chromium `just setup` installs), read the content group's `getBBox()`, and set
+`dx = round(45 - (bbox.x + bbox.width / 2))` and
+`dy = round(105 - (bbox.y + bbox.height / 2))`, so the creature's bounding box
+centres on the vine line (x=45) and the trail gap (y=105). The x=45 centreline
+is where `vine.svg`'s path oscillates around; y=105 is the midpoint of the
+trail gap, since `trail.svg` seats at y≈66 and its bottom mirror at y≈144. A
+creature with a crest or ears (cockatiel, cardinal, hare) then sits with the
+appendage reaching up toward the trail, which reads as intentional. This same
+bbox-centre-on-(45, 105) recipe is what every existing nudge was set from, so
+reuse it rather than introducing a second convention.
 
 ### Vocabulary
 
 Types are named after a manuscript scriptorium, and the names are load-bearing
 in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
-for one project), `Colophon` (generation-metadata footer), `Scribe` (the
-renderer). Markup classes continue it with `marginalia` (a collapsible tool
-call or result) and `illumination` (the theme layer).
+for one project), `Colophon` (generation metadata, shown in the plaque),
+`Scribe` (the renderer). Markup classes continue it with `marginalia` (a
+collapsible tool call or result), `drollery` (a marginal creature), `versal`
+(the dropped initial that opens a speaker's paragraph), and `illumination` (the
+theme layer).
 
 ## Testing against real data
 
@@ -233,7 +300,7 @@ go-ahead first, and delete the gist afterward.
 2. Serve `docs/` over local **HTTP** (not `file://`, or the loader's `fetch`
    hits a null origin) and load `?<id>/<file>` in Playwright. `document.write`
    replaces the page *after* the API fetch resolves, so wait on a folio element
-   (`.colophon`) rather than `load`, then assert the folio is there and
+   (`.folio`) rather than `load`, then assert the folio is there and
    screenshot it:
 
 ```python
@@ -249,7 +316,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 with sync_playwright() as p:
     page = p.chromium.launch().new_page(viewport={"width": 1500, "height": 2000})
     page.goto(f"http://127.0.0.1:{server.server_address[1]}/?{gid}/session.html")
-    page.wait_for_selector(".colophon", timeout=30000)
+    page.wait_for_selector(".folio", timeout=30000)
     assert page.title() == "folio session" and page.query_selector(".folio")
     page.screenshot(path=png)
 ```

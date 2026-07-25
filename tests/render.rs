@@ -267,6 +267,30 @@ fn panels_are_labelled_by_their_content_kind() {
 }
 
 #[test]
+fn only_speech_panels_open_with_a_versal() {
+    let folio = Folio::read(Path::new("tests/fixtures/kinds.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // Three panels: a tool exchange, bare reasoning, and one line of prose.
+    // Only the prose panel earns a versal; tool and thinking panels get none.
+    // (Match the emitted attribute, not the `[data-versal]` selectors the
+    // inlined stylesheet also carries.)
+    assert_eq!(html.matches("data-versal>").count(), 1);
+    assert!(html.contains(r#"<div class="block block--text" data-versal>"#));
+}
+
+#[test]
+fn a_versal_marks_only_the_opening_paragraph_of_a_panel() {
+    // The assistant panel opens with a thinking block, then prose, then a tool
+    // call and its folded result: the versal lands on the leading text and
+    // nowhere else, so the session's two speaking panels carry exactly two.
+    let html = render(&fixture(), &highlighter());
+
+    assert_eq!(html.matches("data-versal>").count(), 2);
+}
+
+#[test]
 fn each_panel_is_numbered_by_its_leading_turn() {
     let html = render(&fixture(), &highlighter());
 
@@ -279,20 +303,15 @@ fn each_panel_is_numbered_by_its_leading_turn() {
 }
 
 #[test]
-fn meta_turns_are_marked_and_offer_a_reveal_toggle() {
+fn meta_turns_are_marked_and_hidden_with_no_reveal_control() {
     let folio = Folio::read(Path::new("tests/fixtures/meta.jsonl")).expect("fixture parses");
 
     let html = render(&folio, &highlighter());
 
+    // Harness notes stay in the folio, marked and hidden by the stylesheet, but
+    // carry no reader-facing control to reveal them.
     assert!(html.contains("data-meta"));
-    assert!(html.contains(r#"id="show-meta""#));
     assert!(html.contains("Base directory for this skill"));
-}
-
-#[test]
-fn folios_without_meta_turns_omit_the_toggle() {
-    let html = render(&fixture(), &highlighter());
-
     assert!(!html.contains(r#"id="show-meta""#));
 }
 
@@ -306,6 +325,83 @@ fn clear_command_turns_are_dropped() {
     assert!(!html.contains("command-message"));
     assert!(html.contains("Explain the quire layout."));
     assert_eq!(html.matches("<article").count(), 1);
+}
+
+#[test]
+fn a_message_queued_mid_response_becomes_a_user_turn() {
+    let folio = Folio::read(Path::new("tests/fixtures/queued.jsonl")).expect("fixture parses");
+
+    // The prompt the user typed while the assistant was working is recorded as
+    // a `queued_command` attachment, not a `user` line, so it would vanish if
+    // attachments were all dropped as bookkeeping.
+    let queued = folio
+        .turns
+        .iter()
+        .find(|turn| {
+            turn.role == Role::User
+                && matches!(&turn.content, Content::Text(text) if text.contains("above and below"))
+        })
+        .expect("the queued message is lifted into a user turn");
+    assert!(!queued.is_meta);
+    assert!(!queued.is_sidechain);
+}
+
+#[test]
+fn a_queued_message_renders_as_its_own_user_panel() {
+    let folio = Folio::read(Path::new("tests/fixtures/queued.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    assert!(html.contains("put the drolleries above and below the vine"));
+    // Opening prompt and the mid-response interjection are two user panels; the
+    // tool result folds into the assistant that called it rather than standing
+    // between them.
+    assert_eq!(html.matches(r#"turn__role">user"#).count(), 2);
+}
+
+#[test]
+fn non_queued_attachments_stay_dropped() {
+    let folio = Folio::read(Path::new("tests/fixtures/queued.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // A `task_reminder` attachment is scaffolding, not conversation: it must not
+    // leak into the render the way the queued command does.
+    assert!(!html.contains("You have not used the task tools"));
+}
+
+#[test]
+fn search_offers_per_kind_scope_toggles() {
+    let html = render(&fixture(), &highlighter());
+
+    // The reader can restrict the search to chosen kinds of message; every
+    // scope starts enabled.
+    assert!(html.contains(r#"data-scope="user" aria-pressed="true""#));
+    assert!(html.contains(r#"data-scope="assistant" aria-pressed="true""#));
+    assert!(html.contains(r#"data-scope="tool" aria-pressed="true""#));
+    assert!(html.contains(r#"data-scope="thinking" aria-pressed="true""#));
+}
+
+#[test]
+fn panels_carry_their_turn_number_for_stable_fold_memory() {
+    let html = render(&fixture(), &highlighter());
+
+    // The per-message fold memory keys on this: a panel's turn number is stable
+    // across live re-renders because the raw stream only ever appends.
+    assert!(html.contains(r#"data-turn="1""#));
+    assert!(html.contains(r#"data-turn="2""#));
+}
+
+#[test]
+fn the_dock_offers_role_scoped_message_navigation() {
+    let html = render(&fixture(), &highlighter());
+
+    // The middle column steps between all messages; the flanking columns seek
+    // one speaker, tagged so the app script and stylesheet can scope them.
+    assert!(html.contains(r#"data-nav="prev" data-role="user""#));
+    assert!(html.contains(r#"data-nav="next" data-role="assistant""#));
+    assert!(html.contains(r#"class="dock__btn dock__btn--user""#));
+    assert!(html.contains(r#"class="dock__btn dock__btn--assistant""#));
 }
 
 #[test]
