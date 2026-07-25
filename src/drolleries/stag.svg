@@ -1,0 +1,12 @@
+<g stroke="#c1912f" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M30 138 C26 128 42 125 54 127 C68 129 74 133 74 141 C74 149 64 152 52 151 C40 150 32 146 30 138 Z"/>
+  <path d="M40 150 l-3 22 M47 151 l1 22 M62 151 l3 22 M69 149 l-1 22"/>
+  <path d="M33 133 C24 126 21 114 26 105 C29 99 37 97 42 101 C46 105 45 112 40 114 C35 116 31 112 30 108"/>
+  <path d="M26 105 C21 103 18 105 20 109 C22 112 27 111 29 108"/>
+  <path d="M41 101 C46 97 50 98 49 103"/>
+</g>
+<circle cx="31" cy="105" r="1.5" fill="#c1912f"/>
+<g stroke="#c07f38" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M35 98 C33 88 29 84 25 80 M33 92 C28 90 24 88 22 84 M34 89 C30 86 27 83 26 79"/>
+  <path d="M41 98 C43 88 47 85 52 81 M43 92 C48 90 52 89 55 85 M42 89 C46 86 50 84 52 80"/>
+</g>

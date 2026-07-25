@@ -1,0 +1,10 @@
+<g stroke="#c1912f" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M16 140 C13 132 20 128 28 129 L64 129 C78 129 84 136 80 141 C76 145 26 144 20 142 Z"/>
+  <path d="M20 130 C14 126 14 118 20 117"/>
+  <path d="M17 118 l-3 -8"/>
+  <path d="M24 118 l1 -9"/>
+</g>
+<circle cx="58" cy="118" r="15" fill="#c07f38" stroke="#c1912f" stroke-width="2"/>
+<path d="M58 118 a3 3 0 0 1 6 0 a7 7 0 0 1 -14 0 a11 11 0 0 1 22 0" fill="none" stroke="#d24b34" stroke-width="2"/>
+<circle cx="11" cy="108" r="2.2" fill="#c1912f"/>
+<circle cx="25" cy="107" r="2.2" fill="#c1912f"/>

@@ -1,0 +1,6 @@
+{"type":"user","timestamp":"2026-03-11T14:20:00.000Z","message":{"role":"user","content":"Draw the vine border."}}
+{"type":"assistant","timestamp":"2026-03-11T14:20:03.000Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/scriptorium/vine.svg"}}]}}
+{"type":"user","timestamp":"2026-03-11T14:20:04.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"<svg>the vine</svg>","is_error":false}]}}
+{"type":"attachment","timestamp":"2026-03-11T14:20:05.000Z","attachment":{"type":"queued_command","prompt":"put the drolleries above and below the vine","commandMode":"prompt","origin":{"kind":"human"}}}
+{"type":"attachment","timestamp":"2026-03-11T14:20:05.500Z","attachment":{"type":"task_reminder","reminder":"You have not used the task tools recently."}}
+{"type":"assistant","timestamp":"2026-03-11T14:20:09.000Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Moving the drolleries to top and bottom."}]}}

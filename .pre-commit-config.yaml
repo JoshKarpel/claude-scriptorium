@@ -1,0 +1,43 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # src/fonts holds verbatim vendored fonts and license texts (see just
+      # fonts); leave them exactly as upstream ships them.
+      - id: trailing-whitespace
+        exclude: ^src/fonts/
+      - id: end-of-file-fixer
+        exclude: ^src/fonts/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # The vendored Junicode woff2 files are ~1 MB each (see just fonts).
+        args: ['--maxkb=1200']
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.4
+    hooks:
+      - id: check-github-workflows
+      - id: check-github-actions
+      - id: check-dependabot
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.28.0
+    hooks:
+      - id: zizmor
+
+  - repo: local
+    hooks:
+      - id: just-fmt
+        name: Format justfile
+        entry: just --fmt --unstable
+        language: system
+        files: justfile
+        pass_filenames: false
+
+      - id: fix-code
+        name: Format and lint Rust
+        entry: just fix-code
+        language: system
+        pass_filenames: false

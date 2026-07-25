@@ -1,0 +1,24 @@
+[package]
+name = "claude-scriptorium"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Render Claude Code sessions as self-contained HTML"
+repository = "https://github.com/JoshKarpel/claude-scriptorium"
+license = "MIT"
+readme = "README.md"
+keywords = ["claude", "transcript", "html", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.22.1"
+clap = { version = "4.6.4", features = ["derive"] }
+comrak = { version = "0.54.0", default-features = false, features = ["syntect-fancy"] }
+inquire = "0.9.4"
+jiff = { version = "0.2.34", features = ["serde"] }
+maud = "0.27.0"
+open = "5.4.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tiny_http = "0.12.0"

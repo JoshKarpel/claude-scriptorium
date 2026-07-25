@@ -1,0 +1,1044 @@
+/*
+ * illumination: the theme layer for a folio.
+ *
+ * A parchment leaf with an illuminated border: rubricated initials, vine
+ * ornaments in the outer margins, and fleuron dividers, all drawn in CSS and
+ * inline SVG so the folio stays self-contained. A single light palette lives
+ * in the token block, so the dark variant (M3) is a swap of those values.
+ *
+ * Syntax colors target the canonical TextMate scope roots (comment, string,
+ * keyword, ...) that syntect emits as the first class on every span, so the
+ * palette covers every language without enumerating their finer scopes.
+ */
+
+:root {
+  /* Every colour is a light-dark() pair, resolved by `color-scheme`. System
+   * preference is the default (`light dark`); the theme toggle forces one side
+   * by setting color-scheme to `light` or `dark` on <html> (see [data-theme]
+   * below), so the whole palette swaps without a duplicated token block. */
+  color-scheme: light dark;
+
+  --page: light-dark(#e7dcc0, #171310);
+  --leaf: light-dark(#f7f1e1, #201a14);
+  --leaf-sunk: light-dark(#f1e9d4, #29221a);
+  --ink: light-dark(#2b2620, #ece2cf);
+  --ink-soft: light-dark(#6f6656, #b6ab93);
+  --ink-faint: light-dark(#9a9080, #857b66);
+  --rule: light-dark(#d8ccae, #3b3327);
+  --rule-soft: light-dark(#e6dcc3, #2e2820);
+
+  /* The mineral pigments a scribe actually ground: vermilion and red lead,
+   * lapis lazuli, malachite, Tyrian purple, ochre, and burnished gold. The
+   * dark side lifts each hue so it holds its chroma against a dark vellum. */
+  --rubric: light-dark(#b0281d, #e0715f); /* vermilion / red lead */
+  --sienna: light-dark(#9a6410, #cf9a4c); /* yellow ochre / raw sienna */
+  --gold: light-dark(#b8860b, #d9ad4e); /* solid gold, for small marks */
+  --verdigris: light-dark(#2f7a4d, #58b783); /* malachite green */
+  --lapis: light-dark(#274690, #7f9fe6); /* lapis lazuli / ultramarine */
+  --tyrian: light-dark(#6b2f74, #bd83c8); /* Tyrian purple / folium */
+
+  /* Not a manuscript pigment, but the assistant's own hue. */
+  --claude: light-dark(#d97757, #e08a6a);
+
+  --user-edge: var(--lapis);
+  --assistant-edge: var(--claude);
+  --sidechain-edge: var(--tyrian);
+  --error-edge: var(--rubric);
+
+  --measure: 44rem;
+  --radius: 4px;
+
+  /* Junicode, Fira Code, and UnifrakturCook are embedded as @font-face rules
+   * (see render.rs); the stacks behind them are fallbacks for glyphs the
+   * bundled faces lack, since transcripts carry arbitrary Unicode. */
+  --serif: "Junicode", "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Book Antiqua", Georgia, serif;
+  --mono: "Fira Code", ui-monospace, "SF Mono", "Cascadia Code",
+    "JetBrains Mono", Menlo, Consolas, monospace;
+  --display: "UnifrakturCook", var(--serif);
+
+  /* Syntax tokens, all resolved against the parchment ground. */
+  --syn-comment: light-dark(#948a74, #7f765f);
+  --syn-string: var(--verdigris);
+  --syn-keyword: var(--rubric);
+  --syn-storage: var(--rubric);
+  --syn-constant: var(--sienna);
+  --syn-entity: var(--lapis);
+  --syn-variable: var(--tyrian);
+  --syn-support: var(--lapis);
+  --syn-inserted: var(--verdigris);
+  --syn-deleted: var(--rubric);
+}
+
+/* The theme toggle forces one side of every light-dark() pair by pinning
+ * color-scheme; absent the attribute (or with data-theme="system") the :root
+ * default of `light dark` follows the OS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  font-size: 17px;
+  /* Parchment ground with faint mottling, so the page isn't a flat fill. */
+  background-color: var(--page);
+  /* The parchment mottling inverts for dark: a warm highlight and a deepening
+   * shadow rather than the light page's bright bloom. */
+  background-image:
+    radial-gradient(
+      ellipse at 20% 15%,
+      light-dark(rgba(255, 255, 255, 0.35), rgba(255, 244, 214, 0.06)),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 85% 80%,
+      light-dark(rgba(120, 96, 48, 0.12), rgba(0, 0, 0, 0.28)),
+      transparent 60%
+    );
+}
+
+/* The body is the leaf itself: a centered parchment page. */
+body {
+  position: relative;
+  max-width: var(--measure);
+  margin: 2.5rem auto 3rem;
+  padding: 3rem 3.25rem 2.5rem;
+  background: var(--leaf);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.6;
+  border: 1px solid var(--rule);
+  box-shadow:
+    0 0 0 1px var(--leaf) inset,
+    0 0 0 4px var(--rule-soft) inset,
+    0 6px 26px rgba(60, 46, 20, 0.18);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Illuminated borders down the outer margins: a per-session strip of vine
+ * sections with drolleries seated among them (composed in render.rs, its data
+ * URI set inline), tiled to fill the leaf however tall it grows. The left copy
+ * flips so its creatures, drawn facing left, turn inward toward the text; the
+ * right copy keeps them facing left, which is inward on that side. */
+.margin {
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 90px;
+  background-repeat: repeat-y;
+  background-position: center top;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.margin--left {
+  right: 100%;
+  margin-right: 0.5rem;
+  transform: scaleX(-1);
+}
+
+.margin--right {
+  left: 100%;
+  margin-left: 0.5rem;
+}
+
+@media (max-width: 62rem) {
+  .margin {
+    display: none;
+  }
+}
+
+@media (max-width: 34rem) {
+  body {
+    padding: 1.75rem 1.25rem;
+  }
+}
+
+/* --- Search: a fixed widget that steps through matches --------------- */
+
+.search {
+  position: fixed;
+  top: 0.8rem;
+  right: 0.8rem;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.34rem 0.5rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 0.9rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.search__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.search__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: center;
+}
+
+.search__scope {
+  --scope-hue: var(--ink-soft);
+  padding: 0.05rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--scope-hue) 45%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--scope-hue);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.search__scope--user {
+  --scope-hue: var(--user-edge);
+}
+
+.search__scope--assistant {
+  --scope-hue: var(--assistant-edge);
+}
+
+.search__scope[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--scope-hue) 20%, transparent);
+  border-color: var(--scope-hue);
+}
+
+/* Off reads as struck out: dimmed and no longer searched. */
+.search__scope[aria-pressed="false"] {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.search__input {
+  width: 9rem;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.search__input::placeholder {
+  color: var(--ink-faint);
+}
+
+.search__count {
+  min-width: 3.4rem;
+  text-align: right;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.search__nav {
+  padding: 0 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search__nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+mark.search__hit {
+  color: inherit;
+  background: color-mix(in srgb, var(--gold) 34%, transparent);
+  border-radius: 2px;
+}
+
+mark.search__hit.is-current {
+  background: color-mix(in srgb, var(--gold) 68%, transparent);
+  outline: 1px solid var(--gold);
+}
+
+/* On narrow screens the widget would crowd the leaf; let it shrink. */
+@media (max-width: 34rem) {
+  .search__input {
+    width: 6rem;
+  }
+}
+
+/* --- Dock: fixed jump / fold controls -------------------------------- */
+
+.dock {
+  position: fixed;
+  right: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.3rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 0.9rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+
+/* Three columns of up/down arrows: a user (blue) and assistant (orange)
+ * column seeking one speaker, flanking the middle column that steps all. */
+.dock__nav {
+  display: grid;
+  grid-template-columns: repeat(3, 2.2rem);
+  gap: 0.2rem;
+}
+
+.dock__fold {
+  display: flex;
+  justify-content: center;
+  gap: 0.2rem;
+}
+
+.dock__btn {
+  --dock-hue: var(--ink-soft);
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dock-hue);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dock__btn--user {
+  --dock-hue: var(--user-edge);
+}
+
+.dock__btn--assistant {
+  --dock-hue: var(--assistant-edge);
+}
+
+/* The fold buttons stack two chevrons: outward to unfold, inward to fold. */
+/* The chevron glyphs hug the direction they point, so outward and inward need
+ * different box gaps to read as the same visual separation. */
+.dock__btn--fold {
+  display: flex;
+  flex-direction: column;
+}
+
+.dock__btn--fold[data-fold="expand"] {
+  gap: 0.08rem;
+}
+
+.dock__btn--fold[data-fold="collapse"] {
+  gap: 0.32rem;
+}
+
+.dock__chevron {
+  font-size: 0.8rem;
+  line-height: 0.85;
+}
+
+/* Hover brightens each arrow's own hue rather than recolouring it, so a user
+ * (blue) or assistant (orange) arrow never flashes the other speaker's colour. */
+.dock__btn:hover,
+.dock__btn:focus-visible {
+  background: var(--leaf-sunk);
+  color: color-mix(in srgb, var(--dock-hue), white 30%);
+}
+
+/* --- Plaque: title, facts, and colophon on demand -------------------- */
+/* A disclosure in the top corner, opposite the search widget: the reading
+ * column stays pure transcript, and the folio's metadata is a click away. */
+
+.plaque {
+  position: fixed;
+  top: 0.8rem;
+  left: 0.8rem;
+  z-index: 10;
+}
+
+.plaque__seal {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  color: var(--gold);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  list-style: none;
+}
+
+.plaque__seal::-webkit-details-marker {
+  display: none;
+}
+
+.plaque[open] .plaque__seal {
+  color: var(--rubric);
+}
+
+.plaque__panel {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.9rem 1.1rem;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 26px rgba(60, 46, 20, 0.22);
+}
+
+.plaque__title {
+  margin: 0 0 0.7rem;
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--rubric);
+  word-break: break-word;
+}
+
+.plaque__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.plaque__facts dt {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.plaque__facts dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.plaque__colophon {
+  margin: 0.7rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+/* --- Turns ----------------------------------------------------------- */
+
+.turn {
+  margin: 1.6rem 0;
+  padding: 0.2rem 0 0.2rem 1.1rem;
+  border-left: 2px solid var(--rule);
+  scroll-margin-top: 1rem;
+}
+
+.turn--user {
+  border-left-color: var(--user-edge);
+}
+
+.turn--assistant {
+  border-left-color: var(--assistant-edge);
+}
+
+.turn[data-sidechain] {
+  border-left-color: var(--sidechain-edge);
+  border-left-style: dashed;
+  margin-left: 1.5rem;
+}
+
+/* Harness-injected turns (command caveats, skill scaffolding, context dumps)
+ * carry no reader value and are always hidden. */
+.turn[data-meta] {
+  display: none;
+}
+
+/* --- Controls: the presentation cluster, opposite the dock ----------- */
+/* Bottom-left, mirroring the navigation dock at bottom-right. A bare anchor;
+ * the theme toggle inside carries its own floating pill. */
+.controls {
+  position: fixed;
+  left: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 10;
+}
+
+/* A segmented light / dark / system control, wired by the app script. */
+.theme-toggle {
+  display: inline-flex;
+  background: var(--leaf);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.theme-toggle button {
+  padding: 0.28rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.theme-toggle button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.theme-toggle button[aria-pressed="true"] {
+  background: var(--leaf-sunk);
+  color: var(--rubric);
+}
+
+.turn__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.9rem;
+  margin-bottom: 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  color: var(--ink-faint);
+}
+
+.turn__index {
+  color: var(--ink-faint);
+}
+
+.turn__role {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-soft);
+}
+
+.turn--user .turn__role {
+  color: var(--user-edge);
+}
+
+.turn--assistant .turn__role {
+  color: var(--assistant-edge);
+}
+
+/* Tool and thinking labels are secondary to prose, so mute them and reserve
+ * the role colour for panels that actually speak to the reader. */
+.turn[data-kind="tool"] .turn__role,
+.turn[data-kind="thinking"] .turn__role {
+  color: var(--ink-faint);
+}
+
+/* Push the timestamp and turn number to the panel's top-right corner. */
+.turn__time {
+  margin-left: auto;
+}
+
+/* --- Blocks ---------------------------------------------------------- */
+
+.block {
+  margin: 0.7rem 0;
+}
+
+.block--text > :first-child,
+.block--thinking > :first-child {
+  margin-top: 0;
+}
+
+.block--text > :last-child,
+.block--thinking > :last-child {
+  margin-bottom: 0;
+}
+
+/* Rubricated versal: the first letter of a speaker's opening paragraph, set as
+ * a dropped blackletter initial in the speaker's own colour. It opens each turn
+ * of the conversation the way a manuscript opens a division, doubling as a
+ * visual anchor for where the exchange turns. The renderer tags the leading
+ * text block of a speech panel with data-versal, so only that paragraph is
+ * decorated (and tool and thinking panels never are). The drop is two lines
+ * uniformly: enough to read as an initial, shallow enough to keep turns
+ * vertically compact and to never dangle far past a one-line message. The
+ * `> p:first-child` guard means an opener that leads with a heading or list
+ * (no paragraph) simply goes without. */
+.block--text[data-versal] > p:first-child::first-letter {
+  -webkit-initial-letter: 2 2;
+  initial-letter: 2 2;
+  margin-right: 0.4rem;
+  font-family: var(--display);
+  font-weight: 400;
+  /* Uppercase the displayed initial so a lowercased opener still gets a
+   * full-height capital; the DOM text stays as written, so copy and search
+   * still see the original letter. */
+  text-transform: uppercase;
+}
+
+.turn--user .block--text[data-versal] > p:first-child::first-letter {
+  color: var(--user-edge);
+}
+
+.turn--assistant .block--text[data-versal] > p:first-child::first-letter {
+  color: var(--assistant-edge);
+}
+
+.block--thinking {
+  padding: 0.6rem 1rem;
+  border-left: 2px solid var(--rule-soft);
+  background: var(--leaf-sunk);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* A slim note where extended reasoning was redacted from the transcript. */
+.block--redacted {
+  margin: 0.5rem 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.block--redacted::before {
+  content: "※ ";
+  color: var(--gold);
+}
+
+.block--image {
+  margin: 1rem 0;
+}
+
+.block--image img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.block--unknown {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.block--unknown > summary {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* --- Marginalia: collapsible tool calls and their results ------------ */
+
+.marginalia {
+  margin: 0.55rem 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--leaf-sunk);
+  font-size: 0.86rem;
+}
+
+.marginalia > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  list-style: none;
+}
+
+.marginalia > summary::-webkit-details-marker {
+  display: none;
+}
+
+.marginalia > summary::before {
+  content: "❧";
+  color: var(--gold);
+  font-size: 0.9em;
+}
+
+.marginalia[open] > summary::before {
+  content: "❧";
+  transform: rotate(90deg);
+}
+
+.marginalia[open] > summary {
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.marginalia__tool {
+  font-weight: 600;
+  color: var(--sienna);
+}
+
+.marginalia__gist {
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marginalia--result > summary {
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.marginalia[data-error] {
+  border-color: var(--error-edge);
+  background: color-mix(in srgb, var(--rubric) 7%, var(--leaf-sunk));
+}
+
+.marginalia[data-error] > summary {
+  color: var(--rubric);
+}
+
+.marginalia__body {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* On wide viewports, an open marginalia that holds a code, diff, or JSON block
+ * unfurls past the reading measure, so wide content (diffs especially) fits
+ * without sideways scrolling. Prose keeps the narrow column; only these panels
+ * break out, lifting above the marginal vines on their own shadow. Scoped with
+ * :has(pre) so a short text result stays in column. */
+@media (min-width: 64rem) {
+  .marginalia[open]:has(pre) {
+    position: relative;
+    z-index: 1;
+    width: min(66rem, 92vw);
+    margin-inline: calc((100% - min(66rem, 92vw)) / 2);
+    box-shadow: 0 3px 20px rgba(40, 30, 12, 0.16);
+  }
+}
+
+/* --- Tool bodies: the bespoke views for common tools ----------------- */
+
+.tool {
+  padding: 0.55rem 0.7rem;
+}
+
+/* The highlighted code a tool body emits is the body itself; drop its default
+ * block margins so it sits flush inside the marginalia. */
+.tool > pre {
+  margin: 0;
+}
+
+.tool__caption {
+  margin: 0 0 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--ink-faint);
+}
+
+.tool--todos {
+  margin: 0;
+  padding: 0.3rem 0.8rem;
+  list-style: none;
+}
+
+.tool__todo {
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.12rem 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.tool__todo::before {
+  content: "☐";
+  color: var(--ink-faint);
+}
+
+.tool__todo[data-status="in_progress"]::before {
+  content: "◐";
+  color: var(--sienna);
+}
+
+.tool__todo[data-status="completed"]::before {
+  content: "☑";
+  color: var(--verdigris);
+}
+
+.tool__todo[data-status="completed"] {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+/* --- Copy buttons: injected by the app script ------------------------ */
+
+.folio pre {
+  position: relative;
+}
+
+.copy-button {
+  padding: 0.1rem 0.42rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--leaf);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* On a code block the button floats in the corner; reveal it on hover. */
+.folio pre > .copy-button {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+}
+
+.folio pre:hover > .copy-button,
+.copy-button:focus-visible {
+  opacity: 1;
+}
+
+/* In a turn header the button rides at the end of the meta row. */
+.copy-button--meta {
+  margin-left: 0.2rem;
+}
+
+.turn:hover .copy-button--meta,
+.copy-button--meta:focus-visible {
+  opacity: 1;
+}
+
+.copy-button.is-done {
+  color: var(--verdigris);
+  border-color: var(--verdigris);
+  opacity: 1;
+}
+
+/* --- Prose the markdown renderer emits ------------------------------- */
+
+.folio :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.3em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+/* Blackletter is a display face at one weight: reserve it for the larger
+ * headings and let it stand at its native weight rather than faux-bolded. */
+.folio :is(h1, h2, h3) {
+  font-family: var(--display);
+  font-weight: 400;
+}
+
+.folio h1 {
+  font-size: 1.6rem;
+}
+
+.folio h2 {
+  font-size: 1.2rem;
+}
+
+.folio h3 {
+  font-size: 1.05rem;
+}
+
+.folio :is(h4, h5, h6) {
+  font-size: 1rem;
+}
+
+.folio p {
+  margin: 0.6em 0;
+}
+
+.folio a {
+  color: var(--lapis);
+  text-underline-offset: 0.15em;
+  text-decoration-color: color-mix(in srgb, var(--lapis) 40%, transparent);
+}
+
+.folio a:hover {
+  text-decoration-color: currentColor;
+}
+
+.folio blockquote {
+  margin: 0.9em 0;
+  padding: 0.1em 1rem;
+  border-left: 3px solid var(--rule);
+  color: var(--ink-soft);
+}
+
+.folio ul,
+.folio ol {
+  padding-left: 1.4rem;
+}
+
+.folio li {
+  margin: 0.15em 0;
+}
+
+.folio li::marker {
+  color: var(--gold);
+}
+
+.folio hr {
+  margin: 1.5em 0;
+  border: none;
+  text-align: center;
+}
+
+.folio hr::before {
+  content: "❧";
+  color: var(--gold);
+  font-size: 0.95rem;
+}
+
+.folio table {
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.folio :is(th, td) {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  text-align: left;
+}
+
+.folio th {
+  background: var(--leaf-sunk);
+  font-weight: 600;
+}
+
+/* Inline code, distinct from fenced blocks. */
+.folio :not(pre) > code {
+  padding: 0.1em 0.35em;
+  background: var(--leaf-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.folio pre {
+  overflow-x: auto;
+  padding: 0.7rem 0.9rem;
+  background: var(--leaf-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.folio pre code {
+  font-family: var(--mono);
+}
+
+.marginalia__body {
+  border: none;
+}
+
+/* --- Syntax highlighting: the canonical scope roots ------------------ */
+
+pre.syntax-highlighting {
+  color: var(--ink);
+}
+
+.ink-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.ink-string {
+  color: var(--syn-string);
+}
+
+.ink-constant {
+  color: var(--syn-constant);
+}
+
+.ink-keyword {
+  color: var(--syn-keyword);
+}
+
+.ink-storage {
+  color: var(--syn-storage);
+}
+
+.ink-entity {
+  color: var(--syn-entity);
+}
+
+.ink-variable {
+  color: var(--syn-variable);
+}
+
+.ink-support {
+  color: var(--syn-support);
+}
+
+/* Operators and structural punctuation read as ink, not as color. */
+.ink-keyword.ink-operator,
+.ink-punctuation {
+  color: var(--ink-soft);
+}
+
+/* Markup scopes (Markdown, diff) carry weight and hue rather than a palette. */
+.ink-markup.ink-bold {
+  font-weight: 700;
+}
+
+.ink-markup.ink-italic {
+  font-style: italic;
+}
+
+.ink-markup.ink-heading {
+  color: var(--rubric);
+  font-weight: 700;
+}
+
+.ink-markup.ink-raw {
+  color: var(--sienna);
+}
+
+.ink-markup.ink-inserted {
+  color: var(--syn-inserted);
+}
+
+.ink-markup.ink-deleted {
+  color: var(--syn-deleted);
+}

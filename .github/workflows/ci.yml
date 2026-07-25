@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fix:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust with clippy
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+        with:
+          components: clippy
+
+      # rustfmt.toml uses unstable options, which only nightly rustfmt honours.
+      # `override: false` keeps this from pointing the directory's default
+      # toolchain at nightly, so bare `cargo clippy` still resolves to the
+      # clippy-bearing stable pin from rust-toolchain.toml; `cargo +nightly fmt`
+      # selects nightly explicitly.
+      - name: Install nightly rustfmt
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+        with:
+          toolchain: nightly
+          components: rustfmt
+          override: false
+
+      - name: Install just
+        uses: extractions/setup-just@v4.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Run pre-commit checks
+        run: just pre-commit-args="--verbose --all-files --show-diff-on-failure" fix
+
+  test:
+    name: Test
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+
+      - name: Test
+        run: cargo test --all-features
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+
+      - name: Check the crate packages cleanly
+        run: cargo publish --dry-run

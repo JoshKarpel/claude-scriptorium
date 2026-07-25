@@ -1,0 +1,4 @@
+this line is not valid json
+{"type":"file-history-snapshot","cwd":"/srv/vellum"}
+{"type":"user","message":{"content":"<command-name>/model</command-name>"},"timestamp":"2026-03-12T09:16:00Z"}
+{"type":"user","message":{"content":[{"type":"text","text":"Rubricate the marginalia."}]},"timestamp":"2026-03-12T09:17:00Z"}
