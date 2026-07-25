@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A jump-to-top button in the navigation dock, beside jump-to-end. Using it
+  counts as the reader taking control, so it switches follow (`tail -f`) mode
+  off rather than letting the next reload snap back to the end.
 - Every built-in tool is now set in a shape that suits it, rather than falling
   back to raw JSON beyond `Bash`, `Write`, `Edit`, and `TodoWrite`. A plan, a
   subagent prompt, a skill's arguments, and a message to another agent are the
