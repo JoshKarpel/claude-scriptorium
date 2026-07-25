@@ -1,6 +1,6 @@
 [package]
 name = "claude-scriptorium"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.96"
 description = "Render Claude Code sessions as self-contained HTML"
@@ -9,6 +9,19 @@ license = "MIT"
 readme = "README.md"
 keywords = ["claude", "transcript", "html", "cli"]
 categories = ["command-line-utilities"]
+
+# The release workflow tags as `v{version}` and uploads
+# `{name}-{target}.tar.gz` (`.zip` on Windows). We spell the URL and format out
+# rather than lean on binstall's defaults: its versionless default filename ends
+# in `.tgz`, not the `.tar.gz` the upload action writes, so the default probe
+# would miss.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
+pkg-fmt = "zip"
 
 [dependencies]
 anyhow = "1.0.104"
