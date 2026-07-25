@@ -8,20 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 recipes.
 
 ```bash
-just setup            # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
-just check            # format, lint, then test
-just test             # cargo test --all-features
-just test <name>      # single test, e.g. just test markdown_becomes_html
-just render <session> # write a session to HTML (CLI `render` subcommand)
-just serve <session>  # live-reload dev server, rebuilds on source change
-just bench            # hyperfine over the release binary rendering the fixtures
-just fix              # pre-commit across the staged tree
+just setup             # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
+just check             # format, lint, then test
+just test              # cargo test --all-features
+just test <name>       # single test, e.g. just test markdown_becomes_html
+just render <session>  # write a session to HTML (CLI `render` subcommand)
+just serve <session>   # live-reload dev server, rebuilds on source change
+just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
+just bench             # hyperfine over the release binary rendering the fixtures
+just fix               # pre-commit across the staged tree
 ```
 
-`just render` and `just serve` build with `--release`, and so should any render
-you run by hand. A render is heavy enough (highlighting, base64'ing the fonts,
-megabytes of markup) that an unoptimized build takes longer to render a session
-than an optimized one takes to compile *and* render it, so a debug render is
+`just render`, `just publish`, and `just serve` build with `--release`, and so
+should any render you run by hand. A render is heavy enough (highlighting,
+base64'ing the fonts, megabytes of markup) that an unoptimized build takes
+longer to render a session than an optimized one takes to compile *and* render
+it, so a debug render is
 slower even counting the build. Tests still run unoptimized.
 
 `just bench` times that binary with [hyperfine](https://github.com/sharkdp/hyperfine)

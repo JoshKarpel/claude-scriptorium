@@ -55,6 +55,13 @@ render *args:
 
 alias r := render
 
+[doc("Render a session and publish it as a gist")]
+[group("rust")]
+publish *args:
+    cargo run --release -- publish {{ args }}
+
+alias p := publish
+
 [doc("Benchmark rendering the fixtures, e.g. `just bench --export-markdown bench.md`")]
 [group("rust")]
 bench *args:
