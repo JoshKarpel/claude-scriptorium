@@ -255,7 +255,14 @@
         })
         .then(function (content) {
           // 6. write data
+          //
+          // close() is load-bearing, not a formality: document.write from this
+          // async callback implicitly reopens the document but leaves the parser
+          // open, so the folio stays in readyState "loading" forever and its
+          // DOMContentLoaded never fires, leaving the app script's search, copy,
+          // theme, and dock wiring dead. close() ends the parse and fires it.
           document.write(content);
+          document.close();
         })
         .catch(function (err) {
           showMainPage();
