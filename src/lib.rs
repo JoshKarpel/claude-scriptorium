@@ -5,4 +5,5 @@ pub mod gist;
 pub mod picker;
 pub mod render;
 pub mod serve;
+pub mod tools;
 pub mod transcript;

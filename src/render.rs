@@ -1,6 +1,6 @@
 //! Turning a parsed folio into a self-contained HTML document.
 
-use std::{path::Path, sync::LazyLock};
+use std::sync::LazyLock;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use comrak::{
@@ -10,8 +10,9 @@ use jiff::{Timestamp, Zoned, tz::TimeZone};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde_json::Value;
 
-use crate::transcript::{
-    Block, Folio, ImageSource, Known, Panel, PanelKind, ToolResultContent, Usage,
+use crate::{
+    tools,
+    transcript::{Block, Folio, ImageSource, Known, Panel, PanelKind, Usage},
 };
 
 /// One embedded web font: the family and posture the stylesheet asks for, the
@@ -133,7 +134,7 @@ impl<'a> Scribe<'a> {
         }
     }
 
-    fn markdown(&self, source: &str) -> Markup {
+    pub(crate) fn markdown(&self, source: &str) -> Markup {
         PreEscaped(markdown_to_html_with_plugins(
             source,
             &self.options,
@@ -318,7 +319,7 @@ impl<'a> Scribe<'a> {
         }
     }
 
-    fn block(&self, block: &Block, versal: bool) -> Markup {
+    pub(crate) fn block(&self, block: &Block, versal: bool) -> Markup {
         let known = match block {
             Block::Known(known) => known,
             Block::Unknown(value) => return unknown(value),
@@ -338,84 +339,63 @@ impl<'a> Scribe<'a> {
                     (self.markdown(thinking))
                 }
             },
-            Known::ToolUse { name, input } => html! {
-                details .marginalia.marginalia--use {
-                    summary {
-                        span .marginalia__tool { (name) }
-                        @if let Some(gist) = gist(input) {
-                            span .marginalia__gist { (gist) }
-                        }
-                        @if let Some(note) = note(input) {
-                            span .marginalia__note { (note) }
-                        }
-                    }
-                    (self.tool_body(name, input))
-                }
-            },
-            Known::ToolResult { content, is_error } => html! {
+            Known::ToolUse { name, input, .. } => self.tool_call(name, input),
+            Known::ToolResult {
+                content,
+                is_error,
+                answers,
+                ..
+            } => html! {
                 details .marginalia.marginalia--result data-error[*is_error] {
-                    summary { @if *is_error { "error" } @else { "result" } }
-                    @match content {
-                        ToolResultContent::Text(text) => pre { code { (text) } },
-                        ToolResultContent::Blocks(blocks) => @for block in blocks { (self.block(block, false)) },
-                    }
+                    summary .marginalia__head { @if *is_error { "error" } @else { "result" } }
+                    (tools::result(self, answers.as_ref(), content, *is_error))
                 }
             },
             Known::Image { source } => image(source),
         }
     }
 
-    /// The body of a tool call, which fills the fold the way a result's body
-    /// does: the summary line carries the labelling, the body carries only the
-    /// call's subject. A handful of common tools get a bespoke view; everything
-    /// else (and any call whose input doesn't match the shape this view expects)
-    /// falls back to pretty-printed JSON, the same treatment an unrecognized
-    /// block gets.
-    fn tool_body(&self, name: &str, input: &Value) -> Markup {
-        let special = match name {
-            "Bash" => self.bash_body(input),
-            "Write" => self.write_body(input),
-            "Edit" => self.edit_body(input),
-            "TodoWrite" => self.todo_body(input),
-            _ => None,
-        };
-        special.unwrap_or_else(|| json(input))
-    }
-
-    fn bash_body(&self, input: &Value) -> Option<Markup> {
-        let command = input.get("command")?.as_str()?;
-        Some(self.code_block("bash", command))
-    }
-
-    fn write_body(&self, input: &Value) -> Option<Markup> {
-        let path = input.get("file_path")?.as_str()?;
-        let content = input.get("content")?.as_str()?;
-        Some(self.code_block(lang_for_path(path), content))
-    }
-
-    fn edit_body(&self, input: &Value) -> Option<Markup> {
-        let old = input.get("old_string")?.as_str()?;
-        let new = input.get("new_string")?.as_str()?;
-        Some(self.code_block("diff", &unified_diff(old, new)))
-    }
-
-    fn todo_body(&self, input: &Value) -> Option<Markup> {
-        let todos = input.get("todos")?.as_array()?;
-        Some(html! {
-            ul .tool.tool--todos {
-                @for todo in todos {
-                    @let content = todo.get("content").and_then(Value::as_str).unwrap_or("");
-                    @let status = todo.get("status").and_then(Value::as_str).unwrap_or("pending");
-                    li .tool__todo data-status=(status) { (content) }
+    /// A tool call: its summary line says what the call is, and its fold holds
+    /// the subject. A call the line already states in full (a read of a named
+    /// file, a query) has no subject left to hold, so it is set as one flat line
+    /// with nothing to open.
+    fn tool_call(&self, name: &str, input: &Value) -> Markup {
+        let setting = tools::call(self, name, input);
+        let head = html! {
+            span .marginalia__tool { (name) }
+            @if let Some(gist) = &setting.gist {
+                @match &setting.href {
+                    Some(href) => a .marginalia__gist href=(href) { (gist) },
+                    None => span .marginalia__gist { (gist) },
                 }
             }
-        })
+            @for note in &setting.notes {
+                span .marginalia__note { (note) }
+            }
+        };
+        match &setting.body {
+            Some(body) => html! {
+                details .marginalia.marginalia--use {
+                    summary .marginalia__head { (head) }
+                    (body)
+                }
+            },
+            None => html! {
+                div .marginalia.marginalia--use.marginalia--flat {
+                    div .marginalia__head { (head) }
+                }
+            },
+        }
     }
 
     /// A fenced code block run through the markdown path so it picks up syntax
     /// highlighting. The fence is grown past the longest backtick run in the
     /// source, so a body that itself contains backticks can't break out of it.
-    fn code_block(&self, lang: &str, code: &str) -> Markup {
+    pub(crate) fn code_block(&self, lang: &str, code: &str) -> Markup {
+        // A file's own trailing newline is a fact about the file, not a line of
+        // it, so it isn't set as one: an empty line before the fold's bottom
+        // edge reads as content that isn't there.
+        let code = code.trim_end();
         let fence = "`".repeat(longest_backtick_run(code).max(2) + 1);
         self.markdown(&format!("{fence}{lang}\n{code}\n{fence}"))
     }
@@ -583,34 +563,6 @@ fn margin_strip(seed: u64) -> String {
     format!("data:image/svg+xml;base64,{}", STANDARD.encode(svg))
 }
 
-/// A one-line summary of a tool call, drawn from whichever field carries the
-/// subject of the call. A call that describes itself is taken at its word: the
-/// description says what the call is *for*, which reads better folded than the
-/// command or prompt it stands in front of, and the body shows that anyway.
-fn gist(input: &Value) -> Option<&str> {
-    [
-        "description",
-        "command",
-        "file_path",
-        "pattern",
-        "path",
-        "url",
-        "prompt",
-    ]
-    .iter()
-    .find_map(|field| input.get(field)?.as_str())
-}
-
-/// A qualifier on a tool call: an option that changes what the call does, which
-/// the body it acts on doesn't show.
-fn note(input: &Value) -> Option<&'static str> {
-    input
-        .get("replace_all")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        .then_some("replace all")
-}
-
 /// Token flux at a glance: what went in, then what came out.
 fn tally(input: u64, output: u64) -> String {
     format!("↑ {} ↓ {}", compact(input), compact(output))
@@ -665,34 +617,6 @@ fn compact(tokens: u64) -> String {
     format!("{}{suffix}", rounded.strip_suffix(".0").unwrap_or(&rounded))
 }
 
-/// The language token for a path, taken from its extension. syntect resolves it
-/// by extension or name, so the bare extension is enough; an empty token (no
-/// extension) highlights as plain text.
-fn lang_for_path(path: &str) -> &str {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or("")
-}
-
-/// An `Edit`'s before/after rendered as a diff body: the old lines removed, the
-/// new lines added. The `diff` lexer colours each line by its leading marker,
-/// reusing the inserted/deleted scope palette the stylesheet already defines.
-fn unified_diff(old: &str, new: &str) -> String {
-    let mut diff = String::new();
-    for line in old.lines() {
-        diff.push('-');
-        diff.push_str(line);
-        diff.push('\n');
-    }
-    for line in new.lines() {
-        diff.push('+');
-        diff.push_str(line);
-        diff.push('\n');
-    }
-    diff
-}
-
 fn longest_backtick_run(source: &str) -> usize {
     let mut longest = 0;
     let mut run = 0;
@@ -707,7 +631,7 @@ fn longest_backtick_run(source: &str) -> usize {
     longest
 }
 
-fn json(value: &Value) -> Markup {
+pub(crate) fn json(value: &Value) -> Markup {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     html! { pre { code { (pretty) } } }
 }

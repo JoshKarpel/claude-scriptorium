@@ -1,7 +1,7 @@
 //! Parsing of Claude Code session JSONL into typed conversation values.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::tools;
 
 /// One rendered session: the unit the tool turns into a single HTML file.
 #[derive(Debug)]
@@ -142,20 +144,102 @@ impl Folio {
     /// and merges each tool-result turn back into the assistant turn it
     /// answers, so a call and its result render as one panel.
     pub fn panels(&self) -> Vec<Panel> {
+        let calls = self.calls();
         let mut panels: Vec<Panel> = Vec::new();
         for (index, turn) in self.turns.iter().enumerate() {
             if turn.is_clear_command() {
                 continue;
             }
+            let blocks = answered(turn.blocks(), &calls);
+            // A turn whose every block was dropped has nothing left to show,
+            // and an empty panel is a bordered box with no contents in it.
+            if blocks.is_empty() {
+                continue;
+            }
             if turn.is_tool_response()
                 && let Some(assistant) = panels.last_mut().filter(|p| p.role == Role::Assistant)
             {
-                assistant.blocks.extend(turn.blocks());
+                assistant.blocks.extend(blocks);
                 continue;
             }
-            panels.push(Panel::from_turn(turn, index + 1));
+            panels.push(Panel::from_turn(turn, index + 1, blocks));
         }
         panels
+    }
+
+    /// Every tool call in the session, by id. The wire format names the tool
+    /// only on the call: a result carries just the id it answers, so a result
+    /// can only be set the way its call is once the two are matched up.
+    fn calls(&self) -> HashMap<&str, Answered> {
+        self.turns
+            .iter()
+            .flat_map(|turn| match &turn.content {
+                Content::Text(_) => [].iter(),
+                Content::Blocks(blocks) => blocks.iter(),
+            })
+            .filter_map(|block| match block {
+                Block::Known(Known::ToolUse {
+                    id: Some(id),
+                    name,
+                    input,
+                }) => Some((id.as_str(), Answered::of(name, input))),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Names each result in `blocks` with the call it answers, and drops the ones
+/// that say nothing their call doesn't. Naming has to come first: whether a
+/// result is worth showing is a question about the tool that produced it.
+fn answered(mut blocks: Vec<Block>, calls: &HashMap<&str, Answered>) -> Vec<Block> {
+    for block in &mut blocks {
+        if let Block::Known(Known::ToolResult {
+            tool_use_id: Some(id),
+            answers,
+            ..
+        }) = block
+        {
+            *answers = calls.get(id.as_str()).cloned();
+        }
+    }
+    blocks.retain(|block| !is_acknowledgement(block));
+    blocks
+}
+
+/// True for a result that only confirms its call was carried out. A failure is
+/// never one of these: that a call *didn't* work is the whole of what it says.
+fn is_acknowledgement(block: &Block) -> bool {
+    let Block::Known(Known::ToolResult {
+        content: ToolResultContent::Text(text),
+        is_error: false,
+        answers: Some(answered),
+        ..
+    }) = block
+    else {
+        return false;
+    };
+    tools::acknowledges(&answered.tool, text)
+}
+
+/// What a result needs to know about the call it answers: which tool ran, and
+/// the path it ran on where the tool has one, since a file's contents are set
+/// by its extension and only the call records the name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    pub tool: String,
+    pub subject: Option<String>,
+}
+
+impl Answered {
+    fn of(tool: &str, input: &Value) -> Self {
+        Self {
+            tool: tool.to_owned(),
+            subject: input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
     }
 }
 
@@ -309,14 +393,14 @@ pub struct Panel {
 }
 
 impl Panel {
-    fn from_turn(turn: &Turn, turn_number: usize) -> Self {
+    fn from_turn(turn: &Turn, turn_number: usize, blocks: Vec<Block>) -> Self {
         Self {
             turn_number,
             role: turn.role,
             timestamp: turn.timestamp,
             model: turn.model.clone(),
             effort: turn.effort.clone(),
-            blocks: turn.blocks(),
+            blocks,
             usage: turn.usage,
             is_sidechain: turn.is_sidechain,
             is_meta: turn.is_meta,
@@ -538,13 +622,21 @@ pub enum Known {
         thinking: String,
     },
     ToolUse {
+        /// What the result answering this call points back to.
+        id: Option<String>,
         name: String,
         input: Value,
     },
     ToolResult {
+        tool_use_id: Option<String>,
         content: ToolResultContent,
         #[serde(default)]
         is_error: bool,
+        /// The call this answers. Never on the wire: it is resolved when the
+        /// result is folded into the panel, so the renderer walks a stream
+        /// where every result already knows which tool produced it.
+        #[serde(skip)]
+        answers: Option<Answered>,
     },
     Image {
         source: ImageSource,
