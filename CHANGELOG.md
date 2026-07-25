@@ -23,6 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The plaque's colophon links the tool's name to its repository, so a folio
+  says where it came from.
 - A marginalia body's copy button rides the rule between the summary and the
   body, centred on it, the way a turn's button rides its leading block's edge.
 - A tool call's body fills its fold the way a result's does, instead of sitting

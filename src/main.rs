@@ -566,5 +566,6 @@ fn colophon() -> Colophon {
         generated: Timestamp::now(),
         tool: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
+        home: env!("CARGO_PKG_REPOSITORY"),
     }
 }

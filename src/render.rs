@@ -103,6 +103,7 @@ pub struct Colophon {
     pub generated: Timestamp,
     pub tool: &'static str,
     pub version: &'static str,
+    pub home: &'static str,
 }
 
 /// Renders folios, carrying the decisions a render depends on: how markdown
@@ -199,7 +200,7 @@ impl<'a> Scribe<'a> {
                                 }
                             }
                             p .plaque__colophon {
-                                "Written by " (colophon.tool) " " (colophon.version)
+                                "Written by " a href=(colophon.home) { (colophon.tool) } " " (colophon.version)
                                 " on " (self.stamp(colophon.generated)) "."
                             }
                             p .plaque__colophon {
