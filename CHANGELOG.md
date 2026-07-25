@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3]
+
+### Added
+
+- The effort level a turn ran at, in parentheses after the model name, where
+  the transcript records it.
+- Token usage, where the transcript records it: each turn's meta line carries
+  what the model read and what it wrote, faint until the panel is hovered, and
+  the folio's plaque carries the session's totals. Hovering either shows the
+  full breakdown of fresh input, cache writes, and cache reads. One API response
+  is written to the transcript a block at a time, each line repeating the
+  response's usage, so a response is counted once.
+
+### Changed
+
+- A marginalia body's copy button rides the rule between the summary and the
+  body, centred on it, the way a turn's button rides its leading block's edge.
+- A tool call's body fills its fold the way a result's does, instead of sitting
+  in a second box inside it. What labelled the body from inside now labels the
+  fold from its summary line: a `Bash` call is headed by its own description
+  (falling back to the command), and an `Edit` that replaces every occurrence
+  says so beside the file it edits.
+
+### Fixed
+
+- A code or output block's copy button stays in the block's corner when the
+  block is scrolled sideways, instead of travelling with the text and coming to
+  rest over it.
+
 ## [0.1.2]
 
 ### Added

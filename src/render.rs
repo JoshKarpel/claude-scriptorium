@@ -10,7 +10,9 @@ use jiff::{Timestamp, Zoned, tz::TimeZone};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
 use serde_json::Value;
 
-use crate::transcript::{Block, Folio, ImageSource, Known, Panel, PanelKind, ToolResultContent};
+use crate::transcript::{
+    Block, Folio, ImageSource, Known, Panel, PanelKind, ToolResultContent, Usage,
+};
 
 /// One embedded web font: the family and posture the stylesheet asks for, the
 /// weight range the variable file covers, and the woff2 bytes themselves.
@@ -187,6 +189,9 @@ impl<'a> Scribe<'a> {
                                 @if let Some(first) = panels.first() {
                                     dt { "opened" } dd { (self.stamp(first.timestamp)) }
                                 }
+                                @if let Some(usage) = folio.usage() {
+                                    dt { "tokens" } dd title=(breakdown(&usage)) { (tally(&usage)) }
+                                }
                             }
                             p .plaque__colophon {
                                 "Written by " (colophon.tool) " " (colophon.version)
@@ -286,7 +291,15 @@ impl<'a> Scribe<'a> {
                 header .turn__meta {
                     span .turn__role { (kind.label()) }
                     @if let Some(model) = &panel.model {
-                        span .turn__model { (model) }
+                        span .turn__model {
+                            (model)
+                            @if let Some(effort) = &panel.effort {
+                                " " span .turn__effort { "(" (effort) ")" }
+                            }
+                        }
+                    }
+                    @if let Some(usage) = &panel.usage {
+                        span .turn__usage title=(breakdown(usage)) { (tally(usage)) }
                     }
                     time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
                     a .turn__index href={ "#turn-" (panel.turn_number) } { "#" (panel.turn_number) }
@@ -325,6 +338,9 @@ impl<'a> Scribe<'a> {
                         @if let Some(gist) = gist(input) {
                             span .marginalia__gist { (gist) }
                         }
+                        @if let Some(note) = note(input) {
+                            span .marginalia__note { (note) }
+                        }
                     }
                     (self.tool_body(name, input))
                 }
@@ -333,7 +349,7 @@ impl<'a> Scribe<'a> {
                 details .marginalia.marginalia--result data-error[*is_error] {
                     summary { @if *is_error { "error" } @else { "result" } }
                     @match content {
-                        ToolResultContent::Text(text) => pre .marginalia__body { code { (text) } },
+                        ToolResultContent::Text(text) => pre { code { (text) } },
                         ToolResultContent::Blocks(blocks) => @for block in blocks { (self.block(block, false)) },
                     }
                 }
@@ -342,10 +358,12 @@ impl<'a> Scribe<'a> {
         }
     }
 
-    /// The body of a tool call. A handful of common tools get a bespoke view;
-    /// everything else (and any call whose input doesn't match the shape this
-    /// view expects) falls back to pretty-printed JSON, the same treatment an
-    /// unrecognized block gets.
+    /// The body of a tool call, which fills the fold the way a result's body
+    /// does: the summary line carries the labelling, the body carries only the
+    /// call's subject. A handful of common tools get a bespoke view; everything
+    /// else (and any call whose input doesn't match the shape this view expects)
+    /// falls back to pretty-printed JSON, the same treatment an unrecognized
+    /// block gets.
     fn tool_body(&self, name: &str, input: &Value) -> Markup {
         let special = match name {
             "Bash" => self.bash_body(input),
@@ -359,42 +377,19 @@ impl<'a> Scribe<'a> {
 
     fn bash_body(&self, input: &Value) -> Option<Markup> {
         let command = input.get("command")?.as_str()?;
-        let description = input.get("description").and_then(Value::as_str);
-        Some(html! {
-            div .tool.tool--bash {
-                @if let Some(description) = description {
-                    p .tool__caption { (description) }
-                }
-                (self.code_block("bash", command))
-            }
-        })
+        Some(self.code_block("bash", command))
     }
 
     fn write_body(&self, input: &Value) -> Option<Markup> {
         let path = input.get("file_path")?.as_str()?;
         let content = input.get("content")?.as_str()?;
-        Some(html! {
-            div .tool.tool--write {
-                (self.code_block(lang_for_path(path), content))
-            }
-        })
+        Some(self.code_block(lang_for_path(path), content))
     }
 
     fn edit_body(&self, input: &Value) -> Option<Markup> {
         let old = input.get("old_string")?.as_str()?;
         let new = input.get("new_string")?.as_str()?;
-        let replace_all = input
-            .get("replace_all")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        Some(html! {
-            div .tool.tool--edit {
-                @if replace_all {
-                    p .tool__caption { "replace all occurrences" }
-                }
-                (self.code_block("diff", &unified_diff(old, new)))
-            }
-        })
+        Some(self.code_block("diff", &unified_diff(old, new)))
     }
 
     fn todo_body(&self, input: &Value) -> Option<Markup> {
@@ -582,11 +577,65 @@ fn margin_strip(seed: u64) -> String {
 }
 
 /// A one-line summary of a tool call, drawn from whichever field carries the
-/// subject of the call.
+/// subject of the call. A call that describes itself is taken at its word: the
+/// description says what the call is *for*, which reads better folded than the
+/// command or prompt it stands in front of, and the body shows that anyway.
 fn gist(input: &Value) -> Option<&str> {
-    ["command", "file_path", "pattern", "path", "url", "prompt"]
-        .iter()
-        .find_map(|field| input.get(field)?.as_str())
+    [
+        "description",
+        "command",
+        "file_path",
+        "pattern",
+        "path",
+        "url",
+        "prompt",
+    ]
+    .iter()
+    .find_map(|field| input.get(field)?.as_str())
+}
+
+/// A qualifier on a tool call: an option that changes what the call does, which
+/// the body it acts on doesn't show.
+fn note(input: &Value) -> Option<&'static str> {
+    input
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then_some("replace all")
+}
+
+/// Token usage at a glance: what the model read, then what it wrote.
+fn tally(usage: &Usage) -> String {
+    format!(
+        "↑ {} ↓ {}",
+        compact(usage.context()),
+        compact(usage.output_tokens)
+    )
+}
+
+/// The same usage spelled out, for the title a reader hovers to see where the
+/// context came from: a cache read costs a fraction of fresh input, so the
+/// split is the interesting part.
+fn breakdown(usage: &Usage) -> String {
+    format!(
+        "{} input · {} cache write · {} cache read · {} output",
+        compact(usage.input_tokens),
+        compact(usage.cache_creation_input_tokens),
+        compact(usage.cache_read_input_tokens),
+        compact(usage.output_tokens),
+    )
+}
+
+/// A token count short enough to sit in a line of chrome: exact below a
+/// thousand, then one decimal place per magnitude, with a bare `.0` trimmed.
+fn compact(tokens: u64) -> String {
+    let (scaled, suffix) = match tokens {
+        ..1_000 => return tokens.to_string(),
+        1_000..1_000_000 => (tokens as f64 / 1_000.0, "k"),
+        _ => (tokens as f64 / 1_000_000.0, "M"),
+    };
+    let rounded = format!("{scaled:.1}");
+    format!("{}{suffix}", rounded.strip_suffix(".0").unwrap_or(&rounded))
 }
 
 /// The language token for a path, taken from its extension. syntect resolves it
@@ -633,7 +682,7 @@ fn longest_backtick_run(source: &str) -> usize {
 
 fn json(value: &Value) -> Markup {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    html! { pre .marginalia__body { code { (pretty) } } }
+    html! { pre { code { (pretty) } } }
 }
 
 fn unknown(value: &Value) -> Markup {
@@ -657,6 +706,33 @@ fn image(source: &ImageSource) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_counts_shorten_to_one_decimal_place_per_magnitude() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(847), "847");
+        assert_eq!(compact(999), "999");
+        assert_eq!(compact(1_000), "1k");
+        assert_eq!(compact(47_612), "47.6k");
+        assert_eq!(compact(999_400), "999.4k");
+        assert_eq!(compact(7_643_000), "7.6M");
+    }
+
+    #[test]
+    fn a_tally_reads_context_in_then_tokens_out() {
+        let usage = Usage {
+            input_tokens: 3,
+            output_tokens: 214,
+            cache_creation_input_tokens: 32_400,
+            cache_read_input_tokens: 15_200,
+        };
+
+        assert_eq!(tally(&usage), "↑ 47.6k ↓ 214");
+        assert_eq!(
+            breakdown(&usage),
+            "3 input · 32.4k cache write · 15.2k cache read · 214 output"
+        );
+    }
 
     #[test]
     fn border_strip_is_stable_per_seed() {

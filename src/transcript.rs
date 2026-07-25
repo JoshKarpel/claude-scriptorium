@@ -1,6 +1,7 @@
 //! Parsing of Claude Code session JSONL into typed conversation values.
 
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -25,6 +26,11 @@ impl Folio {
             .with_context(|| format!("reading session {}", source.display()))?;
 
         let mut turns = Vec::new();
+        // One API response is written as several lines, one per content block,
+        // each repeating the response's usage. Counting every line would
+        // multiply what the response cost, so a response is counted once, on
+        // the first line that carries its id.
+        let mut counted = HashSet::new();
         for (index, line) in text.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -33,7 +39,18 @@ impl Folio {
                 .with_context(|| format!("{}:{}", source.display(), index + 1))?;
             match entry {
                 Entry::User(turn) => turns.push(turn.into_turn(Role::User)),
-                Entry::Assistant(turn) => turns.push(turn.into_turn(Role::Assistant)),
+                Entry::Assistant(raw) => {
+                    let opens_response = raw
+                        .message
+                        .id
+                        .as_deref()
+                        .is_none_or(|id| counted.insert(id.to_owned()));
+                    let turn = raw.into_turn(Role::Assistant);
+                    turns.push(Turn {
+                        usage: turn.usage.filter(|_| opens_response),
+                        ..turn
+                    });
+                }
                 Entry::Attachment(attachment) => turns.extend(attachment.into_turn()),
                 Entry::Bookkeeping => {}
             }
@@ -97,6 +114,16 @@ impl Folio {
             cwd,
             title: ai_title.or(first_prompt),
         }
+    }
+
+    /// What the whole session cost, or `None` when no turn reports usage. The
+    /// cached prefix counts once per turn that read it, since each turn reads
+    /// it again.
+    pub fn usage(&self) -> Option<Usage> {
+        self.turns
+            .iter()
+            .filter_map(|turn| turn.usage)
+            .reduce(|total, usage| total + usage)
     }
 
     /// Folds the raw turns into the display stream: drops `/clear` boundaries
@@ -173,11 +200,50 @@ pub struct Turn {
     pub role: Role,
     pub timestamp: Timestamp,
     pub model: Option<String>,
+    /// How hard the model was asked to think, where the harness records it: a
+    /// refinement of the model, not a separate fact about the turn.
+    pub effort: Option<String>,
     pub content: Content,
+    /// What the turn cost, for the assistant turns that report it. A user turn
+    /// has none, and transcripts written before the harness recorded usage
+    /// carry none either.
+    pub usage: Option<Usage>,
     /// True for turns belonging to a subagent running inside this session.
     pub is_sidechain: bool,
     /// True for turns the harness injected rather than the user typing them.
     pub is_meta: bool,
+}
+
+/// What one turn cost: what the model read, split by where it came from, and
+/// what it wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl Usage {
+    /// Everything the model read: fresh input plus the cached prefix, whether
+    /// that prefix was written this turn or replayed from an earlier one.
+    pub fn context(&self) -> u64 {
+        self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+    }
+}
+
+impl std::ops::Add for Usage {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens + other.input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+            cache_creation_input_tokens: self.cache_creation_input_tokens
+                + other.cache_creation_input_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens + other.cache_read_input_tokens,
+        }
+    }
 }
 
 impl Turn {
@@ -219,7 +285,13 @@ pub struct Panel {
     pub role: Role,
     pub timestamp: Timestamp,
     pub model: Option<String>,
+    /// How hard the model was asked to think, where the harness records it.
+    pub effort: Option<String>,
     pub blocks: Vec<Block>,
+    /// What the panel's leading turn cost. The tool-result turns folded in
+    /// carry none of their own: the assistant turn that called the tool is
+    /// where the harness records what the exchange cost.
+    pub usage: Option<Usage>,
     /// True for panels belonging to a subagent running inside this session.
     pub is_sidechain: bool,
     /// True for panels the harness injected rather than the user typing them.
@@ -233,7 +305,9 @@ impl Panel {
             role: turn.role,
             timestamp: turn.timestamp,
             model: turn.model.clone(),
+            effort: turn.effort.clone(),
             blocks: turn.blocks(),
+            usage: turn.usage,
             is_sidechain: turn.is_sidechain,
             is_meta: turn.is_meta,
         }
@@ -298,6 +372,9 @@ enum Entry {
 struct RawTurn {
     timestamp: Timestamp,
     message: Message,
+    /// Recorded beside the message rather than in it, and only by harness
+    /// versions that track it.
+    effort: Option<String>,
     #[serde(default, rename = "isSidechain")]
     is_sidechain: bool,
     #[serde(default, rename = "isMeta")]
@@ -310,7 +387,9 @@ impl RawTurn {
             role,
             timestamp: self.timestamp,
             model: self.message.model,
+            effort: self.effort,
             content: self.message.content,
+            usage: self.message.usage,
             is_sidechain: self.is_sidechain,
             is_meta: self.is_meta,
         }
@@ -336,7 +415,9 @@ impl RawAttachment {
             role: Role::User,
             timestamp: self.timestamp,
             model: None,
+            effort: None,
             content: Content::Text(prompt),
+            usage: None,
             is_sidechain: false,
             is_meta: false,
         })
@@ -359,6 +440,10 @@ enum AttachmentBody {
 struct Message {
     content: Content,
     model: Option<String>,
+    usage: Option<Usage>,
+    /// The API response this line belongs to. Several lines share one, since a
+    /// response is written a block at a time.
+    id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

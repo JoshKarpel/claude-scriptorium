@@ -628,6 +628,19 @@ mark.search__hit.is-current {
 }
 
 /* Push the timestamp and turn number to the panel's top-right corner. */
+/* What the turn cost sits with the turn's other facts, faint enough to read as
+ * an aside until the panel is hovered. Its full breakdown is the title. */
+.turn__usage {
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+  transition: opacity 0.12s ease;
+}
+
+.turn:hover .turn__usage {
+  opacity: 1;
+}
+
 .turn__time {
   margin-left: auto;
 }
@@ -805,6 +818,13 @@ mark.search__hit.is-current {
   white-space: nowrap;
 }
 
+/* A qualifier on the call keeps its full width; the gist ellipsises around it. */
+.marginalia__note {
+  flex: none;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
 .marginalia--result > summary {
   color: var(--ink-faint);
   text-transform: uppercase;
@@ -820,11 +840,11 @@ mark.search__hit.is-current {
   color: var(--rubric);
 }
 
-.marginalia__body {
+/* A fold's body fills it edge to edge: a call's subject and a result's output
+ * are the same kind of thing, so neither sits in a second box inside the first.
+ * A code block nested deeper (inside a result's own prose) keeps its margins. */
+.folio details > pre {
   margin: 0;
-  padding: 0.6rem 0.8rem;
-  background: transparent;
-  border-radius: 0;
 }
 
 /* On wide viewports, an open marginalia that holds a code, diff, or JSON block
@@ -843,24 +863,6 @@ mark.search__hit.is-current {
 }
 
 /* --- Tool bodies: the bespoke views for common tools ----------------- */
-
-.tool {
-  padding: 0.55rem 0.7rem;
-}
-
-/* The highlighted code a tool body emits is the body itself; drop its default
- * block margins so it sits flush inside the marginalia. */
-.tool > pre {
-  margin: 0;
-}
-
-.tool__caption {
-  margin: 0 0 0.45rem;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  font-style: italic;
-  color: var(--ink-faint);
-}
 
 .tool--todos {
   margin: 0;
@@ -918,15 +920,22 @@ mark.search__hit.is-current {
   transition: opacity 0.12s ease;
 }
 
-/* A code / output block clips its own scroll overflow (overflow-x: auto forces
- * overflow-y to auto), so its copy button can't ride outside the top border the
- * way a thinking block's does. It sits just inside the top-right corner instead,
+/* A code / output block's copy button sits just inside its top-right corner,
  * over the block's top padding, always visible for discovery. */
 .folio pre > .copy-button {
   position: absolute;
   top: 0.3rem;
   right: 0.5rem;
+  z-index: 1;
   opacity: 0.6;
+}
+
+/* A fold's body butts against its summary, so its button rides the rule between
+ * the two, the way a turn's button rides its leading block's edge. The block no
+ * longer scrolls (its code does), so nothing clips the overhang. */
+.folio details > pre > .copy-button {
+  top: 0;
+  transform: translateY(-50%);
 }
 
 .folio pre:hover > .copy-button,
@@ -1078,13 +1087,22 @@ mark.search__hit.is-current {
 }
 
 .folio pre {
-  overflow-x: auto;
   padding: 0.7rem 0.9rem;
   background: var(--leaf-sunk);
   border: 1px solid var(--rule-soft);
   border-radius: var(--radius);
   font-size: 0.82rem;
   line-height: 1.5;
+}
+
+/* The code, not the block around it, is what scrolls sideways: an absolutely
+ * positioned child of a scroll container travels with the content, so a copy
+ * button anchored to a scrolling block would drift off the corner and over the
+ * text. Sinking the overflow one level leaves the block a still frame to pin
+ * to. */
+.folio pre > code {
+  display: block;
+  overflow-x: auto;
 }
 
 .folio pre code {
