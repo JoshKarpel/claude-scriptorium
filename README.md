@@ -131,8 +131,16 @@ Assistant and user turns, in order, with:
 - Text and thinking as markdown, with GFM tables, task lists, and autolinks
 - Fenced code highlighted into classed spans by
   [syntect](https://github.com/trishume/syntect), so the theme owns the colors
-- Tool calls and their results as collapsible **marginalia**, labelled with the
-  tool name and the subject of the call
+- Tool calls and their results as **marginalia**, labelled with the tool name
+  and the subject of the call, and set in the shape that suits the tool: a
+  command as highlighted shell, an edit as a diff, a plan or a subagent prompt
+  as the markdown it was composed as, a read's result as the language of the
+  file it read, a search's result as the links it found. A call its label
+  already states in full is one flat line; everything else folds. A result that
+  says only that the call was carried out is left out, since the call above it
+  already shows what happened.
+- Terminal colour kept: output written with ANSI escapes reads in the folio's
+  own pigments, rather than showing the escapes
 - Pasted images inlined as data URLs
 
 The reading column is pure transcript. The folio's title, facts, and a
@@ -155,6 +163,10 @@ unrecognized block renders as formatted JSON rather than aborting the folio,
 because a new block type is a producer adding something optional, not malformed
 input. Lines that carry no conversation at all (attachments, hook output, mode
 changes, file-history snapshots) are skipped.
+
+Tools are treated the same way. A tool with no view of its own, such as one an
+MCP server provides, shows the input it was sent as formatted JSON, and so does
+a built-in whose input doesn't match the shape its view expects.
 
 ## Reading a folio
 

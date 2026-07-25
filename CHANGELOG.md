@@ -8,6 +8,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Every built-in tool is now set in a shape that suits it, rather than falling
+  back to raw JSON beyond `Bash`, `Write`, `Edit`, and `TodoWrite`. A plan, a
+  subagent prompt, a skill's arguments, and a message to another agent are the
+  markdown documents they were composed as; a workflow's script is highlighted
+  JavaScript; a question shows every option it offered; a report shows each
+  finding against the file and line it is about. A tool with no view of its own
+  (an MCP server's, say) still shows the input it was sent.
+- A question shows the preview an option carried, which is the mockup the reader
+  actually compared, and its answer is recovered from the sentence the harness
+  buries it in, so what was chosen reads as a line under what was asked rather
+  than as a paragraph naming every question back. An answer typed instead of
+  chosen is marked as one. A question that timed out is not an answer, and
+  stands as the note it is.
+- A result is now set by the tool that produced it: a read comes back as the
+  file's own language, a search as the links it found, a background task as its
+  status and its output, and an answer that is JSON comes back pretty-printed. A
+  failure sheds the tag the harness wraps it in.
+- Terminal colour is kept. A tool's output carries the ANSI escapes it was
+  written with, so a test run that marked its failures in red now reads that way
+  in the folio instead of showing the escapes. The sixteen colours a terminal
+  names are ground into the folio's own pigments; a colour a tool states
+  outright (256-colour or 24-bit) is carried as the value it asked for, since no
+  palette token can stand for it. Escapes that drive the terminal rather than
+  colour it (cursor moves, erases) leave nothing behind.
+- `tests/fixtures/playground.jsonl` renders one panel per built-in tool, for
+  looking at every view at once.
+
+### Removed
+
+- A result that says only that its call was carried out ("the file has been
+  updated successfully", "launching skill", "entered plan mode", "async agent
+  launched successfully") no longer appears: the call above it already shows the
+  file it wrote or the change it made. Anything the result adds keeps it, so an
+  edit that also warns the file changed on disk still reaches a reader, and a
+  failure is always shown.
 - The effort level a turn ran at, in parentheses after the model name, where
   the transcript records it.
 - Token usage, where the transcript records it: each turn's meta line carries
@@ -32,10 +67,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fold from its summary line: a `Bash` call is headed by its own description
   (falling back to the command), and an `Edit` that replaces every occurrence
   says so beside the file it edits.
+- A call its summary line states in full is set as one flat line with no fold to
+  open, since there is no subject left for a body to hold. A read is the common
+  case: it names the file and the lines it took, and its contents arrive in the
+  result below. Such a line wraps rather than ellipsising, because it is the
+  only place the subject appears: a folded call can be cut short at the column's
+  edge since opening it shows the subject in full, and a flat one can't.
 
 ### Fixed
 
-
+- A code body no longer ends on an empty line. A file's own trailing newline is
+  a fact about the file rather than a line of it, so setting it as one left a
+  blank line against the bottom edge of the fold, reading as content that isn't
+  there.
 - Opening a folio at a `#turn-N` deep link now lands on that panel even when
   follow (`tail -f`) mode was left on in a previous session. An anchored load
   counts as the reader taking control, the same way scrolling does, so follow

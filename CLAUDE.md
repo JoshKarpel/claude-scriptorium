@@ -47,6 +47,8 @@ module each:
 - `picker`: the interactive two-stage selector (project, then session) the
   shell opens when no session is named and a terminal is attached.
 - `render`: `Scribe` turns a folio's panels into `Markup`.
+- `tools`: how each built-in tool's call and result are set, which is the one
+  place that knows anything about a specific tool's shape.
 
 `src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
 `publish`, and `fetch` subcommands, resolves which session to show, reads the
@@ -199,10 +201,75 @@ A marginalia is one fold: its summary line carries the labelling (the tool's
 name, a gist of its subject, and any qualifier that changes what the call does),
 and its body carries only the subject itself, filling the fold edge to edge. A
 call and its result are therefore the same shape, and nothing sits in a second
-box inside the first. `gist` prefers a call's own `description` where it has
-one, since that says what the call is *for* and the body shows the command
-anyway. The stylesheet keys the body off `details > pre` rather than a class,
-because a highlighted body is comrak's markup and can't carry one.
+box inside the first. A call its summary line already states in full has no
+subject left for a body to hold, so it is set as one flat line with no fold to
+open (`marginalia--flat`); a read is the common case, since the file and the
+lines it took fit on the line and the contents arrive in the result. A flat
+line's gist wraps where a folded one's ellipsises: truncation is only safe
+where a fold can reveal what was cut, and a long search query or path would
+otherwise be lost at the column's edge. The
+stylesheet keys the body off `details > pre` rather than a class, because a
+highlighted body is comrak's markup and can't carry one.
+
+### Setting the tools
+
+`tools.rs` owns every per-tool decision, keyed on the tool's name: `call`
+returns a `Setting` (the summary line's gist, an optional link, any qualifying
+notes, and the body), and `result` sets what came back. The shapes it keys on
+are the harness's rather than a contract, so **every view returns `Option` and
+falls back to pretty-printed JSON** when the input doesn't match. A tool that
+grows a field, or an MCP server's tool that no view can know, must not break a
+render. Harvest real transcripts (`~/.claude/projects/*/*.jsonl`) before adding
+a view, rather than writing one from memory of a tool's parameters.
+
+The body's shape follows what the subject *is*: prose that was composed as
+markdown (a plan, a subagent prompt, a message, a skill's arguments) is set as
+markdown through `prose`; code is a highlighted code block; a list of small
+structured things (questions and their options, findings, todos) is its own
+markup in the mono face.
+
+A result's setting takes the call it answers. The wire format names the tool
+only on the call, so `Folio::panels` resolves each result's `tool_use_id`
+against the session's calls and stamps it with an `Answered` (the tool's name,
+and the path where the call had one). That field is `#[serde(skip)]`: it is
+never on the wire, and it exists so the renderer walks a stream where every
+result already knows what produced it.
+
+Naming a result is also what lets `panels` **drop** the ones that say nothing
+their call doesn't: a write answering that the file was written, a skill
+answering that it launched. The folio deliberately misrepresents the transcript
+here, because a line saying an edit worked after every edit crowds out the
+conversation. `ACKNOWLEDGEMENTS` matches the acknowledging *sentence* rather
+than the tool, so a result carrying anything more survives; the corpus has edits
+that acknowledge and then warn the file changed on disk, and that warning is the
+only place a reader learns of it. A failure is never dropped. Match new
+acknowledgements against real transcripts rather than from memory, since the
+exact wording is what the drop keys on. A result made only of text blocks is
+joined and read the same way a plain-text one is, since the blocks are how the
+harness wrote it down rather than a difference in what came back; `spoken` is
+that one reading, so a result is set and weighed as an acknowledgement off the
+same text (a background agent's launch answers in blocks, and is dropped like
+any other acknowledgement).
+
+One result is *parsed* rather than just set: `AskUserQuestion` answers in a
+sentence that names each question back before its answer, and the answer is what
+a reader wants. `answers` recovers the pairs by anchoring on the `"=` between a
+question and its answer and walking back from the *next* anchor to the `, "` that
+opens the following question. Splitting forward on those separators looks
+simpler and fails on a third of real transcripts: a question quotes code
+containing quotes, a free-text answer runs to several clauses, and an option that
+carried a preview has that preview echoed inline, so the delimiters all turn up
+inside the values. Anything that doesn't parse (a question that timed out
+answers in prose, with no pairs at all) falls back to the text as it came.
+
+`tests/fixtures/playground.jsonl` holds one call-and-result pair per built-in
+tool, harvested from real sessions, so a change to any view can be seen against
+all of them at once: `just render tests/fixtures/playground.jsonl` (or `just
+serve` it) and screenshot with every `details` forced open.
+`tests/fixtures/answers.jsonl` is the same idea at one tool's depth: every shape
+an `AskUserQuestion` result takes across the corpus (both opening sentences, a
+missing closing one, a quoted option and typed prose, an echoed preview, several
+selections joined into one answer, and a timeout), each with a test.
 
 ### Rendering invariants worth preserving
 
@@ -238,7 +305,14 @@ because a highlighted body is comrak's markup and can't carry one.
   plugin in class mode with an `ink-` prefix, so the stylesheet owns the
   palette. syntect is not a direct dependency; it arrives via comrak's
   `syntect-fancy` feature, which is the pure-Rust regex backend rather than
-  the C oniguruma one.
+  the C oniguruma one. A terminal's colour follows the same rule: the sixteen
+  colours ANSI *names* become `ansi--` classes the stylesheet grinds into the
+  folio's pigments (`--ansi-*`), so a build log reads in the same palette as
+  everything around it. The one exception is deliberate: a colour a tool states
+  outright, as a 256-colour index outside the first sixteen or as 24-bit
+  channels, is a value rather than a name, and no palette token can stand for
+  it, so it is set on the element. Don't extend that exception to anything the
+  palette *could* name.
 
 Markup carries `data-sidechain` for subagent turns and `data-meta` for
 harness-injected ones so a stylesheet can distinguish them. Meta turns are
@@ -312,17 +386,18 @@ theme layer).
 
 ## Testing against real data
 
-`tests/fixtures/` holds hand-written JSONL covering each block type plus an
-unrecognized one. For wider coverage, render every session on the machine and
-check nothing fails:
+Real sessions under `~/.claude/projects/*/*.jsonl` are where the transcript
+format is *discovered*: verify any claim about it against those files rather
+than from memory, and harvest them before writing a view (which fields a tool's
+input carries, which wording a result comes back with, whether output arrives
+with ANSI escapes in it).
 
-```bash
-for f in ~/.claude/projects/*/*.jsonl; do
-  cargo run -q -- render "$f" -o "/tmp/$(basename "$f" .jsonl).html" || echo "FAILED: $f"
-done
-```
-
-Verify format claims against those files rather than from memory.
+They are not how the work is *checked*. Rendering every session takes minutes
+and proves only that nothing panicked. When the corpus turns up a shape worth
+handling, **write that shape into `tests/fixtures/` and assert on it**, so the
+finding becomes a test that runs in seconds and keeps running. `playground.jsonl`
+is where a tool's call and result go; the other fixtures cover one concern each.
+A shape rare enough to be worth a comment is worth a fixture line.
 
 ### Visual verification
 
