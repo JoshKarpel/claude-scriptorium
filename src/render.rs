@@ -653,9 +653,12 @@ fn separated(tokens: u64) -> String {
 /// A token count short enough to sit in a line of chrome: exact below a
 /// thousand, then one decimal place per magnitude, with a bare `.0` trimmed.
 fn compact(tokens: u64) -> String {
+    // A magnitude ends where rounding would carry into the next one: 999,950
+    // would otherwise print as `1000k`, which reads as having crossed the
+    // boundary without switching suffix.
     let (scaled, suffix) = match tokens {
         ..1_000 => return tokens.to_string(),
-        1_000..1_000_000 => (tokens as f64 / 1_000.0, "k"),
+        1_000..999_950 => (tokens as f64 / 1_000.0, "k"),
         _ => (tokens as f64 / 1_000_000.0, "M"),
     };
     let rounded = format!("{scaled:.1}");
@@ -740,6 +743,13 @@ mod tests {
         assert_eq!(compact(47_612), "47.6k");
         assert_eq!(compact(999_400), "999.4k");
         assert_eq!(compact(7_643_000), "7.6M");
+    }
+
+    #[test]
+    fn a_count_that_rounds_up_a_magnitude_takes_the_next_suffix() {
+        assert_eq!(compact(999_949), "999.9k");
+        assert_eq!(compact(999_950), "1M");
+        assert_eq!(compact(1_000_000), "1M");
     }
 
     #[test]

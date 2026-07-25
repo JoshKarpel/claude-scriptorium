@@ -843,9 +843,14 @@ mark.search__hit.is-current {
 
 /* A fold's body fills it edge to edge: a call's subject and a result's output
  * are the same kind of thing, so neither sits in a second box inside the first.
- * A code block nested deeper (inside a result's own prose) keeps its margins. */
+ * The fold is already a box, so the body sheds the chrome `.folio pre` gives a
+ * standalone block and keeps only its padding. A code block nested deeper
+ * (inside a result's own prose) stays a block and keeps its own frame. */
 .folio details > pre {
   margin: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
 }
 
 /* On wide viewports, an open marginalia that holds a code, diff, or JSON block
@@ -1108,10 +1113,6 @@ mark.search__hit.is-current {
 
 .folio pre code {
   font-family: var(--mono);
-}
-
-.marginalia__body {
-  border: none;
 }
 
 /* --- Syntax highlighting: the canonical scope roots ------------------ */

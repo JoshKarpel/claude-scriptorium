@@ -119,14 +119,18 @@ fn a_session_without_usage_reports_none() {
 }
 
 #[test]
-fn a_turn_shows_its_own_flux_and_the_folio_the_session_s() {
+fn a_turn_shows_the_input_it_added_and_the_output_it_drew() {
     let html = render(&metered(), &highlighter());
 
-    // The turn that opens the response counts only the input it added...
     assert!(html.contains(
         r#"<span class="turn__usage" title="32,403 input this turn · 214 output this turn">↑ 32.4k ↓ 214</span>"#
     ));
-    // ...while the plaque takes the largest single input the session saw.
+}
+
+#[test]
+fn the_plaque_shows_the_largest_input_and_the_total_output() {
+    let html = render(&metered(), &highlighter());
+
     assert!(html.contains(
         r#"<dd title="48,207 input at its largest · 245 output in all">↑ 48.2k ↓ 245</dd>"#
     ));
