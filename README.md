@@ -12,6 +12,14 @@ file.
 cargo install claude-scriptorium
 ```
 
+Or grab a prebuilt binary with
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall), skipping the
+compile:
+
+```bash
+cargo binstall claude-scriptorium
+```
+
 ## Usage
 
 Pick a session interactively (a project list, then its sessions, each labelled
