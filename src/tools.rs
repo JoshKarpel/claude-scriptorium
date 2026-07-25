@@ -7,7 +7,7 @@
 //! whose input doesn't match what its view expects falls back to
 //! pretty-printed JSON: a tool that grows a field must not break a render.
 
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use maud::{Markup, html};
 use serde_json::Value;
@@ -162,11 +162,17 @@ fn read(input: &Value) -> Option<Setting> {
 }
 
 /// Which lines of a file a read asked for, or `None` when it asked for all
-/// of them.
+/// of them, or when the numbers it asked with describe no span at all (a limit
+/// of zero takes nothing, and a limit that runs past the end of the counting
+/// names no last line).
 fn span(offset: Option<u64>, limit: Option<u64>) -> Option<String> {
     match (offset, limit) {
-        (Some(offset), Some(limit)) => Some(format!("lines {offset}–{}", offset + limit - 1)),
+        (Some(offset), Some(limit)) => {
+            let last = offset.checked_add(limit.checked_sub(1)?)?;
+            Some(format!("lines {offset}–{last}"))
+        }
         (Some(offset), None) => Some(format!("from line {offset}")),
+        (None, Some(0)) => None,
         (None, Some(limit)) => Some(format!("first {limit} lines")),
         (None, None) => None,
     }
@@ -445,20 +451,11 @@ pub fn result(
     is_error: bool,
 ) -> Markup {
     let tool = answers.map(|answered| answered.tool.as_str());
-    // A result that came back as text blocks says the same thing a plain-text
-    // one does, so it is set the same way: the blocks are how the harness wrote
-    // it down, not a difference in what came back.
-    let spoken;
-    let text = match content {
-        ToolResultContent::Text(text) => text,
-        ToolResultContent::Blocks(blocks) => match spoken_blocks(blocks) {
-            Some(text) => {
-                spoken = text;
-                &spoken
-            }
-            None => return blocks_result(scribe, tool, blocks),
-        },
+    let text = match spoken(content) {
+        Ok(text) => text,
+        Err(blocks) => return blocks_result(scribe, tool, blocks),
     };
+    let text = text.as_ref();
     if is_error {
         return failure(text);
     }
@@ -481,7 +478,7 @@ pub fn result(
 /// The match is on the sentence rather than on the tool, because these results
 /// are not uniformly empty: an edit that also warns the file changed on disk
 /// says something a reader needs, and must not be swallowed with the rest.
-const ACKNOWLEDGEMENTS: [(&str, &str, &str); 8] = [
+const ACKNOWLEDGEMENTS: [(&str, &str, &str); 9] = [
     ("Write", "File created successfully at:", ""),
     ("Write", "The file", "has been updated successfully."),
     ("Edit", "The file", "has been updated successfully."),
@@ -493,6 +490,10 @@ const ACKNOWLEDGEMENTS: [(&str, &str, &str); 8] = [
     ("TodoWrite", "Todos have been modified successfully.", ""),
     ("TaskUpdate", "Updated task #", ""),
     ("Skill", "Launching skill:", ""),
+    // A background agent answers with the id and output file the model needs to
+    // reach it again, and says so in as many words: none of it is addressed to
+    // a reader, and the call above it already shows what the agent was sent.
+    ("Agent", "Async agent launched successfully.", ""),
     ("EnterPlanMode", "Entered plan mode.", ""),
 ];
 
@@ -964,6 +965,18 @@ fn tags(text: &str) -> Vec<(&str, &str)> {
     tagged
 }
 
+/// What a result says, however the harness wrote it down: a result that came
+/// back as text blocks says the same thing a plain-text one does, so it reads
+/// the same way, both when it is set and when it is weighed as an
+/// acknowledgement. Blocks that aren't all text are content in their own right,
+/// and come back as themselves.
+pub fn spoken(content: &ToolResultContent) -> Result<Cow<'_, str>, &[Block]> {
+    match content {
+        ToolResultContent::Text(text) => Ok(Cow::Borrowed(text)),
+        ToolResultContent::Blocks(blocks) => spoken_blocks(blocks).map(Cow::Owned).ok_or(blocks),
+    }
+}
+
 /// What a result made only of text blocks says, or `None` when it carries
 /// anything else (an image, a reference) that is content in its own right.
 fn spoken_blocks(blocks: &[Block]) -> Option<String> {
@@ -1060,6 +1073,16 @@ mod tests {
         assert_eq!(span(Some(105), None).as_deref(), Some("from line 105"));
         assert_eq!(span(None, Some(40)).as_deref(), Some("first 40 lines"));
         assert_eq!(span(None, None), None);
+    }
+
+    #[test]
+    fn a_read_that_asked_for_no_span_names_none() {
+        // Numbers off the wire, so a limit of zero and one that runs past the
+        // end of the counting are both shapes a transcript can carry. Neither
+        // names lines, and neither is worth failing a render over.
+        assert_eq!(span(Some(105), Some(0)), None);
+        assert_eq!(span(None, Some(0)), None);
+        assert_eq!(span(Some(u64::MAX), Some(4)), None);
     }
 
     #[test]

@@ -245,8 +245,11 @@ that acknowledge and then warn the file changed on disk, and that warning is the
 only place a reader learns of it. A failure is never dropped. Match new
 acknowledgements against real transcripts rather than from memory, since the
 exact wording is what the drop keys on. A result made only of text blocks is
-joined and set the same way a plain-text one is, since the blocks are how the
-harness wrote it down rather than a difference in what came back.
+joined and read the same way a plain-text one is, since the blocks are how the
+harness wrote it down rather than a difference in what came back; `spoken` is
+that one reading, so a result is set and weighed as an acknowledgement off the
+same text (a background agent's launch answers in blocks, and is dropped like
+any other acknowledgement).
 
 One result is *parsed* rather than just set: `AskUserQuestion` answers in a
 sentence that names each question back before its answer, and the answer is what

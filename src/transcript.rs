@@ -211,7 +211,7 @@ fn answered(mut blocks: Vec<Block>, calls: &HashMap<&str, Answered>) -> Vec<Bloc
 /// never one of these: that a call *didn't* work is the whole of what it says.
 fn is_acknowledgement(block: &Block) -> bool {
     let Block::Known(Known::ToolResult {
-        content: ToolResultContent::Text(text),
+        content,
         is_error: false,
         answers: Some(answered),
         ..
@@ -219,7 +219,7 @@ fn is_acknowledgement(block: &Block) -> bool {
     else {
         return false;
     };
-    tools::acknowledges(&answered.tool, text)
+    tools::spoken(content).is_ok_and(|text| tools::acknowledges(&answered.tool, &text))
 }
 
 /// What a result needs to know about the call it answers: which tool ran, and

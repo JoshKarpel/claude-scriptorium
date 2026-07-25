@@ -378,6 +378,19 @@ fn a_result_that_only_says_the_call_worked_is_dropped() {
 }
 
 #[test]
+fn a_result_written_down_as_text_blocks_is_weighed_like_a_plain_one() {
+    let html = render(&playground(), &highlighter());
+
+    // The harness records a background agent's launch as text blocks rather
+    // than as a plain string, but that is how it was written down and not a
+    // difference in what came back: the id and output file it names are for the
+    // model to reach the agent again, and the call above it already shows what
+    // the agent was sent.
+    assert!(!html.contains("Async agent launched successfully"));
+    assert!(html.contains("Survey the drollery bestiary"));
+}
+
+#[test]
 fn a_result_that_warns_alongside_the_acknowledgement_is_kept() {
     let html = render(&playground(), &highlighter());
 

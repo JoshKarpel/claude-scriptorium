@@ -38,10 +38,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Removed
 
 - A result that says only that its call was carried out ("the file has been
-  updated successfully", "launching skill", "entered plan mode") no longer
-  appears: the call above it already shows the file it wrote or the change it
-  made. Anything the result adds keeps it, so an edit that also warns the file
-  changed on disk still reaches a reader, and a failure is always shown.
+  updated successfully", "launching skill", "entered plan mode", "async agent
+  launched successfully") no longer appears: the call above it already shows the
+  file it wrote or the change it made. Anything the result adds keeps it, so an
+  edit that also warns the file changed on disk still reaches a reader, and a
+  failure is always shown.
 - The effort level a turn ran at, in parentheses after the model name, where
   the transcript records it.
 - Token usage, where the transcript records it: each turn's meta line carries
