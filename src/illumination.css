@@ -33,6 +33,19 @@
   --rubric: light-dark(#b0281d, #e0715f); /* vermilion / red lead */
   --sienna: light-dark(#9a6410, #cf9a4c); /* yellow ochre / raw sienna */
   --gold: light-dark(#b8860b, #d9ad4e); /* solid gold, for small marks */
+
+  /* Burnished gold leaf: the 135° sheen gilded ornaments take by clipping it to
+   * their glyph. Metal reads as gold on either ground, so this is one value,
+   * not a light-dark pair. */
+  --gold-leaf: linear-gradient(
+    135deg,
+    #f6e08f 0%,
+    #d9ad4e 28%,
+    #b8860b 50%,
+    #916a12 64%,
+    #d9ad4e 82%,
+    #f6e08f 100%
+  );
   --verdigris: light-dark(#2f7a4d, #58b783); /* malachite green */
   --lapis: light-dark(#274690, #7f9fe6); /* lapis lazuli / ultramarine */
   --tyrian: light-dark(#6b2f74, #bd83c8); /* Tyrian purple / folium */
@@ -128,9 +141,10 @@ body {
 
 /* Illuminated borders down the outer margins: a per-session strip of vine
  * sections with drolleries seated among them (composed in render.rs, its data
- * URI set inline), tiled to fill the leaf however tall it grows. The left copy
- * flips so its creatures, drawn facing left, turn inward toward the text; the
- * right copy keeps them facing left, which is inward on that side. */
+ * URI set inline), tiled to fill the leaf however tall it grows. Each creature
+ * is mirrored at random within the strip, so neither margin faces a consistent
+ * way; the left copy is flipped whole so the two vines curl as a mirrored
+ * frame around the text. */
 .margin {
   position: absolute;
   top: 0.5rem;
@@ -306,10 +320,18 @@ mark.search__hit.is-current {
   gap: 0.2rem;
 }
 
-.dock__fold {
+.dock__fold,
+.dock__tail {
   display: flex;
   justify-content: center;
   gap: 0.2rem;
+}
+
+/* The follow toggle lights gold while active, so a live "tailing" reads at a
+ * glance and is told apart from the plain jump-to-end beside it. */
+.dock__btn--tail[aria-pressed="true"] {
+  --dock-hue: var(--gold);
+  background: var(--leaf-sunk);
 }
 
 .dock__btn {
@@ -380,27 +402,26 @@ mark.search__hit.is-current {
   place-items: center;
   width: 1.9rem;
   height: 1.9rem;
+  padding: 0;
   background: var(--leaf);
   border: 1px solid var(--rule);
   border-radius: 50%;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   color: var(--gold);
+  font-family: inherit;
   font-size: 1rem;
   line-height: 1;
   cursor: pointer;
-  list-style: none;
 }
 
-.plaque__seal::-webkit-details-marker {
-  display: none;
-}
-
-.plaque[open] .plaque__seal {
+.plaque:hover .plaque__seal,
+.plaque:focus-within .plaque__seal {
   color: var(--rubric);
 }
 
 .plaque__panel {
   position: absolute;
+  display: none;
   top: calc(100% + 0.4rem);
   left: 0;
   width: max-content;
@@ -410,6 +431,25 @@ mark.search__hit.is-current {
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   box-shadow: 0 6px 26px rgba(60, 46, 20, 0.22);
+}
+
+/* The panel shows while the seal is hovered or focused. A click focuses the
+ * seal (keeping :focus-within true), so it stays open until focus moves away;
+ * on touch, a tap focuses it the same way. */
+.plaque:hover .plaque__panel,
+.plaque:focus-within .plaque__panel {
+  display: block;
+}
+
+/* A transparent bridge across the seal-to-panel gap so the pointer can travel
+ * into the panel without the hover lapsing. */
+.plaque__panel::before {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
 }
 
 .plaque__title {
@@ -452,10 +492,28 @@ mark.search__hit.is-current {
 /* --- Turns ----------------------------------------------------------- */
 
 .turn {
+  position: relative;
   margin: 1.6rem 0;
   padding: 0.2rem 0 0.2rem 1.1rem;
   border-left: 2px solid var(--rule);
   scroll-margin-top: 1rem;
+}
+
+/* A deep-linked turn (its number followed, or the page opened at #turn-N) takes
+ * a faint gilt wash so the reader sees where they landed. The wash reaches as
+ * far right of the turn number as the left padding sets the text in from the
+ * border bar, so it sits symmetric; the negative margin lets the box grow
+ * rightward (into the leaf's own margin) without reflowing its content. */
+.turn:target {
+  background: color-mix(in srgb, var(--gold) 9%, transparent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding-right: 1.1rem;
+  margin-right: -1.1rem;
+}
+
+/* Hold the copy button on the turn number as the wash widens the box. */
+.turn:target .copy-button--meta {
+  right: 1.1rem;
 }
 
 .turn--user {
@@ -533,8 +591,18 @@ mark.search__hit.is-current {
   color: var(--ink-faint);
 }
 
-.turn__index {
+/* The turn number is a permalink to its own panel: click it to put #turn-N in
+ * the address bar and share the exact spot. Muted until hovered so it reads as
+ * chrome, not prose. The two-class selector outranks the .folio a link rule. */
+.turn__meta .turn__index {
   color: var(--ink-faint);
+  text-decoration: none;
+}
+
+.turn__meta .turn__index:hover,
+.turn__meta .turn__index:focus-visible {
+  color: var(--gold);
+  text-decoration: underline;
 }
 
 .turn__role {
@@ -600,6 +668,21 @@ mark.search__hit.is-current {
    * full-height capital; the DOM text stays as written, so copy and search
    * still see the original letter. */
   text-transform: uppercase;
+  /* Gild the initial by laying a slightly-expanded gold silhouette behind it:
+   * a ring of gold text-shadows traces the glyph a pixel or two out on every
+   * side (::first-letter ignores text-stroke, so the shadow ring stands in). The
+   * ring is lit diagonally, pale gold at the upper-left fading to deep gold at
+   * the lower-right, so the gilt reads as the 135° gold-leaf sheen following the
+   * glyph's own shape. The letter keeps its speaker colour on top. The golds are
+   * baked, not var(--gold): metal reads as gold on either parchment. */
+  text-shadow:
+    -2px -2px 0 #f6e08f, -1px -1px 0 #f6e08f,
+    -2px -1px 0 #ecd074, -1px -2px 0 #ecd074,
+    0 -2px 0 #dcb45a, -2px 0 0 #dcb45a,
+    1px -1px 0 #cfa347, -1px 1px 0 #cfa347,
+    2px 0 0 #b98d22, 0 2px 0 #b98d22,
+    1px 1px 0 #916a12, 2px 2px 0 #916a12,
+    0 0 3px #b8860b;
 }
 
 .turn--user .block--text[data-versal] > p:first-child::first-letter {
@@ -690,6 +773,20 @@ mark.search__hit.is-current {
 .marginalia[open] > summary::before {
   content: "❧";
   transform: rotate(90deg);
+}
+
+/* Gild the fold-marker fleurons and section dividers in the 135° gold leaf by
+ * clipping the gradient to the glyph. A lone ::before glyph has no competing
+ * background, so the sheen shows cleanly; where the clip is unsupported the
+ * solid var(--gold) above remains. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .marginalia > summary::before,
+  .folio hr::before {
+    background: var(--gold-leaf);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
 }
 
 .marginalia[open] > summary {
@@ -821,11 +918,15 @@ mark.search__hit.is-current {
   transition: opacity 0.12s ease;
 }
 
-/* On a code block the button floats in the corner; reveal it on hover. */
+/* A code / output block clips its own scroll overflow (overflow-x: auto forces
+ * overflow-y to auto), so its copy button can't ride outside the top border the
+ * way a thinking block's does. It sits just inside the top-right corner instead,
+ * over the block's top padding, always visible for discovery. */
 .folio pre > .copy-button {
   position: absolute;
-  top: 0.35rem;
-  right: 0.35rem;
+  top: 0.3rem;
+  right: 0.5rem;
+  opacity: 0.6;
 }
 
 .folio pre:hover > .copy-button,
@@ -833,14 +934,36 @@ mark.search__hit.is-current {
   opacity: 1;
 }
 
-/* In a turn header the button rides at the end of the meta row. */
+/* The turn's copy button rides the panel's top edge, flush-right under the turn
+ * number (which keeps the corner). It stays visible for discovery, muted until
+ * the panel is hovered. The leading block's clearance below keeps it off text. */
 .copy-button--meta {
-  margin-left: 0.2rem;
+  position: absolute;
+  top: 2.3rem;
+  right: 0;
+  z-index: 2;
+  opacity: 0.6;
+  transform: translateY(-50%);
 }
 
 .turn:hover .copy-button--meta,
 .copy-button--meta:focus-visible {
   opacity: 1;
+}
+
+/* Seat the always-on copy button centred on the leading block's top edge: the
+ * shaded top border of a thinking block, or the (invisible) top of a prose
+ * block, which land in the same place. The block drops by one button-height so
+ * its edge sits under the button's centre, which makes the turn-number-to-button
+ * gap equal the button-to-edge gap. A prose block also takes the same top
+ * padding a thinking block has, so its first line lands where thinking text
+ * would and never runs under the button. */
+.turn:has(.copy-button--meta) > .turn__meta + * {
+  margin-top: 1rem;
+}
+
+.turn:has(.copy-button--meta) > .turn__meta + .block--text {
+  padding-top: 0.6rem;
 }
 
 .copy-button.is-done {

@@ -166,9 +166,14 @@ A speech panel's leading paragraph opens with a rubricated versal (a dropped
 blackletter initial). `Scribe::panel` finds the first visible-text block of a
 `User`/`Assistant` panel and tags it `data-versal`; the stylesheet draws the
 drop cap on that block's opening `<p>`, coloured by the speaker and uppercased
-so a lowercased opener still gets a full-height capital. The drop is a uniform
-two lines, so a one-line message just sets a two-line minimum height rather than
-leaving the initial dangling. Tool and thinking panels carry no versal.
+so a lowercased opener still gets a full-height capital. It is gilded with a
+diagonally-lit gold-leaf silhouette that hugs the glyph: a ring of gold
+`text-shadow`s stands in for a stroke, since `::first-letter` ignores
+`text-stroke` (and `background-clip: text`), so the gilt cannot be a real
+gradient and fakes the 135° sheen through directional shadow colours. The drop
+is a uniform two lines, so a one-line message just sets a two-line minimum
+height rather than leaving the initial dangling. Tool and thinking panels carry
+no versal.
 
 ### Rendering invariants worth preserving
 
@@ -216,16 +221,22 @@ The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
 the panel stream. Reading controls sit on the right (search top, and a
 navigation dock bottom that steps between user/assistant messages, skipping tool
-and thinking panels, and folds every marginalia); appearance sits on the left (a
-metadata plaque, a top-corner disclosure holding the title, facts, and colophon;
-and the light/dark/system toggle bottom). There is no in-column header or footer.
+and thinking panels, jumps to the end, follows new messages like `tail -f`
+(re-pinning the newest message's start on each reload until the reader scrolls
+away, state kept in `localStorage`), and folds every marginalia); appearance
+sits on the left (a metadata plaque in the top corner revealing the title,
+facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
+There is no in-column header or footer.
 
 The outer margins are illuminated borders. Each is a per-session strip of vine
 sections with drolleries seated among them, composed in `render.rs`
 (`margin_strip`): a PRNG seeded from the session id (with a per-side salt, so the
 two borders differ) walks the cells, keeping most of them vine and seating a
-drollery at the occasional non-seam, non-adjacent cell. Drolleries are drawn
-from a shuffled bag of the whole bestiary that refills when drained, so a border
+drollery at the occasional non-seam, non-adjacent cell. Each seated drollery is
+also mirrored horizontally at random (about the cell centreline x=45, so it stays
+on the vine), so neither border faces a single consistent direction. Drolleries
+are drawn from a shuffled bag of the whole bestiary that refills when drained, so
+a border
 cycles through every creature before any repeats rather than showing a fixed
 few, and the strip is long enough (`STRIP_CELLS`) that all of them appear before
 it recurs. The strip is base64'd into a data URI and set as an inline

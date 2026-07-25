@@ -173,10 +173,12 @@ impl<'a> Scribe<'a> {
                     div .margin.margin--left style=(format!("background-image:url({left_border})")) aria-hidden="true" {}
                     div .margin.margin--right style=(format!("background-image:url({right_border})")) aria-hidden="true" {}
                     // The folio's plaque: title, facts, and colophon, tucked
-                    // into a disclosure in the top corner so the reading column
-                    // is pure transcript. Pure-CSS open/close, no script.
-                    details .plaque {
-                        summary .plaque__seal aria-label="folio details" title="folio details" { "❦" }
+                    // into the top corner so the reading column is pure
+                    // transcript. A pure-CSS hover/focus disclosure (no script):
+                    // the panel shows while the seal is hovered or focused, and
+                    // a click focuses the seal to hold it open.
+                    div .plaque {
+                        button .plaque__seal type="button" aria-label="folio details" title="folio details" { "❦" }
                         div .plaque__panel {
                             h1 .plaque__title { (title) }
                             dl .plaque__facts {
@@ -214,11 +216,12 @@ impl<'a> Scribe<'a> {
                             button .search__scope type="button" data-scope="thinking" aria-pressed="true" { "thinking" }
                         }
                     }
-                    // A fixed dock: jump between messages and fold every tool
-                    // call open or shut. Wired by the app script. The nav grid
-                    // is three columns of up/down arrows: the middle steps
-                    // between all messages, flanked by a user (blue) and an
-                    // assistant (orange) column that seek only that speaker.
+                    // A fixed dock: jump between messages, leap to the end and
+                    // follow new ones (tail -f), and fold every tool call open
+                    // or shut. Wired by the app script. The nav grid is three
+                    // columns of up/down arrows: the middle steps between all
+                    // messages, flanked by a user (blue) and an assistant
+                    // (orange) column that seek only that speaker.
                     nav .dock aria-label="folio navigation" {
                         div .dock__nav {
                             button .dock__btn .dock__btn--user type="button" data-nav="prev" data-role="user" aria-label="previous user message" title="previous user message" { "▲" }
@@ -227,6 +230,13 @@ impl<'a> Scribe<'a> {
                             button .dock__btn .dock__btn--user type="button" data-nav="next" data-role="user" aria-label="next user message" title="next user message" { "▼" }
                             button .dock__btn type="button" data-nav="next" aria-label="next message" title="next message" { "▼" }
                             button .dock__btn .dock__btn--assistant type="button" data-nav="next" data-role="assistant" aria-label="next assistant message" title="next assistant message" { "▼" }
+                        }
+                        // Jump to the last message, and a follow toggle that
+                        // re-pins the newest message's start on every reload
+                        // until the reader scrolls away.
+                        div .dock__tail {
+                            button .dock__btn type="button" data-nav="end" aria-label="jump to end" title="jump to end" { "⤓" }
+                            button .dock__btn .dock__btn--tail type="button" data-tail="toggle" aria-pressed="false" aria-label="follow new messages" title="follow new messages, like tail -f" { "⇊" }
                         }
                         div .dock__fold {
                             button .dock__btn .dock__btn--fold type="button" data-fold="expand" aria-label="expand all" title="expand all" { span .dock__chevron { "⌃" } span .dock__chevron { "⌄" } }
@@ -269,7 +279,8 @@ impl<'a> Scribe<'a> {
             .then(|| panel.blocks.iter().position(Block::is_visible_text))
             .flatten();
         html! {
-            article class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
+            article id={ "turn-" (panel.turn_number) }
+                class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
                 data-turn=(panel.turn_number)
                 data-sidechain[panel.is_sidechain] data-meta[panel.is_meta] {
                 header .turn__meta {
@@ -278,7 +289,7 @@ impl<'a> Scribe<'a> {
                         span .turn__model { (model) }
                     }
                     time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
-                    span .turn__index { "#" (panel.turn_number) }
+                    a .turn__index href={ "#turn-" (panel.turn_number) } { "#" (panel.turn_number) }
                 }
                 @for (index, block) in panel.blocks.iter().enumerate() {
                     (self.block(block, Some(index) == opening))
@@ -489,7 +500,12 @@ fn border_seed(session_id: &str, salt: &str) -> u64 {
 #[derive(Clone, Copy)]
 enum BorderCell {
     Vine,
-    Drollery { svg: &'static str, dx: i32, dy: i32 },
+    Drollery {
+        svg: &'static str,
+        dx: i32,
+        dy: i32,
+        flip: bool,
+    },
 }
 
 /// The whole bestiary in a fresh random order (Fisher-Yates). Drawing drolleries
@@ -519,7 +535,8 @@ fn border_cells(seed: u64) -> Vec<BorderCell> {
                 bag = shuffled_bag(&mut rng);
             }
             let (svg, dx, dy) = DROLLERIES[bag.pop().expect("bag refilled when empty")];
-            cells.push(BorderCell::Drollery { svg, dx, dy });
+            let flip = rng.next().is_multiple_of(2);
+            cells.push(BorderCell::Drollery { svg, dx, dy, flip });
         } else {
             cells.push(BorderCell::Vine);
         }
@@ -541,10 +558,19 @@ fn margin_strip(seed: u64) -> String {
         // stand alone.
         let content = match cell {
             BorderCell::Vine => VINE_CELL.to_string(),
-            BorderCell::Drollery { svg, dx, dy } => format!(
-                "{TRAIL}<g transform=\"translate({dx},{dy})\">{svg}</g>\
-                 <g transform=\"translate(0,{CELL_HEIGHT}) scale(1,-1)\">{TRAIL}</g>"
-            ),
+            BorderCell::Drollery { svg, dx, dy, flip } => {
+                // Mirror a flipped creature about the cell's centreline (x=45)
+                // so it stays seated on the vine; the trail frames it either way.
+                let place = if *flip {
+                    format!("translate(90,0) scale(-1,1) translate({dx},{dy})")
+                } else {
+                    format!("translate({dx},{dy})")
+                };
+                format!(
+                    "{TRAIL}<g transform=\"{place}\">{svg}</g>\
+                     <g transform=\"translate(0,{CELL_HEIGHT}) scale(1,-1)\">{TRAIL}</g>"
+                )
+            }
         };
         inner.push_str(&format!("<g transform=\"translate(0,{y})\">{content}</g>"));
     }
@@ -677,6 +703,25 @@ mod tests {
         // A border of pure vine would defeat the point; the generator must seat
         // creatures.
         assert!(total_drolleries > 0, "generator produced no drolleries");
+    }
+
+    #[test]
+    fn drolleries_face_both_ways_across_a_border() {
+        // Each seated creature is mirrored or not at random, so a full strip
+        // shows both facings rather than one consistent direction.
+        let cells = border_cells(border_seed("flip-variety-session", "left"));
+        let flips: Vec<bool> = cells
+            .iter()
+            .filter_map(|cell| match cell {
+                BorderCell::Drollery { flip, .. } => Some(*flip),
+                BorderCell::Vine => None,
+            })
+            .collect();
+        assert!(flips.iter().any(|&flip| flip), "no creature was flipped");
+        assert!(
+            flips.iter().any(|&flip| !flip),
+            "no creature kept its facing"
+        );
     }
 
     #[test]
