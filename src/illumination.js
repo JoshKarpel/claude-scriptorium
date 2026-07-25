@@ -346,10 +346,15 @@
     // reloads a live session drives, until the reader scrolls away.
     const tailButton = dock.querySelector('[data-tail="toggle"]');
 
-    const lastMessage = () => {
-      const panels = Array.from(container.querySelectorAll(".turn")).filter(
+    const visible = () =>
+      Array.from(container.querySelectorAll(".turn")).filter(
         (turn) => turn.getClientRects().length > 0,
       );
+
+    const firstMessage = () => visible()[0] || null;
+
+    const lastMessage = () => {
+      const panels = visible();
       return panels[panels.length - 1] || null;
     };
 
@@ -369,6 +374,11 @@
 
     const scrollToEnd = (behavior) => {
       const target = lastMessage();
+      if (target) target.scrollIntoView({ behavior, block: "start" });
+    };
+
+    const scrollToTop = (behavior) => {
+      const target = firstMessage();
       if (target) target.scrollIntoView({ behavior, block: "start" });
     };
 
@@ -437,7 +447,13 @@
       const { nav, role, fold: foldTo, tail } = button.dataset;
       if (nav === "prev") jump(-1, role);
       else if (nav === "next") jump(1, role);
-      else if (nav === "end") setTail(true, "smooth");
+      // Leaping to the top is the reader taking control, so it releases follow
+      // the way a wheel or arrow key does: otherwise the next reload of a live
+      // session would snap straight back to the end.
+      else if (nav === "top") {
+        releaseTail();
+        scrollToTop("smooth");
+      } else if (nav === "end") setTail(true, "smooth");
       else if (tail === "toggle") setTail(!tailing, "smooth");
       else if (foldTo === "expand") fold(true);
       else if (foldTo === "collapse") fold(false);

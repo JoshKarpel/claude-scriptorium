@@ -321,7 +321,7 @@ mark.search__hit.is-current {
 }
 
 .dock__fold,
-.dock__tail {
+.dock__leap {
   display: flex;
   justify-content: center;
   gap: 0.2rem;

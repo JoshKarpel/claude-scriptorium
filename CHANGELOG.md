@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A jump-to-top button in the navigation dock, beside jump-to-end. Using it
+  counts as the reader taking control, so it switches follow (`tail -f`) mode
+  off rather than letting the next reload snap back to the end.
 - The effort level a turn ran at, in parentheses after the model name, where
   the transcript records it.
 - Token usage, where the transcript records it: each turn's meta line carries

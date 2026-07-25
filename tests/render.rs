@@ -479,6 +479,14 @@ fn the_dock_offers_role_scoped_message_navigation() {
 }
 
 #[test]
+fn the_dock_leaps_to_either_end_of_the_folio() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"data-nav="top" aria-label="jump to top""#));
+    assert!(html.contains(r#"data-nav="end" aria-label="jump to end""#));
+}
+
+#[test]
 fn the_stylesheet_is_inlined_not_linked() {
     let html = render(&fixture(), &highlighter());
 

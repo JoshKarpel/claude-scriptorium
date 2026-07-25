@@ -226,8 +226,8 @@ impl<'a> Scribe<'a> {
                             button .search__scope type="button" data-scope="thinking" aria-pressed="true" { "thinking" }
                         }
                     }
-                    // A fixed dock: jump between messages, leap to the end and
-                    // follow new ones (tail -f), and fold every tool call open
+                    // A fixed dock: jump between messages, leap to either end
+                    // and follow new ones (tail -f), and fold every tool call open
                     // or shut. Wired by the app script. The nav grid is three
                     // columns of up/down arrows: the middle steps between all
                     // messages, flanked by a user (blue) and an assistant
@@ -241,10 +241,11 @@ impl<'a> Scribe<'a> {
                             button .dock__btn type="button" data-nav="next" aria-label="next message" title="next message" { "▼" }
                             button .dock__btn .dock__btn--assistant type="button" data-nav="next" data-role="assistant" aria-label="next assistant message" title="next assistant message" { "▼" }
                         }
-                        // Jump to the last message, and a follow toggle that
-                        // re-pins the newest message's start on every reload
-                        // until the reader scrolls away.
-                        div .dock__tail {
+                        // Jump to the first or last message, and a follow toggle
+                        // that re-pins the newest message's start on every
+                        // reload until the reader scrolls away.
+                        div .dock__leap {
+                            button .dock__btn type="button" data-nav="top" aria-label="jump to top" title="jump to top" { "⤒" }
                             button .dock__btn type="button" data-nav="end" aria-label="jump to end" title="jump to end" { "⤓" }
                             button .dock__btn .dock__btn--tail type="button" data-tail="toggle" aria-pressed="false" aria-label="follow new messages" title="follow new messages, like tail -f" { "⇊" }
                         }
