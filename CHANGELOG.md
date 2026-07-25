@@ -10,6 +10,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `[package.metadata.binstall]` so `cargo binstall claude-scriptorium` installs
   a prebuilt binary from the GitHub release instead of compiling from source.
+- Turn numbers are now deep links: each `#N` points at its own panel
+  (`#turn-N`), so a number is a shareable permalink and opening a folio at
+  `#turn-N` scrolls to that panel, which takes a faint gilt highlight.
+- A jump-to-end button and a follow (`tail -f`) toggle in the navigation dock.
+  Following re-pins the newest message's start on every reload (so a live
+  session tracked with `serve` stays at the latest), until the reader scrolls
+  away. Jumping to the end also starts following.
+
+### Changed
+
+- The versal drop cap that opens each message is now gilded: a gold-leaf
+  silhouette, lit diagonally, hugs the letter, which keeps its speaker colour.
+  The fold-marker and divider fleurons take the same gold-leaf sheen.
+- Marginal drolleries are mirrored at random, so neither illuminated border
+  faces a single consistent direction.
+- Copy buttons now stay visible (muted until hovered) for discovery instead of
+  appearing only on hover. A turn's copy button rides its leading block's top
+  edge, centred on the border, flush-right under the turn number; code and output
+  blocks keep theirs in the top-right corner. Panel spacing is arranged so a
+  button never covers text.
+- The deep-link `:target` wash now extends as far right of the turn number as
+  the text is inset from the border bar, so it reads symmetric.
+- The folio-details plaque reveals on hover or keyboard focus, not only on
+  click.
 
 ## [0.1.1]
 

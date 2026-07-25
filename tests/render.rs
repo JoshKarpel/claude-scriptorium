@@ -296,10 +296,21 @@ fn each_panel_is_numbered_by_its_leading_turn() {
 
     // Turns 1, 2, and 5 lead panels; turns 3 and 4 fold into turn 2's panel,
     // so their numbers never appear as labels.
-    assert!(html.contains(r#"turn__index">#1<"#));
-    assert!(html.contains(r#"turn__index">#2<"#));
-    assert!(html.contains(r#"turn__index">#5<"#));
-    assert!(!html.contains(r#"turn__index">#3<"#));
+    assert!(html.contains(r##"href="#turn-1">#1</a>"##));
+    assert!(html.contains(r##"href="#turn-2">#2</a>"##));
+    assert!(html.contains(r##"href="#turn-5">#5</a>"##));
+    assert!(!html.contains(r##"href="#turn-3">#3</a>"##));
+}
+
+#[test]
+fn each_panel_is_a_deep_link_target_its_number_points_to() {
+    let html = render(&fixture(), &highlighter());
+
+    // The panel carries an id its own number links to, so #turn-N in the URL
+    // lands on the panel and the number is a shareable permalink to it.
+    assert!(html.contains(r#"<article id="turn-1""#));
+    assert!(html.contains(r#"<article id="turn-2""#));
+    assert!(html.contains(r##"<a class="turn__index" href="#turn-1">#1</a>"##));
 }
 
 #[test]

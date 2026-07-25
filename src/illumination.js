@@ -18,6 +18,19 @@
   const THEME_KEY = "scriptorium-theme";
   const THEMES = ["system", "light", "dark"];
   const FOLD_KEY = "scriptorium-folds";
+  const TAIL_KEY = "scriptorium-tail";
+
+  // Keys whose default action scrolls the page, so pressing one counts as the
+  // reader taking over from follow mode (unless focus is in a control).
+  const SCROLL_KEYS = new Set([
+    "ArrowUp",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
+    " ",
+  ]);
 
   const readTheme = () => {
     try {
@@ -329,12 +342,76 @@
       });
     };
 
+    // --- Follow (tail -f): keep the newest message's start pinned across the
+    // reloads a live session drives, until the reader scrolls away.
+    const tailButton = dock.querySelector('[data-tail="toggle"]');
+
+    const lastMessage = () => {
+      const panels = Array.from(container.querySelectorAll(".turn")).filter(
+        (turn) => turn.getClientRects().length > 0,
+      );
+      return panels[panels.length - 1] || null;
+    };
+
+    const readTail = () => {
+      try {
+        return localStorage.getItem(TAIL_KEY) === "1";
+      } catch {
+        return false;
+      }
+    };
+
+    let tailing = readTail();
+
+    const paintTail = () => {
+      if (tailButton) tailButton.setAttribute("aria-pressed", String(tailing));
+    };
+
+    const scrollToEnd = (behavior) => {
+      const target = lastMessage();
+      if (target) target.scrollIntoView({ behavior, block: "start" });
+    };
+
+    const setTail = (on, behavior) => {
+      tailing = on;
+      try {
+        localStorage.setItem(TAIL_KEY, on ? "1" : "0");
+      } catch {}
+      paintTail();
+      if (on) scrollToEnd(behavior);
+    };
+
+    // A programmatic scrollIntoView never emits wheel/touch/keydown, so those
+    // are unambiguous reader input: any of them hands control back.
+    const releaseTail = () => {
+      if (tailing) setTail(false);
+    };
+    window.addEventListener("wheel", releaseTail, { passive: true });
+    window.addEventListener("touchmove", releaseTail, { passive: true });
+    window.addEventListener("keydown", (event) => {
+      const tag = event.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+      if (SCROLL_KEYS.has(event.key)) releaseTail();
+    });
+
+    // On load, if still following, snap to the newest message at once; a second
+    // pass after layout settles (web fonts shift it) lands it precisely.
+    paintTail();
+    if (tailing) {
+      scrollToEnd("auto");
+      requestAnimationFrame(() => {
+        if (tailing) scrollToEnd("auto");
+      });
+    }
+
     dock.addEventListener("click", (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { nav, role, fold: foldTo } = button.dataset;
+      const { nav, role, fold: foldTo, tail } = button.dataset;
       if (nav === "prev") jump(-1, role);
       else if (nav === "next") jump(1, role);
+      else if (nav === "end") setTail(true, "smooth");
+      else if (tail === "toggle") setTail(!tailing, "smooth");
       else if (foldTo === "expand") fold(true);
       else if (foldTo === "collapse") fold(false);
     });
