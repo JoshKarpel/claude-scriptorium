@@ -263,6 +263,13 @@ fn a_question_shows_every_option_it_offered() {
     assert!(html.contains(r#"<span class="tool__header">Read result</span>"#));
     assert!(html.contains(r#"<span class="tool__label">Highlight by extension</span>"#));
     assert!(html.contains("Keep the numbers"));
+    // Every question a call asked is laid out at once, rather than one screen
+    // at a time behind a control the reader has to work through.
+    assert_eq!(
+        html.matches(r#"<section class="tool__question">"#).count(),
+        2
+    );
+    assert!(html.contains(r#"<span class="tool__header">Scope</span>"#));
 }
 
 #[test]
@@ -282,6 +289,76 @@ fn a_background_tasks_answer_splits_into_its_facts_and_its_output() {
     assert!(html.contains("<dt>status</dt><dd>completed</dd>"));
     // The output is prose, so it is set as prose rather than as a terminal's.
     assert!(html.contains("<li>164 sessions</li>"));
+}
+
+fn answers() -> Folio {
+    Folio::read(Path::new("tests/fixtures/answers.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn an_answer_is_recovered_from_the_sentence_the_harness_buries_it_in() {
+    let html = render(&answers(), &highlighter());
+
+    assert!(html.contains(r#"<p class="tool__chosen">All projects, two-stage</p>"#));
+    assert!(html.contains(r#"<p class="tool__chosen">Time + first prompt</p>"#));
+    // Nothing of the framing sentence survives into the folio.
+    assert!(!html.contains("Your questions have been answered"));
+    assert!(!html.contains("You can now continue with these answers in mind"));
+}
+
+#[test]
+fn a_question_quoting_code_does_not_break_the_pairs_apart() {
+    let html = render(&answers(), &highlighter());
+
+    // The question carries `raise ValueError("...")`, so the quotes the
+    // sentence delimits its values with also appear inside one.
+    assert!(html.contains(r#"<p class="tool__chosen">Leave it</p>"#));
+}
+
+#[test]
+fn a_chosen_options_preview_is_shown_against_the_option_not_the_answer() {
+    let html = render(&answers(), &highlighter());
+
+    // The mockup is what the reader compared, so it belongs to the option in
+    // the call; the answer names the option and no more.
+    assert!(html.contains(r#"<p class="tool__chosen">In the meta line</p>"#));
+    assert!(!html.contains("selected preview"));
+    assert_eq!(html.matches("┌───────────────┐").count(), 1);
+}
+
+#[test]
+fn several_selections_arrive_as_the_one_answer_they_were_given_as() {
+    let html = render(&answers(), &highlighter());
+
+    assert!(html.contains(
+        r#"<p class="tool__chosen">Default policy by role, Valid-optional vs malformed, Derive, don't restate</p>"#
+    ));
+}
+
+#[test]
+fn an_answer_the_reader_typed_is_kept_whole() {
+    let html = render(&answers(), &highlighter());
+
+    // Typed instead of chosen, so it arrives unquoted under the other opening
+    // and with no closing sentence.
+    // The harness's own framing around it goes; that it was typed rather than
+    // chosen is kept, as a mark on the answer.
+    assert!(html.contains(
+        r#"<p class="tool__chosen" data-typed>I want copy buttons, jump, and fancy collapse."#
+    ));
+    assert!(!html.contains("The user answered:"));
+    assert!(!html.contains("no option selected"));
+    // And a typed answer may quote something of its own.
+    assert!(html.contains("it keeps matching items instead of dropping them"));
+}
+
+#[test]
+fn a_question_that_was_never_answered_stands_as_the_note_it_is() {
+    let html = render(&answers(), &highlighter());
+
+    // A timeout is not an answer, so there is no pair to find and the harness's
+    // own words are shown rather than forced into the shape of one.
+    assert!(html.contains("No response after 60s"));
 }
 
 #[test]

@@ -204,7 +204,10 @@ call and its result are therefore the same shape, and nothing sits in a second
 box inside the first. A call its summary line already states in full has no
 subject left for a body to hold, so it is set as one flat line with no fold to
 open (`marginalia--flat`); a read is the common case, since the file and the
-lines it took fit on the line and the contents arrive in the result. The
+lines it took fit on the line and the contents arrive in the result. A flat
+line's gist wraps where a folded one's ellipsises: truncation is only safe
+where a fold can reveal what was cut, and a long search query or path would
+otherwise be lost at the column's edge. The
 stylesheet keys the body off `details > pre` rather than a class, because a
 highlighted body is comrak's markup and can't carry one.
 
@@ -245,10 +248,25 @@ exact wording is what the drop keys on. A result made only of text blocks is
 joined and set the same way a plain-text one is, since the blocks are how the
 harness wrote it down rather than a difference in what came back.
 
+One result is *parsed* rather than just set: `AskUserQuestion` answers in a
+sentence that names each question back before its answer, and the answer is what
+a reader wants. `answers` recovers the pairs by anchoring on the `"=` between a
+question and its answer and walking back from the *next* anchor to the `, "` that
+opens the following question. Splitting forward on those separators looks
+simpler and fails on a third of real transcripts: a question quotes code
+containing quotes, a free-text answer runs to several clauses, and an option that
+carried a preview has that preview echoed inline, so the delimiters all turn up
+inside the values. Anything that doesn't parse (a question that timed out
+answers in prose, with no pairs at all) falls back to the text as it came.
+
 `tests/fixtures/playground.jsonl` holds one call-and-result pair per built-in
 tool, harvested from real sessions, so a change to any view can be seen against
 all of them at once: `just render tests/fixtures/playground.jsonl` (or `just
 serve` it) and screenshot with every `details` forced open.
+`tests/fixtures/answers.jsonl` is the same idea at one tool's depth: every shape
+an `AskUserQuestion` result takes across the corpus (both opening sentences, a
+missing closing one, a quoted option and typed prose, an echoed preview, several
+selections joined into one answer, and a timeout), each with a test.
 
 ### Rendering invariants worth preserving
 

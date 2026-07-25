@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   JavaScript; a question shows every option it offered; a report shows each
   finding against the file and line it is about. A tool with no view of its own
   (an MCP server's, say) still shows the input it was sent.
+- A question shows the preview an option carried, which is the mockup the reader
+  actually compared, and its answer is recovered from the sentence the harness
+  buries it in, so what was chosen reads as a line under what was asked rather
+  than as a paragraph naming every question back. An answer typed instead of
+  chosen is marked as one. A question that timed out is not an answer, and
+  stands as the note it is.
 - A result is now set by the tool that produced it: a read comes back as the
   file's own language, a search as the links it found, a background task as its
   status and its output, and an answer that is JSON comes back pretty-printed. A
@@ -61,7 +67,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A call its summary line states in full is set as one flat line with no fold to
   open, since there is no subject left for a body to hold. A read is the common
   case: it names the file and the lines it took, and its contents arrive in the
-  result below.
+  result below. Such a line wraps rather than ellipsising, because it is the
+  only place the subject appears: a folded call can be cut short at the column's
+  edge since opening it shows the subject in full, and a flat one can't.
 
 ### Fixed
 

@@ -848,11 +848,22 @@ mark.search__hit.is-current {
   color: var(--sienna);
 }
 
+/* A folded call's gist is a label, so it can ellipsise: opening the fold shows
+ * the subject in full. */
 .marginalia__gist {
   overflow: hidden;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A flat call has no fold to open, so its gist is the only place the subject
+ * appears: it wraps rather than being cut off at the column's edge. */
+.marginalia--flat .marginalia__gist {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* A qualifier on the call keeps its full width; the gist ellipsises around it. */
@@ -950,6 +961,7 @@ mark.search__hit.is-current {
 }
 
 .tool--questions,
+.tool--answers,
 .tool--findings,
 .tool--prompts,
 .tool--references,
@@ -960,6 +972,7 @@ mark.search__hit.is-current {
 }
 
 .tool--questions,
+.tool--answers,
 .tool--findings,
 .tool--prompts,
 .tool--references {
@@ -1011,6 +1024,36 @@ mark.search__hit.is-current {
 
 .tool__label + .tool__description::before {
   content: " — ";
+}
+
+/* What a reader chose, against what they were asked. The question is repeated
+ * from the call above so the answer stands on its own, but it is the answer
+ * that is being reported, so the question recedes to make room for it. */
+.tool__answer + .tool__answer {
+  margin-top: 0.6rem;
+}
+
+.tool__answer .tool__ask {
+  display: block;
+  margin: 0;
+  color: var(--ink-faint);
+}
+
+.tool__chosen {
+  margin: 0.1rem 0 0 0.9rem;
+  border-left: 2px solid var(--sienna);
+  padding-left: 0.5rem;
+  color: var(--sienna);
+  font-weight: 600;
+}
+
+/* An answer the reader typed took none of the options offered, so it is set as
+ * the prose it is rather than as the label it isn't. */
+.tool__chosen[data-typed] {
+  border-left-color: var(--rule);
+  color: var(--ink);
+  font-style: italic;
+  font-weight: 400;
 }
 
 .tool__finding + .tool__finding {

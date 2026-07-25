@@ -96,7 +96,7 @@ fn view(scribe: &Scribe, name: &str, input: &Value) -> Option<Setting> {
         "WebFetch" => web_fetch(scribe, input),
         "TaskCreate" | "TaskUpdate" => task_write(scribe, input),
         "TaskGet" | "TaskOutput" | "TaskStop" => task_reference(input),
-        "AskUserQuestion" => questions(input),
+        "AskUserQuestion" => questions(scribe, input),
         "EnterPlanMode" => Some(Setting::new()),
         "ExitPlanMode" => plan(scribe, input),
         "Workflow" => workflow(scribe, input),
@@ -284,7 +284,7 @@ fn task_reference(input: &Value) -> Option<Setting> {
     )
 }
 
-fn questions(input: &Value) -> Option<Setting> {
+fn questions(scribe: &Scribe, input: &Value) -> Option<Setting> {
     let asked = input.get("questions")?.as_array()?;
     let first = asked
         .first()
@@ -315,6 +315,14 @@ fn questions(input: &Value) -> Option<Setting> {
                                             span .tool__label { (text(option, "label").unwrap_or("")) }
                                             @if let Some(description) = text(option, "description") {
                                                 span .tool__description { (description) }
+                                            }
+                                            // An option can carry a mockup of
+                                            // what choosing it would produce,
+                                            // which is what the reader actually
+                                            // compared, so it is shown as the
+                                            // laid-out thing it is.
+                                            @if let Some(preview) = text(option, "preview") {
+                                                (scribe.code_block("text", preview))
                                             }
                                         }
                                     }
@@ -458,6 +466,7 @@ pub fn result(
         Some("Read") => source(scribe, answers.and_then(|a| a.subject.as_deref()), text),
         Some("WebSearch") => web_results(scribe, text),
         Some("TaskOutput") => task_output(scribe, text),
+        Some("AskUserQuestion") => chosen(scribe, text),
         // Output written to be read as prose, so it is set as prose.
         Some("Agent" | "ExitPlanMode" | "Skill" | "WebFetch") => prose(scribe, text),
         _ => plain(scribe, text),
@@ -504,6 +513,112 @@ pub fn acknowledges(tool: &str, text: &str) -> bool {
         .iter()
         .filter(|(named, _, _)| *named == tool)
         .any(|(_, opening, closing)| text.starts_with(opening) && text.ends_with(closing))
+}
+
+/// The two ways the harness introduces what a reader chose, and the sentence it
+/// may close with. Both are addressed to the model rather than to a reader.
+const ANSWER_OPENINGS: [&str; 2] = ["Your questions have been answered: ", "The user answered: "];
+
+const ANSWER_CLOSINGS: [&str; 2] = [
+    ". You can now continue with these answers in mind.",
+    " You can now continue with these answers in mind.",
+];
+
+/// Where an answered option's own preview is echoed back after its label.
+const SELECTED_PREVIEW: &str = "\" selected preview:";
+
+/// How the harness introduces text the reader typed instead of choosing one of
+/// the options. What follows is the answer; this is the frame around it.
+const TYPED_OPENING: &str = "(no option selected) notes:";
+
+/// One settled question: what was asked, what came back, and whether the reader
+/// typed it rather than taking one of the options offered.
+struct Answer<'a> {
+    question: &'a str,
+    chosen: &'a str,
+    typed: bool,
+}
+
+/// What was chosen, against what was asked. The harness answers as one long
+/// sentence naming each question back before its answer, so this recovers the
+/// pairs; the answer is what a reader wants, and the sentence buries it.
+///
+/// The pairs are found by anchoring on the `"=` between a question and its
+/// answer and then walking back from the *next* anchor to the `, "` that opens
+/// the following question. Splitting forward on the separators instead breaks
+/// on real transcripts: a question quotes code containing quotes, a free-text
+/// answer runs to several clauses, and an option that carried a preview has it
+/// echoed inline, all of which put the delimiters inside the values.
+fn answers(text: &str) -> Option<Vec<Answer<'_>>> {
+    let text = text.trim();
+    let mut body = ANSWER_OPENINGS
+        .iter()
+        .find_map(|opening| text.strip_prefix(opening))?;
+    body = ANSWER_CLOSINGS
+        .iter()
+        .find_map(|closing| body.strip_suffix(closing))
+        .unwrap_or(body);
+    if !body.starts_with('"') {
+        return None;
+    }
+
+    let anchors: Vec<usize> = body.match_indices("\"=").map(|(at, _)| at).collect();
+    let mut pairs = Vec::with_capacity(anchors.len());
+    // Past the quote that opens the first question.
+    let mut cursor = 1;
+    for (index, &anchor) in anchors.iter().enumerate() {
+        let question = body.get(cursor..anchor)?;
+        let mut start = anchor + 2;
+        // An answer is quoted where an option was chosen, and bare where the
+        // reader typed something instead.
+        let quoted = body.get(start..)?.starts_with('"');
+        if quoted {
+            start += 1;
+        }
+        let (region, next) = match anchors.get(index + 1) {
+            Some(&following) => {
+                let opens = body.get(start..following)?.rfind(", \"")? + start;
+                (body.get(start..opens)?, opens + 3)
+            }
+            None => (body.get(start..)?, body.len()),
+        };
+        // The preview is already shown against the option it belongs to, in the
+        // call above, so only the label it followed is kept.
+        let answer = match region.find(SELECTED_PREVIEW) {
+            Some(echo) => region.get(..echo)?,
+            None if quoted => region.strip_suffix('"').unwrap_or(region),
+            None => region,
+        };
+        let answer = answer.trim();
+        pairs.push(Answer {
+            question: question.trim(),
+            chosen: answer.strip_prefix(TYPED_OPENING).unwrap_or(answer).trim(),
+            typed: !quoted,
+        });
+        cursor = next;
+    }
+    (!pairs.is_empty()).then_some(pairs)
+}
+
+/// What a reader chose. A result that answers nothing (the harness reports a
+/// question that timed out this way) has no pairs to find, and stands as the
+/// note it is.
+fn chosen(scribe: &Scribe, text: &str) -> Markup {
+    let Some(answered) = answers(text) else {
+        return plain(scribe, text);
+    };
+    html! {
+        ul .tool.tool--answers {
+            @for answer in answered {
+                li .tool__answer {
+                    p .tool__ask { (answer.question) }
+                    // A typed answer is marked as one: it took none of the
+                    // options above it, which is itself part of what was said.
+                    p .tool__chosen data-typed[answer.typed] { (answer.chosen) }
+                }
+            }
+        }
+    }
 }
 
 /// A failure is a diagnostic, so it is shown as it came, less the tag the
