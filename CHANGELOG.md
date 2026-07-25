@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3]
+
+### Fixed
+
+- Opening a folio at a `#turn-N` deep link now lands on that panel even when
+  follow (`tail -f`) mode was left on in a previous session. An anchored load
+  counts as the reader taking control, the same way scrolling does, so follow
+  switches off instead of snapping past the linked panel to the end.
+
 ## [0.1.2]
 
 ### Added

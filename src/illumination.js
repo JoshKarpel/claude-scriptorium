@@ -394,13 +394,40 @@
       if (SCROLL_KEYS.has(event.key)) releaseTail();
     });
 
+    // A deep link (#turn-N) names the panel the reader came for, so it releases
+    // follow like a wheel or arrow key does, rather than losing the landing to
+    // a snap to the end. Releasing (not just skipping this load's snap) because
+    // the hash survives the reloads a live session drives, and a suppression
+    // that didn't persist would fight the anchor on every one.
+    //
+    // The hash is arbitrary text off the end of a shared URL, so it need be
+    // neither a valid selector (hence getElementById, as querySelector throws)
+    // nor validly escaped (hence the guard, as a stray "%" throws).
+    const anchorId = () => {
+      const raw = location.hash.slice(1);
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return raw;
+      }
+    };
+    const anchored = location.hash ? document.getElementById(anchorId()) : null;
+    const deepLink = anchored && container.contains(anchored) ? anchored : null;
+    if (deepLink) releaseTail();
+
     // On load, if still following, snap to the newest message at once; a second
-    // pass after layout settles (web fonts shift it) lands it precisely.
+    // pass after layout settles (web fonts shift it) lands it precisely. A
+    // deep-linked turn needs that second pass too, since the browser's own
+    // anchor scroll happens before the fonts land.
     paintTail();
     if (tailing) {
       scrollToEnd("auto");
       requestAnimationFrame(() => {
         if (tailing) scrollToEnd("auto");
+      });
+    } else if (deepLink) {
+      requestAnimationFrame(() => {
+        deepLink.scrollIntoView({ behavior: "auto", block: "start" });
       });
     }
 
