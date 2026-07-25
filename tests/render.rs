@@ -23,6 +23,7 @@ fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
         generated: "2026-03-12T09:15:00Z".parse::<Timestamp>().unwrap(),
         tool: "claude-scriptorium",
         version: "0.1.0",
+        home: "https://example.invalid/scriptorium",
     };
     scribe.folio(folio, &colophon).into_string()
 }
@@ -768,4 +769,13 @@ fn the_colophon_stamps_the_run() {
 
     assert!(html.contains("claude-scriptorium"));
     assert!(html.contains("2026-03-12 09:15:00 UTC"));
+}
+
+#[test]
+fn the_colophon_links_the_tool_to_its_home() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(
+        r#"Written by <a href="https://example.invalid/scriptorium">claude-scriptorium</a> 0.1.0"#
+    ));
 }
