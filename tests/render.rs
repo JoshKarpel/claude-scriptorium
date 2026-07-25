@@ -75,6 +75,68 @@ fn session_id_comes_from_the_file_name() {
 }
 
 #[test]
+fn the_effort_level_refines_the_model_name() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(
+        r#"<span class="turn__model">claude-opus-4-8 <span class="turn__effort">(high)</span></span>"#
+    ));
+    // The turn the harness recorded no effort for names the model alone.
+    assert!(html.contains(r#"<span class="turn__model">claude-opus-4-8</span>"#));
+}
+
+fn metered() -> Folio {
+    Folio::read(Path::new("tests/fixtures/usage.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn a_response_written_as_several_lines_is_counted_once() {
+    let folio = metered();
+
+    // Both lines of msg_quire report the response's usage; only the first
+    // keeps it, so the second contributes nothing to the total.
+    let counted: Vec<u64> = folio
+        .turns
+        .iter()
+        .filter_map(|turn| turn.usage)
+        .map(|usage| usage.output_tokens)
+        .collect();
+    assert_eq!(counted, [214, 31]);
+}
+
+#[test]
+fn a_session_totals_its_output_but_takes_its_largest_input() {
+    let folio = metered();
+
+    assert_eq!(folio.output(), Some(245));
+    assert_eq!(folio.largest_input(), Some(48_207));
+}
+
+#[test]
+fn a_session_without_usage_reports_none() {
+    assert!(fixture().output().is_none());
+    assert!(fixture().largest_input().is_none());
+}
+
+#[test]
+fn a_turn_shows_the_input_it_added_and_the_output_it_drew() {
+    let html = render(&metered(), &highlighter());
+
+    assert!(html.contains(
+        r#"<span class="turn__usage" title="32,403 input this turn · 214 output this turn">↑ 32.4k ↓ 214</span>"#
+    ));
+}
+
+#[test]
+fn the_plaque_shows_the_largest_input_and_the_total_output() {
+    let html = render(&metered(), &highlighter());
+
+    assert!(html.contains(
+        r#"<dd title="48,207 input at its largest · 245 output in all">↑ 48.2k ↓ 245</dd>"#
+    ));
+}
+
+#[test]
 fn unrecognized_block_types_render_as_json_instead_of_failing() {
     let html = render(&fixture(), &highlighter());
 
@@ -121,7 +183,8 @@ fn tools() -> Folio {
 fn bash_calls_show_their_description_and_highlighted_command() {
     let html = render(&tools(), &highlighter());
 
-    assert!(html.contains(r#"<p class="tool__caption">Scaffold the crate</p>"#));
+    // The description labels the fold; the command fills its body.
+    assert!(html.contains(r#"<span class="marginalia__gist">Scaffold the crate</span>"#));
     // The command is a highlighted shell block, not raw JSON.
     assert!(html.contains("ink-shell"));
     assert!(html.contains("cargo"));
@@ -140,7 +203,7 @@ fn write_calls_highlight_content_by_file_extension() {
 fn edit_calls_render_before_and_after_as_a_diff() {
     let html = render(&tools(), &highlighter());
 
-    assert!(html.contains(r#"<p class="tool__caption">replace all occurrences</p>"#));
+    assert!(html.contains(r#"<span class="marginalia__note">replace all</span>"#));
     // The old line is a deletion and the new line an insertion in the diff.
     assert!(html.contains("ink-deleted"));
     assert!(html.contains("ink-inserted"));
