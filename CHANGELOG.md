@@ -11,11 +11,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The effort level a turn ran at, in parentheses after the model name, where
   the transcript records it.
 - Token usage, where the transcript records it: each turn's meta line carries
-  what the model read and what it wrote, faint until the panel is hovered, and
-  the folio's plaque carries the session's totals. Hovering either shows the
-  full breakdown of fresh input, cache writes, and cache reads. One API response
-  is written to the transcript a block at a time, each line repeating the
-  response's usage, so a response is counted once.
+  its input and output, faint until the panel is hovered, and the folio's plaque
+  carries the session's flux. Hovering either gives the exact counts, each
+  naming the scope it covers. A turn counts only the input it added, since every
+  request re-sends the whole conversation and a turn's own output is what that
+  stands against. A session's output totals, while its input is the largest
+  single turn's: how big the conversation ever got, rather than a sum that would
+  count the same text once per turn that saw it. One API response is written to
+  the transcript a block at a time, each line repeating the response's usage, so
+  a response is counted once.
 
 ### Changed
 

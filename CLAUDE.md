@@ -141,8 +141,20 @@ One API response is written to the transcript a block at a time: several
 response's `usage`. Counting each line would multiply what a session cost, so
 `Folio::read` keeps the usage on the first line carrying an id and drops it from
 the rest. Anything else derived from usage must respect that: it is a fact about
-a response, not about a line. The effort a turn ran at is recorded beside the
-message rather than inside it, and only by harness versions that track it.
+a response, not about a line.
+
+Usage is input and output tokens, and the words matter: "read" and "written" are
+what tools do to files, not what a model does with a conversation. The input is
+split by cache (fresh, cached this turn, replayed from an earlier one), which is
+how it is *billed* and says nothing about the conversation, so `Usage::input`
+recombines it. Every request re-sends the whole conversation, so a per-turn input
+figure would restate the session rather than the turn: a panel shows
+`Usage::uncached_input`, the part not served from cache, which is what the turn
+added and what its own output stands against. Over a session, the output totals
+(`Folio::output`) but the input is the largest single turn's
+(`Folio::largest_input`), how big the conversation ever got, for the same reason.
+The effort a turn ran at is recorded beside the message rather than inside it,
+and only by harness versions that track it.
 
 Content blocks parse as `Block::Known(...)` or fall through to
 `Block::Unknown(Value)`, which renders as formatted JSON. This is deliberate

@@ -627,9 +627,9 @@ mark.search__hit.is-current {
   color: var(--ink-faint);
 }
 
-/* Push the timestamp and turn number to the panel's top-right corner. */
-/* What the turn cost sits with the turn's other facts, faint enough to read as
- * an aside until the panel is hovered. Its full breakdown is the title. */
+/* The turn's input and output sit with its other facts, faint enough to read as
+ * an aside until the panel is hovered. Its exact counts, and which scope they
+ * cover, are the title. */
 .turn__usage {
   opacity: 0.45;
   font-variant-numeric: tabular-nums;
@@ -641,6 +641,7 @@ mark.search__hit.is-current {
   opacity: 1;
 }
 
+/* Push the timestamp and turn number to the panel's top-right corner. */
 .turn__time {
   margin-left: auto;
 }

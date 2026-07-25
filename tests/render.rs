@@ -105,28 +105,31 @@ fn a_response_written_as_several_lines_is_counted_once() {
 }
 
 #[test]
-fn session_usage_totals_every_counted_response() {
-    let total = metered().usage().expect("the fixture reports usage");
+fn a_session_totals_its_output_but_takes_its_largest_input() {
+    let folio = metered();
 
-    assert_eq!(total.input_tokens, 10);
-    assert_eq!(total.output_tokens, 245);
-    assert_eq!(total.cache_creation_input_tokens, 33_000);
-    assert_eq!(total.cache_read_input_tokens, 62_800);
+    assert_eq!(folio.output(), Some(245));
+    assert_eq!(folio.largest_input(), Some(48_207));
 }
 
 #[test]
 fn a_session_without_usage_reports_none() {
-    assert!(fixture().usage().is_none());
+    assert!(fixture().output().is_none());
+    assert!(fixture().largest_input().is_none());
 }
 
 #[test]
-fn turns_and_the_folio_both_show_what_they_cost() {
+fn a_turn_shows_its_own_flux_and_the_folio_the_session_s() {
     let html = render(&metered(), &highlighter());
 
-    // The turn that opens the response carries its own figures...
-    assert!(html.contains(r#"<span class="turn__usage" title="3 input · 32.4k cache write · 15.2k cache read · 214 output">↑ 47.6k ↓ 214</span>"#));
-    // ...and the plaque carries the session's.
-    assert!(html.contains(r#"<dd title="10 input · 33k cache write · 62.8k cache read · 245 output">↑ 95.8k ↓ 245</dd>"#));
+    // The turn that opens the response counts only the input it added...
+    assert!(html.contains(
+        r#"<span class="turn__usage" title="32,403 input this turn · 214 output this turn">↑ 32.4k ↓ 214</span>"#
+    ));
+    // ...while the plaque takes the largest single input the session saw.
+    assert!(html.contains(
+        r#"<dd title="48,207 input at its largest · 245 output in all">↑ 48.2k ↓ 245</dd>"#
+    ));
 }
 
 #[test]

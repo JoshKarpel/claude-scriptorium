@@ -189,8 +189,13 @@ impl<'a> Scribe<'a> {
                                 @if let Some(first) = panels.first() {
                                     dt { "opened" } dd { (self.stamp(first.timestamp)) }
                                 }
-                                @if let Some(usage) = folio.usage() {
-                                    dt { "tokens" } dd title=(breakdown(&usage)) { (tally(&usage)) }
+                                // The session's flux: how big the conversation
+                                // ever got, against all the output. The input
+                                // is the largest single turn's rather than a
+                                // sum, since every turn is sent the whole
+                                // conversation.
+                                @if let (Some(input), Some(output)) = (folio.largest_input(), folio.output()) {
+                                    dt { "tokens" } dd title=(folio_flux(input, output)) { (tally(input, output)) }
                                 }
                             }
                             p .plaque__colophon {
@@ -299,7 +304,9 @@ impl<'a> Scribe<'a> {
                         }
                     }
                     @if let Some(usage) = &panel.usage {
-                        span .turn__usage title=(breakdown(usage)) { (tally(usage)) }
+                        span .turn__usage title=(turn_flux(usage)) {
+                            (tally(usage.uncached_input(), usage.output_tokens))
+                        }
                     }
                     time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
                     a .turn__index href={ "#turn-" (panel.turn_number) } { "#" (panel.turn_number) }
@@ -604,26 +611,43 @@ fn note(input: &Value) -> Option<&'static str> {
         .then_some("replace all")
 }
 
-/// Token usage at a glance: what the model read, then what it wrote.
-fn tally(usage: &Usage) -> String {
+/// Token flux at a glance: what went in, then what came out.
+fn tally(input: u64, output: u64) -> String {
+    format!("↑ {} ↓ {}", compact(input), compact(output))
+}
+
+/// A turn's figures unrounded, for the title a reader hovers. Its input is what
+/// the turn added, so it stands beside the turn's own output rather than
+/// restating the whole conversation the request re-sent.
+fn turn_flux(usage: &Usage) -> String {
     format!(
-        "↑ {} ↓ {}",
-        compact(usage.context()),
-        compact(usage.output_tokens)
+        "{} input this turn · {} output this turn",
+        separated(usage.uncached_input()),
+        separated(usage.output_tokens),
     )
 }
 
-/// The same usage spelled out, for the title a reader hovers to see where the
-/// context came from: a cache read costs a fraction of fresh input, so the
-/// split is the interesting part.
-fn breakdown(usage: &Usage) -> String {
+/// The folio's figures unrounded. Its input is the largest single turn's, not a
+/// sum, so the title says which.
+fn folio_flux(largest_input: u64, output: u64) -> String {
     format!(
-        "{} input · {} cache write · {} cache read · {} output",
-        compact(usage.input_tokens),
-        compact(usage.cache_creation_input_tokens),
-        compact(usage.cache_read_input_tokens),
-        compact(usage.output_tokens),
+        "{} input at its largest · {} output in all",
+        separated(largest_input),
+        separated(output),
     )
+}
+
+/// A count grouped in thousands, so an exact figure stays readable.
+fn separated(tokens: u64) -> String {
+    let digits = tokens.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 /// A token count short enough to sit in a line of chrome: exact below a
@@ -719,7 +743,9 @@ mod tests {
     }
 
     #[test]
-    fn a_tally_reads_context_in_then_tokens_out() {
+    fn a_turn_counts_only_the_input_it_added() {
+        // The cached prefix is the conversation the request re-sent, so it is
+        // no part of what this turn contributed.
         let usage = Usage {
             input_tokens: 3,
             output_tokens: 214,
@@ -727,11 +753,31 @@ mod tests {
             cache_read_input_tokens: 15_200,
         };
 
-        assert_eq!(tally(&usage), "↑ 47.6k ↓ 214");
         assert_eq!(
-            breakdown(&usage),
-            "3 input · 32.4k cache write · 15.2k cache read · 214 output"
+            tally(usage.uncached_input(), usage.output_tokens),
+            "↑ 32.4k ↓ 214"
         );
+        assert_eq!(
+            turn_flux(&usage),
+            "32,403 input this turn · 214 output this turn"
+        );
+    }
+
+    #[test]
+    fn a_folio_names_its_input_as_the_largest_rather_than_a_sum() {
+        assert_eq!(
+            folio_flux(60_867, 48_923),
+            "60,867 input at its largest · 48,923 output in all"
+        );
+    }
+
+    #[test]
+    fn exact_counts_group_in_thousands() {
+        assert_eq!(separated(7), "7");
+        assert_eq!(separated(942), "942");
+        assert_eq!(separated(1_206), "1,206");
+        assert_eq!(separated(47_603), "47,603");
+        assert_eq!(separated(7_643_812), "7,643,812");
     }
 
     #[test]

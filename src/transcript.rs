@@ -116,14 +116,26 @@ impl Folio {
         }
     }
 
-    /// What the whole session cost, or `None` when no turn reports usage. The
-    /// cached prefix counts once per turn that read it, since each turn reads
-    /// it again.
-    pub fn usage(&self) -> Option<Usage> {
+    /// The output across the session, or `None` when no turn reports usage.
+    /// Output totals, since each turn produces its own.
+    pub fn output(&self) -> Option<u64> {
         self.turns
             .iter()
             .filter_map(|turn| turn.usage)
-            .reduce(|total, usage| total + usage)
+            .map(|usage| usage.output_tokens)
+            .reduce(|total, output| total + output)
+    }
+
+    /// The largest input any one turn took, or `None` when no turn reports
+    /// usage: how big the conversation ever got. A high-water mark rather than
+    /// a sum, since every turn is sent the whole conversation and summing that
+    /// would count the same text once per turn that saw it.
+    pub fn largest_input(&self) -> Option<u64> {
+        self.turns
+            .iter()
+            .filter_map(|turn| turn.usage)
+            .map(|usage| usage.input())
+            .max()
     }
 
     /// Folds the raw turns into the display stream: drops `/clear` boundaries
@@ -225,24 +237,22 @@ pub struct Usage {
 }
 
 impl Usage {
-    /// Everything the model read: fresh input plus the cached prefix, whether
-    /// that prefix was written this turn or replayed from an earlier one.
-    pub fn context(&self) -> u64 {
+    /// Everything the model was sent for this turn, which is the conversation
+    /// as it stood. The transcript splits it by where it was served from
+    /// (fresh, cached this turn, replayed from an earlier one), a billing
+    /// distinction rather than anything about the conversation, so this
+    /// recombines it.
+    pub fn input(&self) -> u64 {
         self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
     }
-}
 
-impl std::ops::Add for Usage {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            input_tokens: self.input_tokens + other.input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            cache_creation_input_tokens: self.cache_creation_input_tokens
-                + other.cache_creation_input_tokens,
-            cache_read_input_tokens: self.cache_read_input_tokens + other.cache_read_input_tokens,
-        }
+    /// The part of that input the model had not been sent before: what this
+    /// turn added to the conversation, which is what the turn's own output can
+    /// be read against. The cache holds exactly the prefix already sent, so its
+    /// boundary marks what is new, except where a lapsed cache re-sends a
+    /// prefix and counts it new again.
+    pub fn uncached_input(&self) -> u64 {
+        self.input_tokens + self.cache_creation_input_tokens
     }
 }
 
