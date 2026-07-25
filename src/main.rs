@@ -16,7 +16,7 @@ use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
 use inquire::{Confirm, InquireError};
 use jiff::{Timestamp, tz::TimeZone};
 
-/// Environment variable holding a default `--preview` viewer base, so a machine
+/// Environment variable holding a default preview viewer base, so a machine
 /// that always publishes to one viewer (a work laptop on a GHES instance) can
 /// set it once instead of passing `--preview-base` every time.
 const VIEWER_BASE_ENV: &str = "CLAUDE_SCRIPTORIUM_VIEWER_BASE";
@@ -37,6 +37,10 @@ enum Command {
     Serve(ServeArgs),
     /// Publish a rendered session to a GitHub gist via the `gh` CLI.
     Publish(PublishArgs),
+    /// List the gists this tool has published.
+    Gists,
+    /// Delete a gist this tool published (by id/URL, or all of them).
+    Delete(DeleteArgs),
     /// Download a published gist's files to view a folio offline.
     Fetch(FetchArgs),
     /// Scaffold a self-hostable folio-viewer site to serve from GitHub Pages
@@ -96,16 +100,9 @@ struct PublishArgs {
     #[arg(long)]
     public: bool,
 
-    /// Also print a preview link that renders the folio in a browser through a
-    /// viewer page (this project's Pages site by default). Off by default; the
-    /// reader's browser fetches the gist from GitHub, so the viewer host never
-    /// sees the transcript.
-    #[arg(long)]
-    preview: bool,
-
-    /// Viewer base URL for `--preview`, e.g. a self-hosted or GHES viewer from
-    /// `scaffold-viewer`. Falls back to $CLAUDE_SCRIPTORIUM_VIEWER_BASE, then to
-    /// this project's viewer for github.com gists.
+    /// Viewer base URL for the preview link, e.g. a self-hosted or GHES viewer
+    /// from `scaffold-viewer`. Falls back to $CLAUDE_SCRIPTORIUM_VIEWER_BASE,
+    /// then to this project's viewer for github.com gists.
     #[arg(long, value_name = "URL")]
     preview_base: Option<String>,
 
@@ -114,9 +111,25 @@ struct PublishArgs {
     yes: bool,
 
     /// Open the published folio in the default browser (the preview link when
-    /// `--preview` is set, otherwise the gist page).
+    /// there is a viewer for the gist's host, otherwise the gist page).
     #[arg(long)]
     open: bool,
+}
+
+#[derive(Args)]
+struct DeleteArgs {
+    /// Gist id or URL to delete. Omit together with `--all` to delete every
+    /// gist this tool has published.
+    gist: Option<String>,
+
+    /// Delete every gist this tool has published, after listing and confirming
+    /// them.
+    #[arg(long)]
+    all: bool,
+
+    /// Skip the confirmation prompt (for non-interactive use).
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -151,6 +164,8 @@ fn main() -> Result<()> {
         Command::Render(args) => render(args),
         Command::Serve(args) => serve(args),
         Command::Publish(args) => publish(args),
+        Command::Gists => gists(),
+        Command::Delete(args) => delete(args),
         Command::Fetch(args) => fetch(args),
         Command::ScaffoldViewer(args) => scaffold_viewer(args),
     }
@@ -197,21 +212,34 @@ fn publish(args: PublishArgs) -> Result<()> {
             .ok()
             .filter(|value| !value.is_empty())
     });
-    let viewer_base = resolve_viewer(&identity, args.preview, base_override, args.yes)?;
+    let viewer_base = resolve_viewer(&identity, base_override);
 
     let highlighter = highlighter();
     let scribe = Scribe::new(&highlighter, TimeZone::system());
     let html = scribe.folio(&folio, &colophon()).into_string();
 
-    let filename = format!("{}.html", folio.session_id());
-    let description = gist_description(&session, folio.session_id());
-    let gist_url = gist::publish(&html, &filename, &description, args.public)?;
+    let session_id = folio.session_id();
+    let filename = format!("{session_id}.html");
+    let description = gist::describe(session_id, Folio::peek(&session).title.as_deref());
+    let published = gist::publish(&html, session_id, &description, args.public)?;
 
+    if published.updated {
+        println!("updated the gist already published for this session");
+    }
+    let gist_url = published.url;
     println!("{gist_url}");
+
     let preview = viewer_base.map(|base| gist::preview_url(&base, &gist_url, &filename));
     if let Some(preview) = &preview {
-        println!("{preview}");
+        println!();
+        println!("preview (renders the folio in a browser through a viewer page):");
+        println!("  {preview}");
+        println!(
+            "  the reader's browser fetches the gist straight from GitHub, so the viewer's host never sees the transcript."
+        );
     }
+
+    println!();
     println!("anyone can view it locally, with no proxy, by running:");
     println!("  {} fetch {gist_url} --open", env!("CARGO_PKG_NAME"));
 
@@ -255,45 +283,27 @@ fn confirm_publish(identity: &gist::Identity, public: bool, assume_yes: bool) ->
     Ok(())
 }
 
-/// Chooses the viewer base for the preview link, or `None` to publish without
-/// one. Requested with `--preview`, an explicit base (`--preview-base` or the
-/// env var, resolved by the caller) wins; otherwise a github.com gist falls back
-/// to this project's own viewer, and any other host (a GHES instance) has no
-/// built-in viewer, so it is skipped with a pointer to `scaffold-viewer`. The
-/// choice is confirmed, since the link renders the folio through a viewer page
-/// even though its content stays between GitHub and the reader's browser.
-fn resolve_viewer(
-    identity: &gist::Identity,
-    requested: bool,
-    base_override: Option<String>,
-    assume_yes: bool,
-) -> Result<Option<String>> {
-    if !requested {
-        return Ok(None);
-    }
-
-    let base = match base_override {
-        Some(base) => base,
-        None if identity.host == "github.com" => gist::DEFAULT_VIEWER_BASE.to_owned(),
+/// Chooses the viewer base for the preview link, or `None` when there is no
+/// viewer for the gist's host. An explicit base (`--preview-base` or the env
+/// var, resolved by the caller) wins; a github.com gist falls back to this
+/// project's own viewer; any other host (a GHES instance) has no built-in
+/// viewer, so the link is skipped with a pointer to `scaffold-viewer`. Printing
+/// the link is harmless (the caller notes that only a reader's browser, not the
+/// viewer's host, ever fetches the transcript), so this only picks the base and
+/// never prompts.
+fn resolve_viewer(identity: &gist::Identity, base_override: Option<String>) -> Option<String> {
+    match base_override {
+        Some(base) => Some(base),
+        None if identity.host == "github.com" => Some(gist::DEFAULT_VIEWER_BASE.to_owned()),
         None => {
             eprintln!(
                 "note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and pass --preview-base. Publishing without a preview link.",
                 identity.host,
                 env!("CARGO_PKG_NAME")
             );
-            return Ok(None);
+            None
         }
-    };
-
-    if assume_yes {
-        return Ok(Some(base));
     }
-
-    println!("The preview link renders the folio through a viewer page at {base}.");
-    println!(
-        "The reader's browser fetches the gist straight from GitHub; the viewer's host never sees it."
-    );
-    Ok(ask("Include the preview link?")?.then_some(base))
 }
 
 /// Prompts a yes/no question, treating a cancellation (Esc / Ctrl-C) as "no".
@@ -302,6 +312,101 @@ fn ask(question: &str) -> Result<bool> {
         Ok(answer) => Ok(answer),
         Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(false),
         Err(error) => Err(error.into()),
+    }
+}
+
+/// Confirms a destructive action, refusing rather than proceeding when there is
+/// no terminal to prompt at and `--yes` was not given.
+fn require_confirmation(question: &str, assume_yes: bool) -> Result<()> {
+    if assume_yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("refusing without confirmation: pass --yes");
+    }
+    if !ask(question)? {
+        bail!("aborted");
+    }
+    Ok(())
+}
+
+fn gists() -> Result<()> {
+    let identity = gist::resolve_identity()?;
+    let ours = gist::list_ours()?;
+    if ours.is_empty() {
+        println!(
+            "no gists published by {} as {identity}",
+            env!("CARGO_PKG_NAME")
+        );
+        return Ok(());
+    }
+    for gist in &ours {
+        print_gist(gist);
+    }
+    Ok(())
+}
+
+fn delete(args: DeleteArgs) -> Result<()> {
+    let identity = gist::resolve_identity()?;
+    if args.all {
+        if args.gist.is_some() {
+            bail!("pass a gist id/URL or --all, not both");
+        }
+        return delete_all(&identity, args.yes);
+    }
+
+    let gist = args
+        .gist
+        .context("give a gist id or URL to delete, or --all to delete every published gist")?;
+    let found = gist::lookup(&gist)?;
+    if !found.is_ours() {
+        bail!(
+            "{} was not published by {} and will not be deleted",
+            found.id,
+            env!("CARGO_PKG_NAME")
+        );
+    }
+
+    println!("Deleting this gist, published as {identity}:");
+    print_gist(&found);
+    require_confirmation("Delete it?", args.yes)?;
+    gist::delete(&found.id)?;
+    println!("deleted {}", found.id);
+    Ok(())
+}
+
+/// Deletes every gist this tool published, listing them and confirming as a
+/// batch so a bulk delete is never a blind one.
+fn delete_all(identity: &gist::Identity, assume_yes: bool) -> Result<()> {
+    let ours = gist::list_ours()?;
+    if ours.is_empty() {
+        println!(
+            "no gists published by {} as {identity}",
+            env!("CARGO_PKG_NAME")
+        );
+        return Ok(());
+    }
+
+    println!(
+        "Deleting these {} gists, published as {identity}:",
+        ours.len()
+    );
+    for gist in &ours {
+        print_gist(gist);
+    }
+    require_confirmation("Delete all of them?", assume_yes)?;
+    for gist in &ours {
+        gist::delete(&gist.id)?;
+        println!("deleted {}", gist.id);
+    }
+    Ok(())
+}
+
+fn print_gist(gist: &gist::PublishedGist) {
+    let visibility = if gist.public { "public" } else { "secret" };
+    println!("  {}  ({visibility})", gist.url);
+    if let Some(description) = &gist.description {
+        println!("    {description}");
     }
 }
 
@@ -394,24 +499,11 @@ fn viewer_readme(host: Option<&str>) -> String {
          ## Use\n\n\
          Point `publish` at it:\n\n\
          ```\n\
-         {} publish --preview --preview-base https://<owner>.github.io/<repo>/\n\
+         {} publish --preview-base https://<owner>.github.io/<repo>/\n\
          ```\n\n\
          Vendored from GistHost (MIT); see the license header in `index.html`.\n",
         env!("CARGO_PKG_NAME")
     )
-}
-
-/// A gist description recovered from the session's own title, falling back to
-/// the session id when it has none. Collapses whitespace so a multi-line first
-/// prompt (the title fallback) stays a single-line description.
-fn gist_description(session: &Path, session_id: &str) -> String {
-    match Folio::peek(session).title {
-        Some(title) => format!(
-            "Claude Code session: {}",
-            title.split_whitespace().collect::<Vec<_>>().join(" ")
-        ),
-        None => format!("Claude Code session {session_id}"),
-    }
 }
 
 fn resolve_session(selection: Selection) -> Result<PathBuf> {

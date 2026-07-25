@@ -26,6 +26,10 @@ than an error, so formatting silently diverges from CI if you run stable.
 variable (mise sets one) overrides the file. The pin therefore takes effect in
 CI and often not locally.
 
+When a change is user-visible (a new subcommand or flag, changed output, a bug
+fix), add an entry to `CHANGELOG.md` under the current unreleased version,
+grouped per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
 ## Architecture
 
 One session JSONL in, one self-contained HTML file out. Three stages, one
@@ -65,13 +69,27 @@ into the *served* response; the written file carries the folio's own app script
 but never the reload snippet (see below).
 
 `gist` (`src/gist.rs`) is the sharing path: `publish` renders a session and
-pipes the HTML to `gh gist create`, `fetch` downloads a gist's files for offline
-viewing, and `scaffold-viewer` writes a self-hostable viewer site. It shells out
-to the `gh` CLI rather than calling the GitHub API, so authentication, host
-selection, and account resolution stay gh's job and no token lives in this code.
-`gh gist create` has no `--hostname` and targets gh's default host, so
-`resolve_identity` recovers that account (mirroring gh's own host precedence) and
-the shell confirms it before pushing.
+pipes the HTML to a gist, `fetch` downloads a gist's files for offline viewing,
+`scaffold-viewer` writes a self-hostable viewer site, and `gists`/`delete`
+manage what this tool has published. It shells out to the `gh` CLI (its `gist`
+porcelain, plus `gh api gists` where a JSON listing is needed) rather than
+holding a GitHub token, so authentication, host selection, and account
+resolution stay gh's job and no token lives in this code. `gh gist create` has
+no `--hostname` and targets gh's default host, so `resolve_identity` recovers
+that account (mirroring gh's own host precedence) and the shell confirms it
+before pushing.
+
+`publish` is idempotent per session. Every gist's description is stamped with a
+marker (`GIST_MARKER`, this tool's package name) followed by the session id, and
+its one file is named `<session-id>.html`. A republish finds the existing gist
+by that filename and edits it in place, so the URL stays stable and re-running
+doesn't pile up duplicates; visibility is fixed at creation, so a republish that
+would flip secret/public fails loudly instead. The same marker is what makes a
+gist recognisable as ours: `gists` lists only marked gists, and `delete` refuses
+any gist whose description lacks the marker, so it can never remove something
+this tool didn't publish. `delete --all` lists every marked gist and confirms as
+a batch. Gists published before the marker existed carry an older description
+and are deliberately not recognised.
 
 A folio over GitHub's ~1 MB inline-render cutoff can't be viewed on the gist
 page, so browser viewing goes through a **viewer**: a ~6 KB static page
@@ -81,10 +99,13 @@ transcript's path is GitHub to the reader; the viewer's host never receives it,
 unlike a re-serving proxy. That one file is both served from this project's own
 Pages site and `include_str!`'d into the binary, so `scaffold_viewer` emits a
 self-hostable copy from the same source (rewriting the API base for a GHES host).
-The preview link is opt-in behind `--preview` and a confirmation; its base comes
-from `--preview-base`, then `$CLAUDE_SCRIPTORIUM_VIEWER_BASE`, then this
-project's viewer for github.com. `fetch` stays the no-network-rendering path for
-sensitive sessions. The pure helpers (host precedence, identity parsing, URL and
+`publish` prints the preview link by default, with no opt-in flag or
+confirmation: printing a link is harmless, and the accompanying note makes clear
+only a reader's browser (never the viewer's host) fetches the transcript. Its
+base comes from `--preview-base`, then
+`$CLAUDE_SCRIPTORIUM_VIEWER_BASE`, then this project's viewer for github.com; a
+host with no viewer (a GHES instance without `--preview-base`) simply prints no
+link. `fetch` stays the no-network-rendering path for sensitive sessions. The pure helpers (host precedence, identity parsing, URL and
 viewer construction) are unit-tested; the `gh`-shelling and prompts stay in the
 shell.
 

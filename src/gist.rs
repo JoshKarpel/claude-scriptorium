@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 /// This project's own viewer, served from its GitHub Pages site, used to render
 /// a published github.com gist. The viewer's host never receives the transcript:
@@ -31,6 +31,38 @@ const VIEWER_TEMPLATE: &str = include_str!("../docs/index.html");
 /// The GitHub API the embedded viewer reads gists from by default. A scaffolded
 /// enterprise viewer rewrites this to the GHES instance's API.
 const DEFAULT_API_BASE: &str = "https://api.github.com";
+
+/// The marker every published gist's description begins with: this tool's own
+/// package name. It identifies a gist as one this tool created, so the
+/// management commands never touch an unrelated gist, and the session id that
+/// follows lets a republish find and edit the existing gist in place rather than
+/// piling up duplicates.
+pub const GIST_MARKER: &str = env!("CARGO_PKG_NAME");
+
+/// The gist description this tool stamps: the [marker](GIST_MARKER) and session
+/// id, then the session's title when it has one. The marker prefix is how the
+/// management commands recognise a gist as ours; the session id is how a
+/// republish matches a gist back to its session.
+pub fn describe(session_id: &str, title: Option<&str>) -> String {
+    match title {
+        Some(title) => {
+            let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+            format!("{GIST_MARKER} {session_id}: {title}")
+        }
+        None => format!("{GIST_MARKER} {session_id}"),
+    }
+}
+
+/// Whether a gist's description marks it as one this tool published: it begins
+/// with the marker followed by a space (the session id). A `None` description,
+/// or one that merely happens to contain the marker, is not ours.
+fn is_ours(description: Option<&str>) -> bool {
+    description.is_some_and(|description| {
+        description
+            .strip_prefix(GIST_MARKER)
+            .is_some_and(|rest| rest.starts_with(' '))
+    })
+}
 
 /// The GitHub account `gh gist create` will publish as.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,51 +98,129 @@ pub fn resolve_identity() -> Result<Identity> {
     parse_identity(&status, &host)
 }
 
-/// Publishes `html` as a gist named `filename`, piping it to `gh gist create` so
-/// the HTML never lands in a temp file, and returns the gist's page URL. Secret
-/// by default; `public` lists it.
-pub fn publish(html: &str, filename: &str, description: &str, public: bool) -> Result<String> {
+/// The outcome of a [`publish`]: the gist's page URL, and whether an existing
+/// gist for the session was edited in place rather than a new one created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Published {
+    pub url: String,
+    pub updated: bool,
+}
+
+/// Publishes `html` for `session_id`, idempotently: if this tool already has a
+/// gist for the session (matched by its `<session_id>.html` file), that gist is
+/// edited in place so its URL stays stable and re-publishing doesn't pile up
+/// duplicates; otherwise a new gist is created. Secret by default; `public`
+/// lists it. Visibility is fixed at creation, so a republish that would change
+/// it fails rather than silently ignoring the request.
+pub fn publish(html: &str, session_id: &str, description: &str, public: bool) -> Result<Published> {
+    let filename = format!("{session_id}.html");
+
+    if let Some(existing) = find_ours(session_id)? {
+        if existing.public != public {
+            bail!(
+                "session {session_id} is already published as a {} gist ({}); delete it first to change its visibility",
+                visibility(existing.public),
+                existing.url
+            );
+        }
+        gh_stdin(
+            &["gist", "edit", &existing.id, "--filename", &filename, "-"],
+            html,
+        )
+        .context("editing the existing gist")?;
+        gh(&["gist", "edit", &existing.id, "--desc", description])
+            .context("updating the gist description")?;
+        return Ok(Published {
+            url: existing.url,
+            updated: true,
+        });
+    }
+
     let mut args = vec![
         "gist",
         "create",
         "-",
         "--filename",
-        filename,
+        &filename,
         "--desc",
         description,
     ];
     if public {
         args.push("--public");
     }
+    let url = gh_stdin(&args, html)
+        .context("running gh gist create (is the GitHub CLI installed?)")?
+        .trim()
+        .to_owned();
+    Ok(Published {
+        url,
+        updated: false,
+    })
+}
 
+/// The gist this tool published for `session_id`, if any: the one among our
+/// gists whose files include `<session_id>.html`.
+fn find_ours(session_id: &str) -> Result<Option<PublishedGist>> {
+    let filename = format!("{session_id}.html");
+    Ok(list_ours()?
+        .into_iter()
+        .find(|gist| gist.files.iter().any(|file| file == &filename)))
+}
+
+/// Lists the gists this tool published as the active `gh` account, recognised by
+/// the [marker](GIST_MARKER) their descriptions carry. `--paginate` walks every
+/// page so a republish or a bulk delete sees all of them, not just the first.
+pub fn list_ours() -> Result<Vec<PublishedGist>> {
+    let json = gh(&["api", "gists", "--paginate"])?;
+    let gists: Vec<ApiGist> = serde_json::from_str(&json).context("parsing gh api gists")?;
+    Ok(gists
+        .into_iter()
+        .map(PublishedGist::from)
+        .filter(PublishedGist::is_ours)
+        .collect())
+}
+
+/// Looks up a single gist by id or URL through `gh api`, so a delete can confirm
+/// it is one this tool published before removing it.
+pub fn lookup(gist: &str) -> Result<PublishedGist> {
+    let json = gh(&["api", &format!("gists/{}", gist_id(gist))])?;
+    let gist: ApiGist = serde_json::from_str(&json).context("parsing gh api gist")?;
+    Ok(gist.into())
+}
+
+/// Deletes a gist by id via `gh gist delete`. Ownership is the caller's to check
+/// (see [`PublishedGist::is_ours`]); this is the mechanical removal.
+pub fn delete(id: &str) -> Result<()> {
+    gh(&["gist", "delete", id, "--yes"]).map(drop)
+}
+
+fn visibility(public: bool) -> &'static str {
+    if public { "public" } else { "secret" }
+}
+
+/// Runs `gh` with the given arguments, piping `input` to its stdin (so the HTML
+/// never lands in a temp file), and returns its stdout.
+fn gh_stdin(args: &[&str], input: &str) -> Result<String> {
     let mut child = Command::new("gh")
-        .args(&args)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .context("running gh gist create (is the GitHub CLI installed?)")?;
+        .context("running gh (is the GitHub CLI installed?)")?;
 
     child
         .stdin
         .take()
-        .context("gh gist create stdin was not captured")?
-        .write_all(html.as_bytes())
-        .context("piping html to gh gist create")?;
+        .context("gh stdin was not captured")?
+        .write_all(input.as_bytes())
+        .context("piping input to gh")?;
 
-    let output = child
-        .wait_with_output()
-        .context("waiting for gh gist create")?;
+    let output = child.wait_with_output().context("waiting for gh")?;
     if !output.status.success() {
-        bail!("gh gist create failed");
+        bail!("gh {} failed", args.join(" "));
     }
-
-    let gist_url = String::from_utf8(output.stdout)
-        .context("gh gist create produced non-UTF-8 output")?
-        .trim()
-        .to_owned();
-
-    Ok(gist_url)
+    String::from_utf8(output.stdout).context("gh produced non-UTF-8 output")
 }
 
 /// Downloads a published gist's raw files by id or URL via `gh gist view`,
@@ -230,6 +340,49 @@ fn gh(args: &[&str]) -> Result<String> {
     String::from_utf8(output.stdout).context("gh produced non-UTF-8 output")
 }
 
+/// A gist as `gh api gists` reports it, kept minimal to what the management
+/// commands need.
+#[derive(Deserialize)]
+struct ApiGist {
+    id: String,
+    description: Option<String>,
+    public: bool,
+    html_url: String,
+    files: HashMap<String, IgnoredAny>,
+}
+
+/// A gist recovered from `gh api`, refined to what the shell shows and acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedGist {
+    pub id: String,
+    pub description: Option<String>,
+    pub public: bool,
+    pub url: String,
+    pub files: Vec<String>,
+}
+
+impl PublishedGist {
+    /// Whether this gist was published by this tool (its description carries the
+    /// [marker](GIST_MARKER)), so a delete can refuse to touch anything else.
+    pub fn is_ours(&self) -> bool {
+        is_ours(self.description.as_deref())
+    }
+}
+
+impl From<ApiGist> for PublishedGist {
+    fn from(gist: ApiGist) -> Self {
+        let mut files: Vec<String> = gist.files.into_keys().collect();
+        files.sort();
+        PublishedGist {
+            id: gist.id,
+            description: gist.description,
+            public: gist.public,
+            url: gist.html_url,
+            files,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct AuthStatus {
     hosts: HashMap<String, Vec<Account>>,
@@ -247,6 +400,75 @@ struct Account {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_stamps_the_marker_session_id_and_title() {
+        let description = describe("abc123", Some("Investigate the missing panels"));
+        assert_eq!(
+            description,
+            "claude-scriptorium abc123: Investigate the missing panels"
+        );
+    }
+
+    #[test]
+    fn describe_collapses_whitespace_in_a_multiline_title() {
+        let description = describe("abc123", Some("first line\n\n  second   line"));
+        assert_eq!(
+            description,
+            "claude-scriptorium abc123: first line second line"
+        );
+    }
+
+    #[test]
+    fn describe_omits_the_title_when_the_session_has_none() {
+        assert_eq!(describe("abc123", None), "claude-scriptorium abc123");
+    }
+
+    #[test]
+    fn is_ours_accepts_a_description_stamped_by_this_tool() {
+        assert!(is_ours(Some("claude-scriptorium abc123: a title")));
+        assert!(is_ours(Some("claude-scriptorium abc123")));
+    }
+
+    #[test]
+    fn is_ours_rejects_foreign_and_missing_descriptions() {
+        assert!(!is_ours(Some("Claude Code session: a title")));
+        assert!(!is_ours(Some("claude-scriptorium-fork abc123")));
+        assert!(!is_ours(Some("claude-scriptorium")));
+        assert!(!is_ours(None));
+    }
+
+    #[test]
+    fn published_gist_recovers_id_visibility_url_and_file_names() {
+        let json = r#"{
+            "id": "7f15",
+            "description": "claude-scriptorium abc123: a title",
+            "public": true,
+            "html_url": "https://gist.github.com/scribe/7f15",
+            "files": {"abc123.html": {"filename": "abc123.html"}}
+        }"#;
+        let gist: PublishedGist = serde_json::from_str::<ApiGist>(json).unwrap().into();
+
+        assert_eq!(gist.id, "7f15");
+        assert!(gist.public);
+        assert_eq!(gist.url, "https://gist.github.com/scribe/7f15");
+        assert_eq!(gist.files, vec!["abc123.html".to_owned()]);
+        assert!(gist.is_ours());
+    }
+
+    #[test]
+    fn published_gist_is_not_ours_without_the_marker() {
+        let json = r#"{
+            "id": "7f15",
+            "description": "some unrelated gist",
+            "public": false,
+            "html_url": "https://gist.github.com/scribe/7f15",
+            "files": {"notes.txt": {"filename": "notes.txt"}}
+        }"#;
+        let gist: PublishedGist = serde_json::from_str::<ApiGist>(json).unwrap().into();
+
+        assert!(!gist.is_ours());
+    }
 
     #[test]
     fn gh_host_env_wins_over_authenticated_hosts() {

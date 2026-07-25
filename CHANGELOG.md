@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.1]
 
+### Added
+
+- `gists` subcommand lists the gists this tool has published.
+- `delete` subcommand removes a published gist by id or URL, or every published
+  gist with `--all` (listing and confirming them first). It refuses any gist
+  this tool did not publish, so it can never remove an unrelated gist.
+
+### Changed
+
+- `publish` is now idempotent per session. Each gist is stamped with a marker
+  (the package name) and the session id, with its file named
+  `<session-id>.html`, so re-publishing a session edits the existing gist in
+  place and keeps its URL stable instead of piling up duplicates. A republish
+  that would flip a gist between secret and public fails rather than silently
+  ignoring the request.
+- `publish` prints the preview link by default, alongside a note that only a
+  reader's browser (never the viewer's host) fetches the transcript.
+
+### Removed
+
+- The `publish --preview` flag and its confirmation prompt; the preview link now
+  prints by default.
+
 ### Fixed
 
 - The gist viewer (`docs/index.html`) now calls `document.close()` after
