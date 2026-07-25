@@ -239,8 +239,9 @@ corners, all `position: fixed` and living in the shell of the markup rather than
 the panel stream. Reading controls sit on the right (search top, and a
 navigation dock bottom that steps between user/assistant messages, skipping tool
 and thinking panels, jumps to the end, follows new messages like `tail -f`
-(re-pinning the newest message's start on each reload until the reader scrolls
-away, state kept in `localStorage`), and folds every marginalia); appearance
+(re-pinning the newest message's start on each reload until the reader takes
+control by scrolling or by loading a `#turn-N` deep link, state kept in
+`localStorage`), and folds every marginalia); appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
 facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
 There is no in-column header or footer.

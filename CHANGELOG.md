@@ -29,6 +29,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+
+- Opening a folio at a `#turn-N` deep link now lands on that panel even when
+  follow (`tail -f`) mode was left on in a previous session. An anchored load
+  counts as the reader taking control, the same way scrolling does, so follow
+  switches off instead of snapping past the linked panel to the end.
 - A code or output block's copy button stays in the block's corner when the
   block is scrolled sideways, instead of travelling with the text and coming to
   rest over it.
