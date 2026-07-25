@@ -70,6 +70,29 @@
     "JetBrains Mono", Menlo, Consolas, monospace;
   --display: "UnifrakturCook", var(--serif);
 
+  /* The eight colours a terminal names, and their bright counterparts, ground
+   * into the folio's own pigments so a build log reads in the same palette as
+   * everything around it. Bright black is a terminal's usual "this matters
+   * less", so it takes the faint ink rather than a lifted black. A colour a
+   * tool states outright (256-colour or 24-bit) can't be a token and is carried
+   * as its own value. */
+  --ansi-black: light-dark(#4a4238, #6f6656);
+  --ansi-red: var(--rubric);
+  --ansi-green: var(--verdigris);
+  --ansi-yellow: var(--sienna);
+  --ansi-blue: var(--lapis);
+  --ansi-magenta: var(--tyrian);
+  --ansi-cyan: light-dark(#1f6f77, #6fc3cb);
+  --ansi-white: var(--ink-soft);
+  --ansi-bright-black: var(--ink-faint);
+  --ansi-bright-red: light-dark(#c8412f, #f08d7b);
+  --ansi-bright-green: light-dark(#3d9460, #74d19c);
+  --ansi-bright-yellow: light-dark(#b47c1f, #e5b667);
+  --ansi-bright-blue: light-dark(#3459ac, #9db6ee);
+  --ansi-bright-magenta: light-dark(#84408e, #d09ad9);
+  --ansi-bright-cyan: light-dark(#2a8890, #8ed6dd);
+  --ansi-bright-white: var(--ink);
+
   /* Syntax tokens, all resolved against the parchment ground. */
   --syn-comment: light-dark(#948a74, #7f765f);
   --syn-string: var(--verdigris);
@@ -762,7 +785,7 @@ mark.search__hit.is-current {
   font-size: 0.86rem;
 }
 
-.marginalia > summary {
+.marginalia__head {
   display: flex;
   align-items: baseline;
   gap: 0.6rem;
@@ -807,16 +830,40 @@ mark.search__hit.is-current {
   border-bottom: 1px solid var(--rule-soft);
 }
 
+/* A call the summary line states in full has nothing to open, so it carries the
+ * fleuron in the rule's own colour: the line still aligns with the folds around
+ * it, and reads as having no fold rather than a shut one. */
+.marginalia--flat .marginalia__head {
+  cursor: default;
+}
+
+.marginalia--flat .marginalia__head::before {
+  content: "❧";
+  color: var(--rule);
+  font-size: 0.9em;
+}
+
 .marginalia__tool {
   font-weight: 600;
   color: var(--sienna);
 }
 
+/* A folded call's gist is a label, so it can ellipsise: opening the fold shows
+ * the subject in full. */
 .marginalia__gist {
   overflow: hidden;
   color: var(--ink-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A flat call has no fold to open, so its gist is the only place the subject
+ * appears: it wraps rather than being cut off at the column's edge. */
+.marginalia--flat .marginalia__gist {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* A qualifier on the call keeps its full width; the gist ellipsises around it. */
@@ -903,6 +950,254 @@ mark.search__hit.is-current {
 .tool__todo[data-status="completed"] {
   color: var(--ink-faint);
   text-decoration: line-through;
+}
+
+/* A body that is prose (a prompt, a plan, a message) keeps the reading face and
+ * the fold's padding; a body that is a list of small structured things sets
+ * those in the mono face, the way the summary line above it is set. */
+.tool {
+  margin: 0;
+  padding: 0.5rem 0.85rem;
+}
+
+.tool--questions,
+.tool--answers,
+.tool--findings,
+.tool--prompts,
+.tool--references,
+.tool--links,
+.tool--facts {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+.tool--questions,
+.tool--answers,
+.tool--findings,
+.tool--prompts,
+.tool--references {
+  list-style: none;
+}
+
+/* A label sits inside a running line, so it is marked by weight and colour
+ * rather than by a box that would break the line's rhythm. */
+.tool__label {
+  color: var(--sienna);
+  font-weight: 600;
+}
+
+/* A qualifier on the thing the line names: a category, a verdict, a header. */
+.tool__header {
+  padding: 0 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-faint);
+  font-size: 0.9em;
+}
+
+.tool__question + .tool__question {
+  margin-top: 0.8rem;
+}
+
+.tool__ask {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 0 0.35rem;
+  color: var(--ink);
+}
+
+.tool__options {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool__option {
+  padding: 0.15rem 0 0.15rem 0.9rem;
+  border-left: 2px solid var(--rule);
+  color: var(--ink-faint);
+}
+
+.tool__option + .tool__option {
+  margin-top: 0.3rem;
+}
+
+.tool__label + .tool__description::before {
+  content: " — ";
+}
+
+/* What a reader chose, against what they were asked. The question is repeated
+ * from the call above so the answer stands on its own, but it is the answer
+ * that is being reported, so the question recedes to make room for it. */
+.tool__answer + .tool__answer {
+  margin-top: 0.6rem;
+}
+
+.tool__answer .tool__ask {
+  display: block;
+  margin: 0;
+  color: var(--ink-faint);
+}
+
+.tool__chosen {
+  margin: 0.1rem 0 0 0.9rem;
+  border-left: 2px solid var(--sienna);
+  padding-left: 0.5rem;
+  color: var(--sienna);
+  font-weight: 600;
+}
+
+/* An answer the reader typed took none of the options offered, so it is set as
+ * the prose it is rather than as the label it isn't. */
+.tool__chosen[data-typed] {
+  border-left-color: var(--rule);
+  color: var(--ink);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.tool__finding + .tool__finding {
+  margin-top: 0.7rem;
+}
+
+.tool__where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.tool__line {
+  color: var(--ink-faint);
+}
+
+.tool__summary {
+  margin: 0.2rem 0 0;
+  color: var(--ink);
+}
+
+.tool__scenario {
+  margin: 0.2rem 0 0;
+  color: var(--ink-faint);
+}
+
+.tool__prompt {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tool__prompt + .tool__prompt {
+  margin-top: 0.2rem;
+}
+
+.tool--prompts {
+  padding-top: 0;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.tool__reference {
+  color: var(--sienna);
+}
+
+/* A web search's own preamble, above the links it found. */
+.tool__query {
+  margin: 0 0 0.4rem;
+  color: var(--ink-faint);
+}
+
+.tool__links {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.tool__links li {
+  padding: 0.1rem 0;
+}
+
+/* The facts a background task answers with, before its output. */
+.tool--facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.7rem;
+}
+
+.tool--facts dt {
+  color: var(--ink-faint);
+}
+
+.tool--facts dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+/* A prose body reads as the document it is, so it keeps the reading face rather
+ * than the mono the structured bodies take, and its first and last paragraphs
+ * shed the margins that would double the fold's own padding. */
+.tool--prose > :first-child {
+  margin-top: 0;
+}
+
+.tool--prose > :last-child {
+  margin-bottom: 0;
+}
+
+/* --- Terminal colour: what a tool wrote its output in ----------------- */
+
+.ansi--black { color: var(--ansi-black); }
+.ansi--red { color: var(--ansi-red); }
+.ansi--green { color: var(--ansi-green); }
+.ansi--yellow { color: var(--ansi-yellow); }
+.ansi--blue { color: var(--ansi-blue); }
+.ansi--magenta { color: var(--ansi-magenta); }
+.ansi--cyan { color: var(--ansi-cyan); }
+.ansi--white { color: var(--ansi-white); }
+.ansi--bright-black { color: var(--ansi-bright-black); }
+.ansi--bright-red { color: var(--ansi-bright-red); }
+.ansi--bright-green { color: var(--ansi-bright-green); }
+.ansi--bright-yellow { color: var(--ansi-bright-yellow); }
+.ansi--bright-blue { color: var(--ansi-bright-blue); }
+.ansi--bright-magenta { color: var(--ansi-bright-magenta); }
+.ansi--bright-cyan { color: var(--ansi-bright-cyan); }
+.ansi--bright-white { color: var(--ansi-bright-white); }
+
+.ansi--bg-black { background-color: var(--ansi-black); }
+.ansi--bg-red { background-color: var(--ansi-red); }
+.ansi--bg-green { background-color: var(--ansi-green); }
+.ansi--bg-yellow { background-color: var(--ansi-yellow); }
+.ansi--bg-blue { background-color: var(--ansi-blue); }
+.ansi--bg-magenta { background-color: var(--ansi-magenta); }
+.ansi--bg-cyan { background-color: var(--ansi-cyan); }
+.ansi--bg-white { background-color: var(--ansi-white); }
+.ansi--bg-bright-black { background-color: var(--ansi-bright-black); }
+.ansi--bg-bright-red { background-color: var(--ansi-bright-red); }
+.ansi--bg-bright-green { background-color: var(--ansi-bright-green); }
+.ansi--bg-bright-yellow { background-color: var(--ansi-bright-yellow); }
+.ansi--bg-bright-blue { background-color: var(--ansi-bright-blue); }
+.ansi--bg-bright-magenta { background-color: var(--ansi-bright-magenta); }
+.ansi--bg-bright-cyan { background-color: var(--ansi-bright-cyan); }
+.ansi--bg-bright-white { background-color: var(--ansi-bright-white); }
+
+/* A background needs a little room around the text it sits behind, or the
+ * colour ends flush against the glyphs. */
+.ansi[class*="ansi--bg-"] {
+  padding: 0 0.15em;
+  border-radius: 2px;
+}
+
+.ansi--bold {
+  font-weight: 700;
+}
+
+.ansi--dim {
+  opacity: 0.65;
+}
+
+.ansi--italic {
+  font-style: italic;
+}
+
+.ansi--underline {
+  text-decoration: underline;
 }
 
 /* --- Copy buttons: injected by the app script ------------------------ */

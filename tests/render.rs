@@ -23,6 +23,7 @@ fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
         generated: "2026-03-12T09:15:00Z".parse::<Timestamp>().unwrap(),
         tool: "claude-scriptorium",
         version: "0.1.0",
+        home: "https://example.invalid/scriptorium",
     };
     scribe.folio(folio, &colophon).into_string()
 }
@@ -220,6 +221,254 @@ fn todo_writes_render_as_a_status_marked_checklist() {
     assert!(html.contains(r#"data-status="pending">Add coverage</li>"#));
 }
 
+fn playground() -> Folio {
+    Folio::read(Path::new("tests/fixtures/playground.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn a_call_its_summary_states_in_full_has_no_fold_to_open() {
+    let html = render(&playground(), &highlighter());
+
+    // A read names a file and the lines it took, and both fit on the line, so
+    // there is no subject left for a body to hold.
+    assert!(html.contains(r#"<div class="marginalia marginalia--use marginalia--flat">"#));
+    assert!(html.contains(r#"<span class="marginalia__note">lines 105–108</span>"#));
+}
+
+#[test]
+fn a_reads_result_is_set_as_the_language_of_the_file_it_read() {
+    let html = render(&playground(), &highlighter());
+
+    // The harness numbers the lines it returns; those come off, and what is
+    // left is highlighted as the Rust the file holds.
+    assert!(!html.contains("1\t//! Parsing of Claude Code"));
+    assert!(html.contains(r#"class="ink-source ink-rust""#));
+}
+
+#[test]
+fn a_plan_is_set_as_the_markdown_document_it_is() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(
+        html.contains(r#"<span class="marginalia__gist">Pretty-print every built-in tool</span>"#)
+    );
+    assert!(html.contains("<h1>Pretty-print every built-in tool</h1>"));
+    // The prompts the plan asks to be pre-approved sit under it, not in it.
+    assert!(html.contains(r#"<li class="tool__prompt">"#));
+}
+
+#[test]
+fn a_question_shows_every_option_it_offered() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(html.contains(r#"<span class="tool__header">Read result</span>"#));
+    assert!(html.contains(r#"<span class="tool__label">Highlight by extension</span>"#));
+    assert!(html.contains("Keep the numbers"));
+    // Every question a call asked is laid out at once, rather than one screen
+    // at a time behind a control the reader has to work through.
+    assert_eq!(
+        html.matches(r#"<section class="tool__question">"#).count(),
+        2
+    );
+    assert!(html.contains(r#"<span class="tool__header">Scope</span>"#));
+}
+
+#[test]
+fn a_web_search_sets_the_links_it_found_as_links() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(
+        html.contains(r#"<a href="https://openfontlicense.org/">SIL Open Font License 1.1</a>"#)
+    );
+}
+
+#[test]
+fn a_background_tasks_answer_splits_into_its_facts_and_its_output() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(html.contains(r#"<dl class="tool tool--facts">"#));
+    assert!(html.contains("<dt>status</dt><dd>completed</dd>"));
+    // The output is prose, so it is set as prose rather than as a terminal's.
+    assert!(html.contains("<li>164 sessions</li>"));
+}
+
+fn answers() -> Folio {
+    Folio::read(Path::new("tests/fixtures/answers.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn an_answer_is_recovered_from_the_sentence_the_harness_buries_it_in() {
+    let html = render(&answers(), &highlighter());
+
+    assert!(html.contains(r#"<p class="tool__chosen">All projects, two-stage</p>"#));
+    assert!(html.contains(r#"<p class="tool__chosen">Time + first prompt</p>"#));
+    // Nothing of the framing sentence survives into the folio.
+    assert!(!html.contains("Your questions have been answered"));
+    assert!(!html.contains("You can now continue with these answers in mind"));
+}
+
+#[test]
+fn a_question_quoting_code_does_not_break_the_pairs_apart() {
+    let html = render(&answers(), &highlighter());
+
+    // The question carries `raise ValueError("...")`, so the quotes the
+    // sentence delimits its values with also appear inside one.
+    assert!(html.contains(r#"<p class="tool__chosen">Leave it</p>"#));
+}
+
+#[test]
+fn a_chosen_options_preview_is_shown_against_the_option_not_the_answer() {
+    let html = render(&answers(), &highlighter());
+
+    // The mockup is what the reader compared, so it belongs to the option in
+    // the call; the answer names the option and no more.
+    assert!(html.contains(r#"<p class="tool__chosen">In the meta line</p>"#));
+    assert!(!html.contains("selected preview"));
+    assert_eq!(html.matches("┌───────────────┐").count(), 1);
+}
+
+#[test]
+fn several_selections_arrive_as_the_one_answer_they_were_given_as() {
+    let html = render(&answers(), &highlighter());
+
+    assert!(html.contains(
+        r#"<p class="tool__chosen">Default policy by role, Valid-optional vs malformed, Derive, don't restate</p>"#
+    ));
+}
+
+#[test]
+fn an_answer_the_reader_typed_is_kept_whole() {
+    let html = render(&answers(), &highlighter());
+
+    // Typed instead of chosen, so it arrives unquoted under the other opening
+    // and with no closing sentence.
+    // The harness's own framing around it goes; that it was typed rather than
+    // chosen is kept, as a mark on the answer.
+    assert!(html.contains(
+        r#"<p class="tool__chosen" data-typed>I want copy buttons, jump, and fancy collapse."#
+    ));
+    assert!(!html.contains("The user answered:"));
+    assert!(!html.contains("no option selected"));
+    // And a typed answer may quote something of its own.
+    assert!(html.contains("it keeps matching items instead of dropping them"));
+}
+
+#[test]
+fn a_question_that_was_never_answered_stands_as_the_note_it_is() {
+    let html = render(&answers(), &highlighter());
+
+    // A timeout is not an answer, so there is no pair to find and the harness's
+    // own words are shown rather than forced into the shape of one.
+    assert!(html.contains("No response after 60s"));
+}
+
+#[test]
+fn a_result_that_only_says_the_call_worked_is_dropped() {
+    let html = render(&playground(), &highlighter());
+
+    // The write and the edit above them already show the file and the change;
+    // an acknowledgement per file touched would crowd out the conversation.
+    assert!(!html.contains("src/render.rs has been updated successfully"));
+    assert!(!html.contains("File created successfully at"));
+    assert!(!html.contains("Todos have been modified"));
+    assert!(!html.contains("Launching skill"));
+    // Entering plan mode answers with instructions meant for the model, so the
+    // call stands alone as the one line it is.
+    assert!(html.contains(r#"<span class="marginalia__tool">EnterPlanMode</span>"#));
+    assert!(!html.contains("Entered plan mode"));
+}
+
+#[test]
+fn a_result_written_down_as_text_blocks_is_weighed_like_a_plain_one() {
+    let html = render(&playground(), &highlighter());
+
+    // The harness records a background agent's launch as text blocks rather
+    // than as a plain string, but that is how it was written down and not a
+    // difference in what came back: the id and output file it names are for the
+    // model to reach the agent again, and the call above it already shows what
+    // the agent was sent.
+    assert!(!html.contains("Async agent launched successfully"));
+    assert!(html.contains("Survey the drollery bestiary"));
+}
+
+#[test]
+fn a_result_that_warns_alongside_the_acknowledgement_is_kept() {
+    let html = render(&playground(), &highlighter());
+
+    // The match is on the acknowledgement itself, not on the tool, so an edit
+    // that also reports the file changed underneath it still reaches a reader.
+    assert!(html.contains("the file had been modified on disk"));
+}
+
+#[test]
+fn a_terminals_colour_survives_into_the_folio() {
+    let html = render(&playground(), &highlighter());
+
+    // The named colours are the folio's to grind, so they arrive as classes the
+    // stylesheet resolves against the parchment.
+    assert!(html.contains(r#"<span class="ansi ansi--green">ok</span>"#));
+    assert!(html.contains(r#"<span class="ansi ansi--red ansi--bold">FAILED</span>"#));
+    assert!(html.contains(r#"<span class="ansi ansi--bright-black">"#));
+    // No escape reaches the page, whether it carried colour or drove the
+    // terminal.
+    assert!(!html.contains('\u{1b}'));
+}
+
+#[test]
+fn a_colour_a_tool_states_outright_is_carried_as_its_own_value() {
+    let html = render(&playground(), &highlighter());
+
+    // No palette token can stand for a 256-colour index or a 24-bit colour, so
+    // these are the one place a pigment is set on the element itself.
+    assert!(html.contains(r#"style="color:#ff8700""#));
+    assert!(html.contains(r#"style="color:#785ac8""#));
+}
+
+#[test]
+fn a_bodys_trailing_newline_is_not_set_as_a_line() {
+    let html = render(&playground(), &highlighter());
+
+    // A file's own trailing newline would otherwise leave an empty line against
+    // the bottom edge of the fold, reading as content that isn't there.
+    assert!(!html.contains("\n</code></pre>"));
+}
+
+#[test]
+fn a_failure_sheds_the_tag_the_harness_wraps_it_in() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(html.contains("String to replace not found in file."));
+    assert!(!html.contains("tool_use_error"));
+}
+
+#[test]
+fn an_answer_that_is_json_is_pretty_printed() {
+    let html = render(&playground(), &highlighter());
+
+    // Several tools answer with a JSON object on a single line.
+    assert!(html.contains(r#"class="ink-source ink-json""#));
+}
+
+#[test]
+fn a_tool_search_lists_the_tools_it_found() {
+    let html = render(&playground(), &highlighter());
+
+    assert!(html.contains(r#"<li class="tool__reference">WebSearch</li>"#));
+    assert!(html.contains(r#"<li class="tool__reference">WebFetch</li>"#));
+}
+
+#[test]
+fn a_tool_with_no_view_of_its_own_falls_back_to_json() {
+    let html = render(&playground(), &highlighter());
+
+    // An MCP tool is named by its server, and its input has whatever shape that
+    // server gave it: no view can know it, so the call shows what it was sent.
+    assert!(
+        html.contains(r#"<span class="marginalia__tool">mcp__scriptorium__list_quires</span>"#)
+    );
+    assert!(html.contains("newest_first"));
+}
+
 #[test]
 fn failed_tool_results_are_flagged() {
     let html = render(&fixture(), &highlighter());
@@ -313,7 +562,10 @@ fn tool_result_turns_fold_into_the_assistant_panel() {
     // results, and the closing assistant panel: three articles, one "user".
     assert_eq!(html.matches("<article").count(), 3);
     assert_eq!(html.matches(r#"turn__role">user"#).count(), 1);
-    assert!(html.contains("pub struct Quire"));
+    // The read's result is set as the Rust the file holds, so the type it
+    // declares arrives wrapped in the highlighter's spans rather than bare.
+    assert!(html.contains("Quire"));
+    assert!(html.contains("ink-storage"));
 }
 
 #[test]
@@ -525,4 +777,13 @@ fn the_colophon_stamps_the_run() {
 
     assert!(html.contains("claude-scriptorium"));
     assert!(html.contains("2026-03-12 09:15:00 UTC"));
+}
+
+#[test]
+fn the_colophon_links_the_tool_to_its_home() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(
+        r#"Written by <a href="https://example.invalid/scriptorium">claude-scriptorium</a> 0.1.0"#
+    ));
 }
