@@ -31,7 +31,7 @@ pub struct Setting {
 }
 
 impl Setting {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             gist: None,
             href: None,
@@ -40,12 +40,12 @@ impl Setting {
         }
     }
 
-    fn body(mut self, body: Markup) -> Self {
+    pub(crate) fn body(mut self, body: Markup) -> Self {
         self.body = Some(body);
         self
     }
 
-    fn gist(mut self, gist: impl Into<String>) -> Self {
+    pub(crate) fn gist(mut self, gist: impl Into<String>) -> Self {
         self.gist = Some(gist.into());
         self
     }
@@ -55,19 +55,19 @@ impl Setting {
         self
     }
 
-    fn note(mut self, note: impl Into<String>) -> Self {
+    pub(crate) fn note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
         self
     }
 
-    fn maybe_gist(self, gist: Option<impl Into<String>>) -> Self {
+    pub(crate) fn maybe_gist(self, gist: Option<impl Into<String>>) -> Self {
         match gist {
             Some(gist) => self.gist(gist),
             None => self,
         }
     }
 
-    fn maybe_note(self, note: Option<impl Into<String>>) -> Self {
+    pub(crate) fn maybe_note(self, note: Option<impl Into<String>>) -> Self {
         match note {
             Some(note) => self.note(note),
             None => self,
@@ -132,7 +132,7 @@ fn text<'a>(input: &'a Value, field: &str) -> Option<&'a str> {
 
 /// A body that is written to be read: a prompt, a plan, a message, a report.
 /// Markdown is what these are composed in, so markdown is how they are set.
-fn prose(scribe: &Scribe, source: &str) -> Markup {
+pub(crate) fn prose(scribe: &Scribe, source: &str) -> Markup {
     html! { div .tool.tool--prose { (scribe.markdown(source)) } }
 }
 
@@ -638,7 +638,7 @@ fn failure(text: &str) -> Markup {
 /// Output with no shape of its own: pretty-printed where it is JSON (several
 /// tools answer with a JSON object on one line), and otherwise as the terminal
 /// wrote it, colour and all.
-fn plain(scribe: &Scribe, text: &str) -> Markup {
+pub(crate) fn plain(scribe: &Scribe, text: &str) -> Markup {
     match serde_json::from_str::<Value>(text.trim()) {
         Ok(value) if value.is_object() || value.is_array() => scribe.code_block(
             "json",

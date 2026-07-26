@@ -12,8 +12,9 @@ use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{
-    tools,
-    transcript::{Block, Folio, ImageSource, Known, Panel, PanelKind, Usage},
+    gloss,
+    tools::{self, Setting},
+    transcript::{Block, Folio, GlossPanel, ImageSource, Known, Panel, PanelKind, Speech, Usage},
 };
 
 /// Copyright notices for the embedded fonts, emitted into every folio. The SIL
@@ -318,7 +319,7 @@ impl<'a> Scribe<'a> {
                                 dt { "source" } dd { code { (source) } }
                                 dt { "turns" } dd { (panels.len()) }
                                 @if let Some(first) = panels.first() {
-                                    dt { "opened" } dd { (self.stamp(first.timestamp)) }
+                                    dt { "opened" } dd { (self.stamp(first.timestamp())) }
                                 }
                                 // The session's flux: how big the conversation
                                 // ever got, against all the output. The input
@@ -360,6 +361,7 @@ impl<'a> Scribe<'a> {
                             button .search__scope.search__scope--assistant type="button" data-scope="assistant" aria-pressed="true" { "assistant" }
                             button .search__scope type="button" data-scope="tool" aria-pressed="true" { "tool" }
                             button .search__scope type="button" data-scope="thinking" aria-pressed="true" { "thinking" }
+                            button .search__scope type="button" data-scope="gloss" aria-pressed="true" { "gloss" }
                         }
                     }
                     // A fixed dock: jump between messages, leap to either end
@@ -436,6 +438,13 @@ impl<'a> Scribe<'a> {
     }
 
     fn panel(&self, panel: &Panel) -> Markup {
+        match panel {
+            Panel::Speech(speech) => self.speech(speech),
+            Panel::Gloss(gloss) => self.gloss(gloss),
+        }
+    }
+
+    fn speech(&self, panel: &Speech) -> Markup {
         let kind = panel.kind();
         // A speaker's leading paragraph opens with a rubricated versal (a
         // dropped blackletter initial the stylesheet draws): tag the block that
@@ -448,7 +457,7 @@ impl<'a> Scribe<'a> {
             article id={ "turn-" (panel.turn_number) }
                 class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
                 data-turn=(panel.turn_number)
-                data-sidechain[panel.is_sidechain] data-meta[panel.is_meta] {
+                data-sidechain[panel.is_sidechain] {
                 header .turn__meta {
                     span .turn__role { (kind.label()) }
                     @if let Some(model) = &panel.model {
@@ -474,6 +483,34 @@ impl<'a> Scribe<'a> {
         }
     }
 
+    /// A note the harness wrote into the session: a panel of its own, since it
+    /// happened at a point in the conversation rather than inside anyone's
+    /// turn, but with no speaker, no model, and no cost of its own to state.
+    /// What it says is folded away behind its summary line, the way a tool
+    /// call's subject is: it is context a reader reaches for, not prose they
+    /// read through.
+    fn gloss(&self, panel: &GlossPanel) -> Markup {
+        let kind = panel.gloss.kind;
+        html! {
+            article id={ "turn-" (panel.turn_number) }
+                class="turn turn--gloss" data-kind=(kind.label())
+                data-turn=(panel.turn_number)
+                data-sidechain[panel.is_sidechain] {
+                header .turn__meta {
+                    span .turn__role { (kind.label()) }
+                    time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
+                    a .turn__index href={ "#turn-" (panel.turn_number) } { "#" (panel.turn_number) }
+                }
+                (marginalia(
+                    "marginalia--gloss",
+                    None,
+                    gloss::setting(self, &panel.gloss),
+                    Outcome::Fine,
+                ))
+            }
+        }
+    }
+
     pub(crate) fn block(&self, block: &Block, versal: bool) -> Markup {
         let known = match block {
             Block::Known(known) => known,
@@ -495,17 +532,31 @@ impl<'a> Scribe<'a> {
                 }
             },
             Known::ToolUse { name, input, .. } => self.tool_call(name, input),
+            // A result names the call it answers. Several calls issued together
+            // come back as several results in a row, and a line reading only
+            // "result" leaves a reader counting to work out which is which.
             Known::ToolResult {
                 content,
                 is_error,
                 answers,
                 ..
-            } => html! {
-                details .marginalia.marginalia--result data-error[*is_error] {
-                    summary .marginalia__head { @if *is_error { "error" } @else { "result" } }
-                    (tools::result(self, answers.as_ref(), content, *is_error))
-                }
-            },
+            } => marginalia(
+                "marginalia--result",
+                Some(if *is_error { "error" } else { "result" }),
+                Setting::new()
+                    .maybe_gist(answers.as_ref().map(|answered| answered.tool.as_str()))
+                    .maybe_note(
+                        answers
+                            .as_ref()
+                            .and_then(|answered| answered.subject.as_deref()),
+                    )
+                    .body(tools::result(self, answers.as_ref(), content, *is_error)),
+                if *is_error {
+                    Outcome::Failed
+                } else {
+                    Outcome::Fine
+                },
+            ),
             Known::Image { source } => image(source),
         }
     }
@@ -515,32 +566,12 @@ impl<'a> Scribe<'a> {
     /// file, a query) has no subject left to hold, so it is set as one flat line
     /// with nothing to open.
     fn tool_call(&self, name: &str, input: &Value) -> Markup {
-        let setting = tools::call(self, name, input);
-        let head = html! {
-            span .marginalia__tool { (name) }
-            @if let Some(gist) = &setting.gist {
-                @match &setting.href {
-                    Some(href) => a .marginalia__gist href=(href) { (gist) },
-                    None => span .marginalia__gist { (gist) },
-                }
-            }
-            @for note in &setting.notes {
-                span .marginalia__note { (note) }
-            }
-        };
-        match &setting.body {
-            Some(body) => html! {
-                details .marginalia.marginalia--use {
-                    summary .marginalia__head { (head) }
-                    (body)
-                }
-            },
-            None => html! {
-                div .marginalia.marginalia--use.marginalia--flat {
-                    div .marginalia__head { (head) }
-                }
-            },
-        }
+        marginalia(
+            "marginalia--use",
+            Some(name),
+            tools::call(self, name, input),
+            Outcome::Fine,
+        )
     }
 
     /// A fenced code block run through the markdown path so it picks up syntax
@@ -553,6 +584,49 @@ impl<'a> Scribe<'a> {
         let code = code.trim_end();
         let fence = "`".repeat(longest_backtick_run(code).max(2) + 1);
         self.markdown(&format!("{fence}{lang}\n{code}\n{fence}"))
+    }
+}
+
+/// Whether a fold reports something that failed, which the stylesheet marks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Fine,
+    Failed,
+}
+
+/// A summary line and the fold under it: the shape a tool call and a harness
+/// note share. The line carries the labelling (what is being shown, a gist of
+/// its subject, and any qualifier), and the fold carries the subject itself. A
+/// setting whose line already states the whole of it has nothing left to hold,
+/// so it is set as one flat line with nothing to open.
+fn marginalia(variant: &str, label: Option<&str>, setting: Setting, outcome: Outcome) -> Markup {
+    let head = html! {
+        @if let Some(label) = label {
+            span .marginalia__tool { (label) }
+        }
+        @if let Some(gist) = &setting.gist {
+            @match &setting.href {
+                Some(href) => a .marginalia__gist href=(href) { (gist) },
+                None => span .marginalia__gist { (gist) },
+            }
+        }
+        @for note in &setting.notes {
+            span .marginalia__note { (note) }
+        }
+    };
+    let failed = outcome == Outcome::Failed;
+    match &setting.body {
+        Some(body) => html! {
+            details class={ "marginalia " (variant) } data-error[failed] {
+                summary .marginalia__head { (head) }
+                (body)
+            }
+        },
+        None => html! {
+            div class={ "marginalia " (variant) " marginalia--flat" } data-error[failed] {
+                div .marginalia__head { (head) }
+            }
+        },
     }
 }
 

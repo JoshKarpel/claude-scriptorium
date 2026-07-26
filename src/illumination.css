@@ -58,6 +58,27 @@
   --sidechain-edge: var(--tyrian);
   --error-edge: var(--rubric);
 
+  /* The assistant's own working, which is its turn and not a third speaker, so
+   * neither takes a pigment that would read as one. A tool call is the
+   * instrument rather than the voice and takes the one cool hue nothing else
+   * holds; reasoning is the same voice unvoiced, so it is the assistant's own
+   * pigment drawn back toward the ink rather than a colour of its own. */
+  --tool-edge: light-dark(#1f6f77, #6fc3cb);
+  --thinking-edge: color-mix(in srgb, var(--claude) 55%, var(--ink-faint));
+
+  /* The harness's own notes, pitched into the hues no speaker holds so a reader
+   * scrolling past can tell one kind from another without reading the label.
+   * A hook is machinery, so it takes the malachite; a skill or a command is an
+   * instruction, so it takes the ochre the tool names are already set in; and a
+   * plan boundary is rubricated, which is what a scribe ground vermilion for,
+   * marking a division in the text rather than anything said in it. The rest
+   * stay in faint ink: a rule pulled into context and a passing note are the
+   * ambient kinds, and colouring those too would leave nothing quiet. */
+  --gloss-edge: var(--ink-faint);
+  --hook-edge: var(--verdigris);
+  --skill-edge: var(--sienna);
+  --plan-edge: var(--rubric);
+
   --measure: 44rem;
   --radius: 4px;
 
@@ -404,12 +425,24 @@ body {
   cursor: pointer;
 }
 
+/* A chip takes the hue of the panels it scopes, so the filter reads against the
+ * column it filters. The glosses keep the neutral ink: they span several
+ * pigments, and picking one of them to stand for all would say the wrong thing.
+ */
 .search__scope--user {
   --scope-hue: var(--user-edge);
 }
 
 .search__scope--assistant {
   --scope-hue: var(--assistant-edge);
+}
+
+.search__scope[data-scope="tool"] {
+  --scope-hue: var(--tool-edge);
+}
+
+.search__scope[data-scope="thinking"] {
+  --scope-hue: var(--thinking-edge);
 }
 
 .search__scope[aria-pressed="true"] {
@@ -705,16 +738,54 @@ mark.search__hit.is-current {
   border-left-color: var(--assistant-edge);
 }
 
+/* A panel carrying only a tool call or only reasoning is still the assistant's
+ * turn, but it isn't the assistant speaking, so it is marked apart from the
+ * prose panels around it rather than sharing their edge. */
+.turn[data-kind="tool"] {
+  border-left-color: var(--tool-edge);
+}
+
+.turn[data-kind="thinking"] {
+  border-left-color: var(--thinking-edge);
+}
+
 .turn[data-sidechain] {
   border-left-color: var(--sidechain-edge);
   border-left-style: dashed;
   margin-left: 1.5rem;
 }
 
-/* Harness-injected turns (command caveats, skill scaffolding, context dumps)
- * carry no reader value and are always hidden. */
-.turn[data-meta] {
-  display: none;
+/* A gloss is a note the harness wrote into the session, not a speaker: it takes
+ * a pigment no speaker holds, and a dotted edge, which reads as quieter than
+ * the sidechain's dashed and is distinct from it. It also sits closer to its
+ * neighbours than two speakers do, since it belongs to the exchange around it
+ * rather than standing between two of them. */
+.turn--gloss {
+  margin: 0.8rem 0;
+  border-left-color: var(--gloss-edge);
+  border-left-style: dotted;
+}
+
+/* Each kind sets the token rather than the colour, so a subagent's gloss still
+ * reads as a subagent: `.turn[data-sidechain]` sets `border-left-color`
+ * outright and outweighs the declaration above whatever the token says. */
+.turn--gloss[data-kind="hook"] {
+  --gloss-edge: var(--hook-edge);
+}
+
+.turn--gloss[data-kind="skill"],
+.turn--gloss[data-kind="command"] {
+  --gloss-edge: var(--skill-edge);
+}
+
+.turn--gloss[data-kind="plan"] {
+  --gloss-edge: var(--plan-edge);
+}
+
+/* The label takes its panel's own pigment, so the two read as one mark; the
+ * ambient kinds keep the faint ink they are set in. */
+.turn--gloss .turn__role {
+  color: var(--gloss-edge);
 }
 
 /* --- Controls: the presentation cluster, opposite the dock ----------- */
@@ -1022,11 +1093,14 @@ mark.search__hit.is-current {
   color: var(--assistant-edge);
 }
 
-/* Tool and thinking labels are secondary to prose, so mute them and reserve
- * the role colour for panels that actually speak to the reader. */
-.turn[data-kind="tool"] .turn__role,
+/* Every label takes its own panel's edge, so the two read as one mark and a
+ * reader scrolling can tell the kinds apart without reading the word. */
+.turn[data-kind="tool"] .turn__role {
+  color: var(--tool-edge);
+}
+
 .turn[data-kind="thinking"] .turn__role {
-  color: var(--ink-faint);
+  color: var(--thinking-edge);
 }
 
 /* The turn's input and output sit with its other facts, faint enough to read as
@@ -1245,17 +1319,40 @@ mark.search__hit.is-current {
   overflow-wrap: anywhere;
 }
 
-/* A qualifier on the call keeps its full width; the gist ellipsises around it. */
+/* A qualifier on the call keeps its full width; the gist ellipsises around it.
+ * This is why a note must stay a short qualifier and never carry the subject:
+ * on a flat line the gist wraps rather than ellipsising, so a note that refuses
+ * to shrink squeezes the gist to its narrowest word, one character to the line. */
 .marginalia__note {
   flex: none;
   color: var(--ink-faint);
   font-style: italic;
 }
 
-.marginalia--result > summary {
+/* A result is labelled by its outcome rather than by a tool, so that label
+ * takes the faint ink and small caps of a heading instead of a tool name's
+ * ochre. The call it answers follows it as an ordinary gist, so several results
+ * in a row say which is which. */
+.marginalia--result .marginalia__tool {
   color: var(--ink-faint);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+/* A shut harness note is a line under its panel's header, so it sheds its own
+ * frame rather than drawing a second box inside the article the panel already
+ * is. Opening it gives the frame back, because the body then needs a box: a
+ * fold holding output unfurls past the reading measure, and there would be
+ * nothing behind the text out there. */
+.marginalia--gloss:not([open]) {
+  margin: 0;
+  border: none;
+  background: none;
+}
+
+.marginalia--gloss:not([open]) .marginalia__head {
+  padding-left: 0;
 }
 
 .marginalia[data-error] {
@@ -1263,7 +1360,8 @@ mark.search__hit.is-current {
   background: color-mix(in srgb, var(--rubric) 7%, var(--leaf-sunk));
 }
 
-.marginalia[data-error] > summary {
+.marginalia[data-error] > summary,
+.marginalia[data-error] .marginalia__tool {
   color: var(--rubric);
 }
 

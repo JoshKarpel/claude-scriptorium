@@ -110,8 +110,9 @@ module each:
   project directory is named after its path with everything outside
   `[A-Za-z0-9_]` flattened to a dash. `CLAUDE_CONFIG_DIR` relocates the root.
   `all_quires` enumerates every project for the cross-project picker.
-- `transcript`: parses JSONL lines into a `Folio` of raw `Turn`s, then folds
-  those into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
+- `transcript`: parses JSONL lines into a `Folio` of raw `Recorded`s (a `Turn`
+  of the conversation, or a `Gloss` the harness wrote into it), then folds those
+  into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
   separate, deliberately lenient scan of a session's listing metadata (its
   `ai-title` and working directory) that tolerates malformed lines, because a
   picker label is best-effort where a render is strict.
@@ -120,6 +121,10 @@ module each:
 - `render`: `Scribe` turns a folio's panels into `Markup`.
 - `tools`: how each built-in tool's call and result are set, which is the one
   place that knows anything about a specific tool's shape.
+- `gloss`: the counterpart for what the harness writes into a session (hook
+  output, the rule files it pulls in, a skill's instructions, a slash command,
+  the plan-mode boundaries), which is the one place that knows anything about a
+  specific injection's shape.
 
 `src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
 `publish`, and `fetch` subcommands, resolves which session to show, reads the
@@ -228,19 +233,27 @@ tests in `tests/` can import the modules. Adding a module means adding it to
 ### Parsing is where the invariants get established
 
 `Entry` is an internally-tagged enum over the JSONL `type` field. `user` and
-`assistant` become turns; `#[serde(other)]` collapses everything else (hook
-output, mode changes, file-history snapshots, and whatever gets added later)
-into `Bookkeeping` and drops it.
+`assistant` become turns, `attachment` and `system` lines become turns or
+glosses, and `#[serde(other)]` collapses everything else (mode changes,
+file-history snapshots, and whatever gets added later) into `Bookkeeping` and
+drops it. `Folio::read` produces a `Vec<Recorded>`, each either a `Turn` or a
+`Glossed`, in file order, so a harness note keeps its place among the turns it
+stands between.
 
-`attachment` lines are the exception that isn't pure scaffolding: most are
-(task reminders, hook output, memory), but a `queued_command` attachment is a
-message the user typed while the assistant was still working. The harness
-records it here, not as a `user` turn, so dropping all attachments silently
-loses real conversation. `RawAttachment` lifts `queued_command` into a `User`
-turn and drops every other attachment kind. These turns slot into the stream in
-file order, at the point the queued message was dequeued (after the tool
-results complete, before the next assistant turn), so they render as a user
-panel interjecting mid-response.
+An `attachment` line is one of three things. A `queued_command` is a message the
+user typed while the assistant was still working: the harness records it here,
+not as a `user` turn, so it becomes a `User` turn that slots into the stream at
+the point it was dequeued (after the tool results complete, before the next
+assistant turn) and renders as a user panel interjecting mid-response. Most of
+the rest are notes the harness wrote into the session, and become glosses (see
+below). The remainder is scaffolding and is dropped.
+
+**An attachment's body stays raw `Value` rather than a typed enum, and this is
+deliberate.** Serde's `#[serde(other)]` only catches an unknown *tag*: a
+recognised tag whose fields don't match is a hard error, which would abort the
+whole render because a harness version changed one field's type. `gloss.rs`
+reads every body leniently instead, exactly as `tools.rs` reads a tool's input,
+so no shape the harness invents can break a folio.
 
 One API response is written to the transcript a block at a time: several
 `assistant` lines share a `message.id`, and every one of them repeats the whole
@@ -284,9 +297,31 @@ so a call and its result render inside one `Panel` (one bordered article) with
 no intervening `user` heading. The same pass drops `/clear` boundary turns.
 Add new turn-level filtering or grouping here, not in the renderer.
 
-Each panel is labelled by its `kind` (`Panel::kind`): the border colour already
-distinguishes user from assistant, so the label names the content instead,
-`tool` or `thinking` when that's all the panel carries, otherwise the speaker.
+**A result joins the panel holding its call, not whichever panel is newest.**
+Calls issued together are written as one `assistant` line each sharing a
+`message.id`, so they are several panels; taking the last one piles every result
+onto the last call and leaves its siblings showing none. `panels` therefore
+keeps a map from each call's id to the panel it landed in (`homes`) and places
+each result there, falling back to the newest assistant panel for a result whose
+call the session never recorded.
+
+`Panel` is an enum: `Speech` (a speaker's contribution) or `Gloss` (a harness
+note). The same pass also lifts the turns recorded in the user's role that
+aren't the user into glosses, via `gloss::wrapped`, which answers three ways
+rather than two: a note to set, *nothing* (a wrapper with nothing under it), or
+`None` for the user actually speaking. The three-way answer is load-bearing.
+The caveat that stands in front of a slash command is its own turn, and
+collapsing "no note here" into "leave it alone" renders that caveat as the user
+speaking, which is exactly what it isn't.
+
+Each panel is labelled by its `kind` (`Panel::kind`): the speaker already has a
+border colour, so the label names the content instead, `tool` or `thinking` when
+that's all the panel carries, a gloss's own kind when it is one, otherwise the
+speaker. The kind reaches the markup as `data-kind`, and the stylesheet keys
+both the border pigment and the label colour off it, so **a new kind needs a
+pigment as well as a label** or it silently inherits its neighbour's. The dock
+steps only between `data-kind="user"` and `data-kind="assistant"`, so no new
+kind may ever collide with those either.
 
 A speech panel's leading paragraph opens with a rubricated versal (a dropped
 blackletter initial). `Scribe::panel` finds the first visible-text block of a
@@ -337,7 +372,9 @@ only on the call, so `Folio::panels` resolves each result's `tool_use_id`
 against the session's calls and stamps it with an `Answered` (the tool's name,
 and the path where the call had one). That field is `#[serde(skip)]`: it is
 never on the wire, and it exists so the renderer walks a stream where every
-result already knows what produced it.
+result already knows what produced it. The same `Answered` also labels the
+result's own summary line, so a run of results says which call each answers
+rather than repeating the word "result".
 
 Naming a result is also what lets `panels` **drop** the ones that say nothing
 their call doesn't: a write answering that the file was written, a skill
@@ -374,6 +411,74 @@ serve` it) and screenshot with every `details` forced open.
 an `AskUserQuestion` result takes across the corpus (both opening sentences, a
 missing closing one, a quoted option and typed prose, an echoed preview, several
 selections joined into one answer, and a timeout), each with a test.
+
+### Setting the glosses
+
+`gloss.rs` is `tools.rs`'s counterpart for what the harness writes into a
+session, and follows the same rules: it keys on the shape, every reading answers
+`Option`, and an unrecognised shape is simply left unset. A `Gloss` is pure data
+(a kind, a gist, notes, and a `Body` that is either `Prose` or `Plain`);
+`gloss::setting` turns it into the same `Setting` a tool call produces, so both
+go through one `render::marginalia` and read as one kind of thing on the page.
+Harvest real transcripts before adding a kind, as with a tool view.
+
+The six kinds name *what wrote the note*, not what it holds: `hook`, `rule`,
+`skill`, `command`, `plan`, and `note` as the catch-all. Keeping the label set
+small is deliberate, because the summary line is where the specific labelling
+belongs, exactly as a tool's name and gist divide the work.
+
+One firing of a hook writes several lines (what it decided, what it injected,
+what it printed), and `Folio::panels` gathers them into one panel the same way
+it gathers a tool result into the call it answers: the decision labels the
+summary line and the injected context fills the fold, rather than two panels
+each saying half of it. The key is `Gloss::firing`, and **it is the `toolUseID`
+plus the hook's own command, not the id alone**: the id names the *event*, one
+event runs every hook matching it, and keying on it alone folds four
+`SessionStart` hooks into one panel claiming to be a single hook that ran four
+commands. The lines with no command of their own key on the id, which is exactly
+what gathers them onto the hook they came from.
+
+What a note has to say is what decides whether it is set at all, mirroring the
+`ACKNOWLEDGEMENTS` drop: a note with neither a gist nor a body is dropped rather
+than set as a bare line saying something ran. Three drops are worth knowing:
+
+- A `hook_success` records `content` (what the hook contributed to the session)
+  and `stdout` (what it printed), and for a hook that just prints context they
+  are the same text twice, so only one is set. A hook answering in the **control
+  protocol** prints JSON that contributes nothing itself; what it asked for
+  arrives as the `hook_system_message` and `hook_additional_context` notes beside
+  it, so the protocol JSON is dropped rather than set twice. `stderr` never
+  reaches the model and is always worth setting.
+- A `plan_mode` attachment repeats with `reminderType: "sparse"` while plan mode
+  stays on. Only `"full"` marks the boundary.
+- The image-scaling notice (`[Image: original …  Multiply coordinates …]`) is
+  coordinate advice for the model, and the image itself sits beside it.
+- A slash command that works the harness rather than the conversation
+  (`HARNESS_CONTROLS`: `/copy`, `/config`, `/resume`, and the rest). The
+  transcript records every slash command the same way, whether it injected a
+  whole skill or only redrew the screen, so telling them apart takes a list.
+  Extend it against real transcripts: dropping one that *did* inject something
+  loses the reason a session changed course, and the terse ones are not alike
+  (`/compact` rewrites the context, `/model` changes who answers, and both stay).
+
+Environment inventory (`task_reminder`, `skill_listing`, `deferred_tools_delta`,
+`agent_listing_delta`, `command_permissions`, `date_change`) and the harness's
+own bookkeeping (`system`/`turn_duration`, `system`/`stop_hook_summary`, which
+restates the hook attachments beside it) stay dropped: a reader can't act on any
+of it.
+
+The plan itself needs nothing special. An older `ExitPlanMode` carries the plan
+inline as `input.plan`, which `tools::plan` already sets; a newer one writes it
+to a file with `Write`, so the text is already in the folio as an ordinary write.
+**The renderer must not read the plan file off disk**: `Scribe` is pure, and a
+folio has to render the same for a session that ended a year ago on another
+machine.
+
+`tests/fixtures/glosses.jsonl` holds one line per kind plus the ones that must
+stay unset, the way `playground.jsonl` does for tools. It also carries a speech,
+tool, and thinking panel, so it is the swatch for the panel pigments: every edge
+a folio can draw is in one render, which is the only way to judge whether they
+tell each other apart. Keep it that way when adding a kind.
 
 ### Rendering invariants worth preserving
 
@@ -435,9 +540,18 @@ selections joined into one answer, and a timeout), each with a test.
   that, and hold the stylesheet and app script inside the cut faces too, since
   the scan weighs the transcript rather than this crate's own markup. Widening
   the cut means editing `KEEP` in `scripts/subset_fonts.py` and re-running `just
-  fonts`; it is cheap and safe, since a codepoint a face never had is simply not
-  kept. `KEEP` was chosen by measuring the corpus, not by taste: Greek is in
-  because real sessions use it, Cyrillic is out because none did.
+  fonts`; it is safe, since a codepoint a face never had is simply not kept, but
+  it is only *cheap* for some blocks, so **price a block before adding it** by
+  cutting with and without it and diffing the two faces' bytes. `KEEP` was
+  chosen by measuring the corpus rather than by taste, and the measurement that
+  decides is cost against how often the block is actually written: the two
+  symbol blocks holding `⟨these⟩` and `⬆` cost well under a kilobyte between
+  them and are in, while Latin Extended-B costs 54 KB in *every* folio to spare the rare
+  session that quotes a tool's mangled names, and Cyrillic likewise, so both
+  stay out. Leaving a block out is not a failure: the whole faces are the net
+  under it, and paying for that net in every folio is the trade this cut exists
+  to avoid. Beware measuring against a session that reached a character *because
+  you were demonstrating the fallback in it*, which is evidence of nothing.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -473,17 +587,28 @@ selections joined into one answer, and a timeout), each with a test.
   15px), because it is both the position indicator and a drag target. A test
   guards all three.
 
-Markup carries `data-sidechain` for subagent turns and `data-meta` for
-harness-injected ones so a stylesheet can distinguish them. Meta turns are
-command caveats, skill scaffolding, and context dumps, not conversation, so the
-stylesheet hides them outright; they carry no reveal control, and the app script
-skips them when searching so a match can't land in a permanently hidden panel.
+Markup carries `data-sidechain` for subagent turns so a stylesheet can
+distinguish them. **Nothing in a folio is hidden with no way to reveal it.** A
+gloss panel takes a dotted edge (against the sidechain's dashed) because it is
+nobody's speech, and a pigment no speaker holds: malachite for a hook, ochre for
+a skill or command, and rubricated vermilion for a plan boundary, since marking
+a division in the text is what a scribe ground red for. A rule and a note stay
+in faint ink, because colouring every kind would leave nothing quiet. Each kind
+sets the `--gloss-edge` token rather than `border-left-color`, so
+`.turn[data-sidechain]`, which sets the colour outright, still wins and a
+subagent's gloss still reads as a subagent. Its fold sheds its own frame while
+shut so it reads as a line under the panel's header rather than a box inside a
+box; opening it gives the frame back, since a fold holding output unfurls past
+the reading measure and there would otherwise be nothing behind the text out
+there. Those rules must sit *after* `.marginalia` in the stylesheet, or they
+lose to it at equal specificity.
 
 The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
-the panel stream. Reading controls sit on the right (search top, and a
-navigation dock bottom that steps between user/assistant messages, skipping tool
-and thinking panels, jumps to the end, and folds every marginalia); appearance
+the panel stream. Reading controls sit on the right (search top, scoped by kind
+of message, and a navigation dock bottom that steps between user/assistant
+messages, skipping tool, thinking, and gloss panels, jumps to the end, and folds
+every marginalia); appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
 facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
 with the luminary standing over it). There is no in-column header or footer.
@@ -572,11 +697,12 @@ reuse it rather than introducing a second convention.
 Types are named after a manuscript scriptorium, and the names are load-bearing
 in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
 for one project), `Colophon` (generation metadata, shown in the plaque),
-`Scribe` (the renderer). Markup classes continue it with `marginalia` (a
-collapsible tool call or result), `drollery` (a marginal creature), `versal`
-(the dropped initial that opens a speaker's paragraph), `luminary` (the candle
-or sun the folio is read by, and its `radiance` over the leaf), and
-`illumination` (the theme layer).
+`Scribe` (the renderer), `Gloss` (a note the harness entered into a session, as
+a later hand annotates a manuscript). Markup classes continue it with
+`marginalia` (a collapsible tool call or result), `drollery` (a marginal
+creature), `versal` (the dropped initial that opens a speaker's paragraph),
+`luminary` (the candle or sun the folio is read by, and its `radiance` over the
+leaf), and `illumination` (the theme layer).
 
 ## Testing against real data
 

@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- What the harness writes into a session is now on the page rather than hidden
+  or dropped: a hook's output, a `CLAUDE.md` or rule file pulled into context,
+  the instructions a skill or custom slash command carries, the slash command
+  itself, the plan-mode boundaries, and a file edited outside the session or
+  attached to it. Each gets its own quiet panel, a **gloss**, labelled by what
+  wrote it there, with its content folded away behind a summary line so it
+  annotates the conversation rather than crowding it. A reader can now see why
+  the assistant did what it did, and not just what it did. Searching the notes
+  is its own scope, and they are never navigation targets.
 - A copy button scratches like a quill taking the passage down: a short word of
   five to eight strokes, the pen lifted between them, each stroke its own
   length, weight, and tone, so no two words are written the same way. The sound
@@ -30,6 +39,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Every kind of panel now carries its own pigment, so a reader scrolling can
+  tell them apart without reading the label: a tool call takes the one cool hue
+  nothing else holds, reasoning takes the assistant's own drawn back toward the
+  ink, and the harness's notes take malachite for a hook, ochre for a skill or
+  command, and rubricated vermilion for a plan boundary. A rule pulled into
+  context and a passing note stay in faint ink, since colouring every kind would
+  leave nothing quiet. Tool and thinking labels were previously muted to a flat
+  grey, which left them the plainest things on the page.
+- A tool result is shown against the call it answers. Calls issued together are
+  recorded one line each, so they became several panels and every result piled
+  onto the last of them while its siblings showed none: a batch of five searches
+  put all five results under the fifth. Each result now joins its own call's
+  panel, and its summary line names that call rather than reading only "result".
+- One firing of a hook is one panel, however many lines it wrote. A hook that
+  answers in the control protocol records what it decided and what it injected
+  separately, which stood as two panels each saying half of it; they are now
+  gathered the way a tool result is gathered into the call it answers, with the
+  decision on the summary line and the injected context in the fold.
+- A slash command that works the harness rather than the conversation (`/copy`,
+  `/config`, `/resume`, and the like) is no longer set. The transcript records
+  every slash command alike, whether it injected a whole skill or only redrew
+  the screen, and being told that the last reply went to the clipboard tells a
+  reader nothing. The ones that change the conversation stay, `/compact` and
+  `/model` among them.
 - The dock's follow control is set only into a folio that `serve` is serving.
   Only that folio is re-read and re-rendered as the session is written; a folio
   written to a file or published as a gist is a snapshot, so following it
@@ -38,6 +71,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The cut faces carry the angle brackets and arrows that sessions turned out to
+  write (`⟨these⟩`, `⬆`), so a folio using one no longer falls back to embedding
+  the whole faces and quadrupling in size. The two blocks cost well under a
+  kilobyte between them.
+- A slash command reads as the command it is. The harness records one as a turn
+  wrapping its name, arguments, and output in XML-ish tags, and a folio set those
+  tags as literal text in the middle of the conversation; the caveat standing in
+  front of it was set as a paragraph of the user telling itself not to answer.
 - A marginalia left open in one folio no longer opens panels in another, and
   following the end of a live session no longer snaps an unrelated folio to its
   end. Both were kept in one store shared by every folio on an origin, and a

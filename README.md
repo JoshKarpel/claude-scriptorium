@@ -136,7 +136,9 @@ Assistant and user turns, in order, with:
   command as highlighted shell, an edit as a diff, a plan or a subagent prompt
   as the markdown it was composed as, a read's result as the language of the
   file it read, a search's result as the links it found. A call its label
-  already states in full is one flat line; everything else folds. A result that
+  already states in full is one flat line; everything else folds. Each result
+  sits with the call it answers and names it, so a batch of calls issued at once
+  doesn't leave you counting to work out which result is which. A result that
   says only that the call was carried out is left out, since the call above it
   already shows what happened.
 - Terminal colour kept: output written with ANSI escapes reads in the folio's
@@ -156,19 +158,54 @@ document and lies on its side for a code block that runs off the edge. It is
 never hidden or narrowed, being both the position indicator and a drag target,
 and a reader in a high-contrast mode gets their own system's scrollbar instead.
 
-Turns a subagent produced carry `data-sidechain`, and turns the harness injected
-carry `data-meta`, so a stylesheet can treat them differently.
+Turns a subagent produced carry `data-sidechain`, so a stylesheet can treat
+them differently.
 
 Transcript content is escaped, never executed: a session that discusses
 `<script>` renders it as text.
+
+### Glosses
+
+Much of what shapes a session is written into it by the harness rather than
+typed by anyone, and a reader who can't see it is left guessing why the
+assistant did what it did. So each of those notes gets its own quiet panel, a
+**gloss**, labelled by what wrote it there, with its content folded away behind
+a summary line:
+
+| Gloss | What it holds |
+| --- | --- |
+| `hook` | What a hook printed, injected, or failed with |
+| `rule` | A `CLAUDE.md` or rule file pulled into context |
+| `skill` | The instructions a skill or custom slash command carries |
+| `command` | A slash command, its arguments, and what it printed |
+| `plan` | Entering plan mode, and leaving it with or without a plan |
+| `note` | A file edited outside the session or attached to it, a truncated read, a model swapped mid-conversation |
+
+A command that works the harness rather than the conversation, `/copy` or
+`/config` say, is left out: being told the last reply went to the clipboard
+tells a reader nothing. The ones that change the conversation stay.
+
+Glosses are never navigation targets, and searching them is its own scope, so
+the reading column stays the conversation while the context behind it stays a
+click away.
+
+Every kind of panel carries its own pigment, so scrolling tells you what you're
+passing without reading the labels: the speakers keep lapis and orange, a tool
+call takes the one cool hue nothing else holds, reasoning takes the assistant's
+own drawn back toward the ink, and the harness's notes take malachite, ochre,
+and a rubricated vermilion for a plan boundary, with the ambient ones left in
+faint ink.
 
 ### Unrecognized content
 
 Claude Code's transcript format grows new block types over time. An
 unrecognized block renders as formatted JSON rather than aborting the folio,
 because a new block type is a producer adding something optional, not malformed
-input. Lines that carry no conversation at all (attachments, hook output, mode
-changes, file-history snapshots) are skipped.
+input. The same goes for the harness's own notes: one whose shape the folio
+doesn't recognize is left unset rather than breaking the render. Lines that
+carry no conversation and no context (an inventory of the available tools or
+skills, a restatement of the checklist, the harness's own timings, mode changes,
+file-history snapshots) are skipped.
 
 Tools are treated the same way. A tool with no view of its own, such as one an
 MCP server provides, shows the input it was sent as formatted JSON, and so does
@@ -180,16 +217,17 @@ A folio is interactive, driven by one small script inlined alongside the
 styles, so the file stays a single self-contained artifact:
 
 - **Search** the session from the fixed box: matches are highlighted, and
-  `‹ ›` or Enter steps through them, opening any collapsed tool call that holds
-  a hit.
+  `‹ ›` or Enter steps through them, opening any collapsed fold that holds a
+  hit. Scope the search to what you're after, so a query need not wade through
+  tool output, reasoning, or the harness's notes.
 - **Theme** it light, dark, or system; the default follows your OS preference
   and the choice is remembered across visits.
 - **Copy** any code block, or a whole message, from the button that appears on
   hover, and hear a quill take it down: the scratch is synthesized on the spot,
   so it costs the folio no bytes to carry.
 - **Navigate** from the corner dock: jump between user and assistant messages
-  (skipping tool and thinking panels), and collapse or expand every tool call at
-  once.
+  (skipping tool, thinking, and gloss panels), and collapse or expand every fold
+  at once.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
 - **Read by candlelight** after dark, or by the sun in the day: the luminary
   over the theme toggle flickers or turns its rays, and casts a faint glow
@@ -208,6 +246,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
 | marginalia | A collapsible tool call or result |
+| gloss | A note the harness wrote into the session, set as its own panel |
 | drollery | A marginal creature drawn in the border |
 | luminary | The candle or sun the folio is read by, and the light it casts |
 | colophon | Generation metadata, shown in the plaque |

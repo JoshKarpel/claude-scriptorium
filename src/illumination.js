@@ -91,8 +91,8 @@
   //
   // Non-destructive to the layout: nothing is hidden. Each query marks all
   // matches inside the conversation, keeps a running index, and scrolls the
-  // current one into view, opening any collapsed marginalia (and revealing the
-  // meta panels) that hold it so the match is actually visible.
+  // current one into view, opening any collapsed marginalia that holds it so
+  // the match is actually visible.
 
   const HIT = "search__hit";
   const CURRENT = "is-current";
@@ -107,9 +107,12 @@
   // Which kind of message a text node belongs to, judged by the block it sits
   // in rather than its panel's label: a tool call folded into an assistant
   // panel is still "tool", and reasoning is "thinking", so scoping is precise.
+  // A gloss is judged by its panel and checked first, since its own content
+  // sits in a marginalia and would otherwise scope as a tool call.
   const scopeOf = (node) => {
     const el = node.parentElement;
     if (!el) return "assistant";
+    if (el.closest(".turn--gloss")) return "gloss";
     if (el.closest(".marginalia")) return "tool";
     if (el.closest(".block--thinking")) return "thinking";
     const turn = el.closest(".turn");
@@ -126,11 +129,6 @@
       if (!node.nodeValue.trim()) continue;
       // Copy-button labels are chrome, not transcript; don't match them.
       if (node.parentElement && node.parentElement.closest(".copy-button")) {
-        continue;
-      }
-      // Harness-note panels are hidden with no way to reveal them, so a hit
-      // inside one could never be scrolled into view; skip them.
-      if (node.parentElement && node.parentElement.closest("[data-meta]")) {
         continue;
       }
       // Restrict to the kinds of message the reader left enabled.
@@ -446,10 +444,11 @@
       localStorage.removeItem(FOLDS);
       localStorage.removeItem(TAIL);
     } catch {}
-    // Step between the substantive messages, skipping tool-call and thinking
-    // panels: those are the noise a reader wants to jump over. Only visible
-    // ones, since a hidden meta panel reports top 0 and would hijack "current".
-    // Scoped to one speaker when a role is given, otherwise every message.
+    // Step between the substantive messages, skipping the tool-call, thinking,
+    // and gloss panels: those are what a reader wants to jump over. Only
+    // visible ones, since a panel a reader has no way to see reports top 0 and
+    // would hijack "current". Scoped to one speaker when a role is given,
+    // otherwise every message.
     const messages = (role) =>
       Array.from(
         container.querySelectorAll(

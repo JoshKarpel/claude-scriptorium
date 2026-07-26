@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use claude_scriptorium::{
-    render,
+    gloss, render,
     render::{Colophon, Delivery, Fonts, Labour, Scribe},
-    transcript::{Content, Folio, Role},
+    transcript::{Content, Folio, Panel, PanelKind, Role},
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
 use jiff::{Timestamp, tz::TimeZone};
@@ -51,14 +51,14 @@ fn set(
 fn bookkeeping_lines_are_not_turns() {
     let folio = fixture();
 
-    assert_eq!(folio.turns.len(), 5);
+    assert_eq!(folio.turns().count(), 5);
 }
 
 #[test]
 fn turn_roles_come_from_the_entry_tag() {
     let folio = fixture();
 
-    let roles: Vec<Role> = folio.turns.iter().map(|turn| turn.role).collect();
+    let roles: Vec<Role> = folio.turns().map(|turn| turn.role).collect();
     assert_eq!(
         roles,
         [
@@ -75,7 +75,8 @@ fn turn_roles_come_from_the_entry_tag() {
 fn string_content_is_kept_whole() {
     let folio = fixture();
 
-    let Content::Text(text) = &folio.turns[0].content else {
+    let first = folio.turns().next().expect("the fixture opens with a turn");
+    let Content::Text(text) = &first.content else {
         panic!("expected the opening turn to carry plain string content");
     };
     assert_eq!(text, "Explain the **quire** layout, please.");
@@ -85,7 +86,7 @@ fn string_content_is_kept_whole() {
 fn subagent_turns_are_marked() {
     let folio = fixture();
 
-    let sidechains: Vec<bool> = folio.turns.iter().map(|turn| turn.is_sidechain).collect();
+    let sidechains: Vec<bool> = folio.turns().map(|turn| turn.is_sidechain).collect();
     assert_eq!(sidechains, [false, false, false, true, false]);
 }
 
@@ -116,8 +117,7 @@ fn a_response_written_as_several_lines_is_counted_once() {
     // Both lines of msg_quire report the response's usage; only the first
     // keeps it, so the second contributes nothing to the total.
     let counted: Vec<u64> = folio
-        .turns
-        .iter()
+        .turns()
         .filter_map(|turn| turn.usage)
         .map(|usage| usage.output_tokens)
         .collect();
@@ -694,16 +694,18 @@ fn each_panel_is_a_deep_link_target_its_number_points_to() {
 }
 
 #[test]
-fn meta_turns_are_marked_and_hidden_with_no_reveal_control() {
+fn a_skill_the_harness_injected_is_set_as_a_gloss_rather_than_a_user_turn() {
     let folio = Folio::read(Path::new("tests/fixtures/meta.jsonl")).expect("fixture parses");
 
     let html = render(&folio, &highlighter());
 
-    // Harness notes stay in the folio, marked and hidden by the stylesheet, but
-    // carry no reader-facing control to reveal them.
-    assert!(html.contains("data-meta"));
-    assert!(html.contains("Base directory for this skill"));
-    assert!(!html.contains(r#"id="show-meta""#));
+    // The skill's own name labels the note; the base-directory line that
+    // carried it is scaffolding and doesn't reach the page.
+    assert!(html.contains(r#"class="turn turn--gloss" data-kind="skill""#));
+    assert!(html.contains(r#"<span class="marginalia__gist">review-config</span>"#));
+    assert!(!html.contains("Base directory for this skill"));
+    // Nothing is hidden any more, so nothing is marked as hidden.
+    assert!(!html.contains("data-meta"));
 }
 
 #[test]
@@ -726,8 +728,7 @@ fn a_message_queued_mid_response_becomes_a_user_turn() {
     // a `queued_command` attachment, not a `user` line, so it would vanish if
     // attachments were all dropped as bookkeeping.
     let queued = folio
-        .turns
-        .iter()
+        .turns()
         .find(|turn| {
             turn.role == Role::User
                 && matches!(&turn.content, Content::Text(text) if text.contains("above and below"))
@@ -977,6 +978,20 @@ fn a_character_no_face_ever_carried_is_not_a_reason_to_grow() {
 }
 
 #[test]
+fn the_symbols_real_sessions_write_stay_inside_the_cut() {
+    // Angle-bracket placeholders (`⟨relative time⟩`) and an up arrow turned up
+    // in the corpus and pushed those folios onto the whole faces, quadrupling
+    // them. Their blocks cost under a kilobyte, so `KEEP` carries them; without
+    // this a re-cut could quietly drop them again.
+    for character in ['⟨', '⟩', '⬆'] {
+        assert!(
+            render::beyond_cut(&character.to_string()).is_empty(),
+            "{character} is written by real sessions and must stay in the cut"
+        );
+    }
+}
+
+#[test]
 fn nothing_below_the_ascii_boundary_is_ever_dropped() {
     // `beyond_cut` skips whole runs of bytes under 0x80 without decoding them,
     // which is only sound while no such codepoint can be dropped.
@@ -1001,4 +1016,176 @@ fn the_folios_own_chrome_stays_inside_the_cut_faces() {
              scripts/subset_fonts.py and re-run `just fonts`"
         );
     }
+}
+
+fn glossed() -> Folio {
+    Folio::read(Path::new("tests/fixtures/glosses.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn what_the_harness_wrote_into_the_session_is_set_as_its_own_panel() {
+    let html = render(&glossed(), &highlighter());
+
+    // A hook, a rule pulled into context, a skill, a slash command, and the
+    // plan-mode boundaries each get a panel labelled by what wrote it.
+    for kind in ["hook", "rule", "skill", "command", "plan"] {
+        assert!(
+            html.contains(&format!(r#"class="turn turn--gloss" data-kind="{kind}""#)),
+            "no {kind} gloss was set"
+        );
+    }
+    assert!(html.contains("No journal yet for branch"));
+    assert!(html.contains("Derive aggressively rather than implementing by hand"));
+    assert!(html.contains("The objective is to"));
+}
+
+#[test]
+fn the_gloss_fixture_carries_every_kind_of_panel_to_compare() {
+    // The fixture is the swatch a styling change is looked at against, so it
+    // has to hold a speech, tool, and thinking panel beside the glosses: the
+    // edges are only worth comparing in one document.
+    let html = render(&glossed(), &highlighter());
+
+    for kind in ["user", "assistant", "tool", "thinking"] {
+        assert!(
+            html.contains(&format!(r#"data-kind="{kind}""#)),
+            "the swatch is missing a {kind} panel to compare the glosses against"
+        );
+    }
+}
+
+#[test]
+fn a_slash_command_is_set_as_a_command_rather_than_its_wrapper() {
+    let html = render(&glossed(), &highlighter());
+
+    assert!(html.contains(r#"<span class="marginalia__gist">/debug-gha</span>"#));
+    assert!(html.contains(r#"<span class="marginalia__note">run 4812</span>"#));
+    // The wrapper tags the harness records the command as never reach the page.
+    assert!(!html.contains("command-name"));
+    assert!(!html.contains("command-args"));
+    // Neither does the caveat standing in front of it, which is a turn of its
+    // own and would otherwise be set as the user speaking.
+    assert!(!html.contains("Caveat: The messages below"));
+    // A command that works the harness rather than the conversation is left
+    // out entirely, along with what it printed.
+    assert!(!html.contains("/copy"));
+    assert!(!html.contains("Copied to clipboard"));
+}
+
+#[test]
+fn one_firing_of_a_hook_is_one_panel_however_many_lines_it_wrote() {
+    let folio = glossed();
+    let html = render(&folio, &highlighter());
+
+    // The Stop hook writes what it decided and what it injected as separate
+    // lines sharing a `toolUseID`. They are one event, so the decision labels
+    // the panel and the injected context fills its fold, rather than standing
+    // as two panels saying half of it each.
+    let stop = folio
+        .panels()
+        .into_iter()
+        .find_map(|panel| match panel {
+            Panel::Gloss(gloss)
+                if gloss.gloss.gist.as_deref()
+                    == Some("[claude-stop-finish] finishing pass triggered") =>
+            {
+                Some(gloss.gloss)
+            }
+            _ => None,
+        })
+        .expect("the hook's decision labels a panel");
+
+    assert_eq!(stop.notes, ["Stop", "added context"]);
+    assert!(matches!(stop.body, Some(gloss::Body::Prose(_))));
+    assert!(html.contains("You made these changes this session"));
+}
+
+#[test]
+fn plan_mode_states_both_boundaries_and_whether_a_plan_was_written() {
+    let html = render(&glossed(), &highlighter());
+
+    assert!(html.contains(r#"<span class="marginalia__gist">entered plan mode</span>"#));
+    assert!(html.contains(r#"<span class="marginalia__note">left, plan written</span>"#));
+    // The reminder that plan mode is still on says nothing that has changed.
+    assert_eq!(html.matches(">entered plan mode<").count(), 1);
+}
+
+#[test]
+fn scaffolding_and_duplicated_hook_output_stay_out_of_the_folio() {
+    let folio = glossed();
+    let panels = folio.panels();
+
+    // The tool and skill inventories, the checklist reminder, and the harness's
+    // own timings are not notes a reader can act on. Neither is a hook's
+    // control-protocol JSON, whose payload arrives as the notes beside it.
+    let html = render(&folio, &highlighter());
+    assert!(!html.contains("distil the branch's working memory"));
+    assert!(!html.contains("hookSpecificOutput"));
+    assert!(!html.contains("15086"));
+    // Every panel that is a gloss says something: none is a bare line
+    // reporting that a thing ran.
+    for panel in &panels {
+        if let Panel::Gloss(gloss) = panel {
+            assert!(
+                gloss.gloss.gist.is_some() || gloss.gloss.body.is_some(),
+                "a gloss with nothing to say reached the folio: {gloss:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_gloss_is_never_stepped_to_by_the_navigation_dock() {
+    let html = render(&glossed(), &highlighter());
+
+    // The dock seeks `data-kind="user"` and `data-kind="assistant"`, so a
+    // gloss's kind must never collide with a speaker's.
+    for kind in ["hook", "rule", "skill", "command", "plan", "note"] {
+        assert_ne!(kind, "user");
+        assert_ne!(kind, "assistant");
+    }
+    assert!(html.contains(r#"data-scope="gloss""#));
+}
+
+#[test]
+fn hooks_sharing_one_event_stay_their_own_panels() {
+    let folio = glossed();
+
+    // A `toolUseID` names the event, not the hook, and one `SessionStart` runs
+    // every hook matching it. Keying the bundle on the id alone folds them all
+    // into a single panel claiming to be one hook that ran four commands.
+    let commands: Vec<String> = folio
+        .panels()
+        .into_iter()
+        .filter_map(|panel| match panel {
+            Panel::Gloss(gloss) if gloss.gloss.gist.as_deref() == Some("SessionStart:clear") => {
+                Some(gloss.gloss.notes.join(", "))
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(commands, ["claude-branch-journal", "claude-git-status"]);
+}
+
+#[test]
+fn each_result_joins_the_panel_holding_the_call_it_answers() {
+    let folio = glossed();
+
+    // Calls issued together are written as one assistant line each, so they
+    // become several panels. Taking the newest panel for every result piles
+    // them all onto the last call and leaves its siblings showing none.
+    let paired: Vec<(usize, usize)> = folio
+        .panels()
+        .iter()
+        .filter_map(|panel| match panel {
+            Panel::Speech(speech) if speech.kind() == PanelKind::Tool => Some((
+                speech.blocks.iter().filter(|b| b.is_call()).count(),
+                speech.blocks.iter().filter(|b| b.is_result()).count(),
+            )),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(paired, [(1, 1), (1, 1)], "each call keeps its own result");
 }

@@ -52,8 +52,13 @@ modified copy could not keep.
 # ~/.claude/projects rather than guessed: Latin and its punctuation, the
 # arrows and math a model writes in prose, and the box drawing, block elements,
 # geometric shapes, and braille that CLI tools draw tables and spinners with.
-# Greek earns its place (delta in diffs and maths); Cyrillic has no evidence
-# behind it and costs ~50 KB, so it is left out until a render says otherwise.
+# Greek earns its place (delta in diffs and maths). A block is weighed against
+# what the faces actually hold in it, not against how plausible it looks: the two
+# symbol blocks below cost ~350 bytes between them and spare the folios that
+# write ⟨these⟩ or ⬆, while Latin Extended-B costs 54 KB in *every* folio to
+# spare the rare one that quotes a tool's mangled names, and Cyrillic likewise.
+# Both stay out. The whole faces are the safety net for them, and paying for the
+# net in every folio is the trade this cut exists to avoid.
 #
 # Widening this is cheap and safe: a codepoint a face never had is simply not
 # kept, and the whole-face fallback covers anything cut too far.
@@ -77,7 +82,9 @@ KEEP: tuple[tuple[int, int], ...] = (
     (0x25A0, 0x25FF),  # Geometric Shapes
     (0x2600, 0x26FF),  # Miscellaneous Symbols
     (0x2700, 0x27BF),  # Dingbats
+    (0x27C0, 0x27EF),  # Miscellaneous Mathematical Symbols-A
     (0x2800, 0x28FF),  # Braille Patterns
+    (0x2B00, 0x2BFF),  # Miscellaneous Symbols and Arrows
     (0xFB00, 0xFB06),  # Latin ligatures
     (0xFEFF, 0xFEFF),  # Byte order mark
     (0xFFFD, 0xFFFD),  # Replacement character
