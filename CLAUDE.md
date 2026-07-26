@@ -8,10 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 recipes.
 
 ```bash
-just setup             # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
-just check             # format, lint, then test
+just setup             # nightly rustfmt, pre-commit hook, JS toolchain, Chromium (after cloning)
+just check             # format, lint, then every test suite
 just test              # cargo test --all-features
 just test <name>       # single test, e.g. just test markdown_becomes_html
+just test-js           # the folio's own script, without a browser
+just test-browser      # a rendered folio, driven in a headless Chromium
 just render <session>  # write a session to HTML (CLI `render` subcommand)
 just serve <session>   # live-reload dev server, rebuilds on source change
 just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
@@ -91,11 +93,16 @@ variable (mise sets one) overrides the file. The pin therefore takes effect in
 CI and often not locally.
 
 `mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
-`just`, `samply`, `uv`), so `mise install` is enough to run any of them. It
-deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
+`just`, `node`, `samply`, `uv`), so `mise install` is enough to run any of them.
+It deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
 is what resolves the `+nightly` that `just format` needs. `fswatch`, which
 `just serve` and `just watch` need, has no mise package and stays a system
 dependency.
+
+`package.json` is the test toolchain and nothing else: Playwright, pinned and
+locked, for the browser suite. **No JS dependency ever reaches a folio** — the
+inlined script is this repo's own two files and depends on nothing — so anything
+added here belongs under `devDependencies` and stays out of `src/`.
 
 When a change is user-visible (a new subcommand or flag, changed output, a bug
 fix), add an entry to `CHANGELOG.md` under the current unreleased version,
@@ -125,6 +132,17 @@ module each:
   output, the rule files it pulls in, a skill's instructions, a slash command,
   the plan-mode boundaries), which is the one place that knows anything about a
   specific injection's shape.
+
+The folio's own behaviour is split the same way the Rust is, and for the same
+reason: `illumination.core.js` is a functional core (one object, `core`, of
+functions that take values and answer with values, touching neither the DOM nor
+storage nor the clock) and `illumination.shell.js` is the imperative shell around
+it. Both are inlined into one `<script>`, the core first, so the shell closes
+over it. Anything that can be worked out from values belongs in the core, where
+`just test-js` exercises it in a couple of hundred milliseconds without a
+browser; what is left in the shell is wiring, exercised in a real one by `just
+test-browser`. The script stays a *classic* script rather than a module: a module
+is deferred, and the theme has to apply before the body paints.
 
 `src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
 `publish`, and `fetch` subcommands, resolves which session to show, reads the
@@ -562,8 +580,8 @@ tell each other apart. Keep it that way when adding a kind.
   file view. The constraint to respect is therefore **total bundle size** (keep
   it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
-  behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
-  the same way the stylesheet is; keep it small. The copy button's quill
+  behaviour (search, copy, collapse, jump, scrub) lives in a trusted app script
+  inlined the same way the stylesheet is; keep it small. The copy button's quill
   scratch answers to that size constraint too, which is why it is a few lines
   of Web Audio (a word's worth of strokes with the pen lifted between them,
   each grained noise under its own pressure envelope, trimmed to the band a dry
@@ -739,12 +757,13 @@ lose to it at equal specificity.
 The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
 the panel stream. Reading controls sit on the right, as a **rail**: one column of
-cards led by the **key**, with the search and the navigation dock stacked under
-it. They are in one column because they are one mechanism, the key governing the
-two below it, and standing them together is what says so; appearance
-sits on the left (a metadata plaque in the top corner revealing the title,
-facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
-with the luminary standing over it). There is no in-column header or footer.
+cards led by the **key**, with the search, the navigation dock, and the minimap
+stacked under it. They are in one column because they are one mechanism, the key
+governing the three below it, and standing them together is what says so;
+appearance sits on the left (a metadata plaque in the top corner revealing the
+title, facts, and colophon on hover or focus; and the light/dark/system toggle
+bottom, with the luminary standing over it). There is no in-column header or
+footer.
 
 **The key is a control in its own right, not the search's.** It is a chip per
 `PanelKind::EVERY`, each carrying its own kind's pigment so it doubles as the
@@ -755,27 +774,73 @@ is what lets the halves be five and five with nothing stranded on a row alone,
 which is why `note` sits at the foot of the warm column despite being
 `Side::Aside`. **The order in `EVERY` is a layout, not a classification**: every
 chip carries its own `data-side`, so the dock still steps past `note` and its
-neutral ink still keeps it from reading as the model's. The search and
-the dock both read it (`enabledKinds` in the app script), so a reader says once
-what they are looking through rather than once per panel that looks: narrow the
-key to `skill` and the search finds only skills *and* the arrows step only to
-them. That is why it sits in the rail beside the search rather than inside it,
-and why a minimap added later belongs in the same rail and needs no controls of
-its own. The `aside` kinds stay out of the dock however the key is set, since the
-arrows are the two sides and those kinds are on neither.
+neutral ink still keeps it from reading as the model's. The search, the dock, and
+the minimap all read it (`enabledKinds` in the app script), so a reader says once
+what they are looking through rather than once per control that looks: narrow the
+key to `skill` and the search finds only skills, the arrows step only to them,
+*and* the map fades everything else. That is why it sits in the rail above them
+rather than inside any one of them. The `aside` kinds stay out of the dock
+however the key is set, since the arrows are the two sides and those kinds are on
+neither.
 
-**The dock steps by writing the turn's permalink**, not by scrolling to it:
-`history.replaceState` to `#turn-N`, then an instant `scrollIntoView`. All three
-parts are load-bearing. The hash is what makes the position survive a reload,
-which matters because `serve` re-renders under the reader and a scroll in flight
-is simply lost when it does, with nothing recording where it was headed. The
-landing is instant because an animation is a thing to wait out when the reader
-means to press the button again. And it is `replaceState` rather than assigning
-`location.hash` so that twenty steps don't cost twenty presses of Back;
+The **minimap** is the folio seen edge-on, at the foot of the rail: a band per
+panel in that panel's own pigment, sized to the share of the document the panel
+takes, with the reader's own view of the leaf drawn over them and a drag along it
+scrubbing the folio. Three things about it are load-bearing. Its bands are
+**recovered from the panels** rather than written into the markup, since what a
+band states is a share of the document, which only the browser knows and which
+changes every time a fold opens; the empty track the renderer emits is what tells
+the app script to draw them. A kind the key takes out of play is **faded, not
+dropped**, because a map missing a stretch of the document misstates where
+everything else in it sits, and a scrub then lands on the nearest band still in
+play. And it is `aria-hidden`: every band is a second way to a panel the dock
+already steps to and the panel's own number already links to, so a stop per panel
+in the tab order would bury both.
+
+It is also the one card in the rail that is **not cut as a card**: no leaf, no
+border, no shared radius. It is drawn as the volume itself, seen from the
+fore-edge with its spine toward the reading column: tooled leather with five
+raised cords and a lettering piece, boards standing proud at head and tail (a
+binding's squares, which is why its padding is uneven), and the painted edges of
+the leaves between them, ruled with a hairline every other pixel. All of it is
+gradients rather than an image, so it costs no bytes and resolves `light-dark()`
+like the rest of the palette. The silhouette is what carries the metaphor, so
+don't put it back in a rounded rectangle.
+
+A band takes its kind's pigment from the same declaration the key's chips do
+(`--kind-hue`), since both stand for a panel rather than being one; a kind that
+reaches one and not the other is a kind that silently shares a neighbour's hue,
+which a test weighs against `PanelKind::EVERY`.
+
+The wheel over the track **zooms the map and nothing else**, held about the
+pointer as a map zooms about a cursor. A folio of a thousand panels draws most of
+them two pixels tall, which is a mark rather than a target; zooming opens a
+stretch up so one can be picked out. What the track shows is a `lens` (an origin
+in the document and a scale), and the zoom is deliberately *independent* of the
+reader's position: looking into one stretch while reading another is the whole
+point, so only the reader's own scrolling brings the lens back to them
+(`core.followed`, applied on scroll and on nothing else). The wheel event is
+stopped at the track, both so the leaf doesn't scroll under the reader and so
+following is not released: looking at the map is not leaving the end of the
+session.
+
+**Every landing writes the turn's permalink**, rather than only scrolling to it:
+`history.replaceState` to `#turn-N`, a mark on the panel, then an instant
+`scrollIntoView`. The dock's steps, the leaps to either end, and the minimap's
+scrub all go through the one `landOn`, so a folio's URL always names where its
+reader is. Each part is load-bearing. The hash is what makes the position survive
+a reload, which matters because `serve` re-renders under the reader and a scroll
+in flight is simply lost when it does, with nothing recording where it was
+headed. The landing is instant because an animation is a thing to wait out when
+the reader means to press the button again. It is `replaceState` rather than
+assigning `location.hash` so that twenty steps don't cost twenty presses of Back;
 `replaceState` performs no scroll of its own, which is why the scroll is
-explicit. The deep-link handler already restores such a hash on load (and
-releases follow, since a named turn is the reader taking control), so the dock
-gets reload-correctness by joining that path rather than adding one.
+explicit. And **`:target` does not answer to `replaceState`**, so the gilt "you
+are here" wash is drawn from a `data-landed` mark the script sets as well as from
+`:target`: without it the wash appeared only for a reader who arrived by a link,
+and then stayed on that panel through every step after. The deep-link handler
+restores such a hash on load, so a landing gets reload-correctness by joining
+that path rather than adding one.
 
 The luminary (`luminary.svg`, inline in the appearance corner) is the light the
 folio is read by: a guttering candle after dark, the sun with its rays circling
@@ -800,6 +865,19 @@ promise an update that can never come. The control's *presence* is what tells
 the app script this folio can follow, so there is one source of truth rather
 than a flag in each: no control means jumping to the end stays a jump, and no
 follow state is stored.
+
+**Following is a mode, and what it stores is the permalink it last wrote**, not a
+flag. Three things follow from that, each of which broke when it was missing.
+The pin is what tells a hash the folio wrote itself apart from one the reader
+arrived with: a live session grows between loads, so by the time a followed folio
+is reloaded the hash it wrote no longer names the end, and reading every hash as
+the reader's released following on the first reload (and on every reload at all,
+once a step of the dock had left a permalink in the URL). While following,
+`history.scrollRestoration` is `manual`, because the browser restores the
+position it recorded before the reload *after* this script has run, quietly
+undoing the snap to the end. And the end is re-pinned whenever the leaf changes
+height under the reader (a `ResizeObserver` on the panels), since the fonts
+landing and a fold opening both move it.
 
 What the app script remembers is split by what it belongs to. The theme is the
 reader's, and holds across everything they open, so it keeps one key. Which
@@ -888,26 +966,32 @@ A shape rare enough to be worth a comment is worth a fixture line.
 ### Visual verification
 
 The stylesheet is the deliverable, so a styling change isn't done until it has
-been looked at, not just asserted on in a string test. `just setup` installs a
-Playwright-managed headless Chromium; render a folio and screenshot it:
+been looked at, not just asserted on in a string test. `just setup` installs the
+test toolchain and a Playwright-managed headless Chromium; render a folio and
+screenshot it:
 
 ```bash
 cargo run -q --release -- render <session.jsonl> -o /tmp/folio.html
-uvx --from playwright python - /tmp/folio.html /tmp/folio.png <<'PY'
-import sys
-from playwright.sync_api import sync_playwright
-html, png = sys.argv[1], sys.argv[2]
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1500, "height": 2600})
-    page.goto(f"file://{html}")
-    page.screenshot(path=png)
-    browser.close()
-PY
+node --input-type=module -e '
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1500, height: 2600 } });
+await page.goto("file:///tmp/folio.html");
+await page.screenshot({ path: "/tmp/folio.png" });
+await browser.close();
+'
 ```
 
 Read the PNG back to check the illumination. For an interactive loop, `just
 serve <session>` reloads the browser as you edit the renderer or CSS.
+
+Behaviour is a different question from appearance, and has its own two suites:
+`just test-js` for the script's core (values in, values out, no browser) and
+`just test-browser` for what it does to a real folio in a real Chromium, both
+run by `just check`. A change to `illumination.*.js` belongs in one of them:
+`tests/browser` renders through the actual CLI and even serves a session it
+grows under the reader, so following, the dock, the minimap, and what a folio
+remembers across a reload are all exercised as a reader meets them.
 
 ### Verifying the gist viewer end to end
 
@@ -931,22 +1015,19 @@ exercise the raw-URL fallback the truncated case takes.
    (`.folio`) rather than `load`, then assert the folio is there and
    screenshot it:
 
-```python
-import functools, threading, sys
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from playwright.sync_api import sync_playwright
+```js
+// node --input-type=module -e '<this>' from the repo root, where `playwright`
+// resolves; `npx serve docs` or any static server will do for the host.
+import { chromium } from "playwright";
 
-gid, docs_dir, png = sys.argv[1], sys.argv[2], sys.argv[3]
-server = ThreadingHTTPServer(
-    ("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=docs_dir)
-)
-threading.Thread(target=server.serve_forever, daemon=True).start()
-with sync_playwright() as p:
-    page = p.chromium.launch().new_page(viewport={"width": 1500, "height": 2000})
-    page.goto(f"http://127.0.0.1:{server.server_address[1]}/?{gid}/session.html")
-    page.wait_for_selector(".folio", timeout=30000)
-    assert page.title() == "folio session" and page.query_selector(".folio")
-    page.screenshot(path=png)
+const [gist, port, png] = ["<id>", "<port>", "/tmp/viewer.png"];
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1500, height: 2000 } });
+await page.goto(`http://127.0.0.1:${port}/?${gist}/session.html`);
+await page.waitForSelector(".folio", { timeout: 30000 });
+console.assert((await page.title()) === "folio session");
+await page.screenshot({ path: png });
+await browser.close();
 ```
 
 3. `gh gist delete <id> --yes`, then read the PNG back to confirm the

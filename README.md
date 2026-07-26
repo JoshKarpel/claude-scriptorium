@@ -200,6 +200,19 @@ malachite. A plan boundary is the exception, rubricated in vermilion because it
 marks a division in the text rather than anything said in it, and the ambient
 kinds stay in faint ink so the rest can stay loud.
 
+### What a folio cannot show
+
+A transcript records the conversation, not the instructions a session opened
+with. The project's `CLAUDE.md`, your global one, and every rule with no path to
+trigger on are assembled into the system prompt, which is never written to the
+session file, so **no folio can show them**: what you see are the rules and
+nested `CLAUDE.md` files the harness pulled in *as it worked*, one gloss each.
+A session can therefore read as though the assistant knew something from
+nowhere, and the standing instructions are where to look.
+
+The same goes for anything else outside the file: a tool's own side effects, the
+state of the repository, and whatever you told Claude in another session.
+
 ### Unrecognized content
 
 Claude Code's transcript format grows new block types over time. An
@@ -240,6 +253,13 @@ styles, so the file stays a single self-contained artifact:
   to skills walks you through the skills alone. Each step names the turn in the
   URL, so it is a link you can share and a place a reload returns you to.
   Collapse or expand every fold at once from the same dock.
+- **Scrub the minimap** at the foot of the rail, drawn as the bound volume
+  itself: the whole session seen from the fore-edge, a band per message in that
+  message's own pigment, with your place on the leaf drawn over it. Drag along it
+  to travel, and turn the wheel over it to zoom the map alone, so a long
+  session's messages come apart far enough to pick one out without moving from
+  where you are reading. It honours the key as well, fading what you have set
+  aside.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
 - **Read by candlelight** after dark, or by the sun in the day: the luminary
   over the theme toggle flickers or turns its rays, and casts a faint glow
@@ -260,6 +280,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | marginalia | A collapsible tool call or result |
 | gloss | A note the harness wrote into the session, set as its own panel |
 | key | Which kinds of panel are in play, and what each edge's pigment means |
+| rail | The column of cards the key leads: search, dock, and minimap |
 | drollery | A marginal creature drawn in the border |
 | luminary | The candle or sun the folio is read by, and the light it casts |
 | colophon | Generation metadata, shown in the plaque |
@@ -271,17 +292,24 @@ The code names things after the scriptorium that produced manuscripts by hand:
 shows them all. After cloning:
 
 ```bash
-just setup   # installs nightly rustfmt and the pre-commit hook
+just setup   # nightly rustfmt, the pre-commit hook, and the browser tests' toolchain
 ```
 
 ```bash
-just check      # format, lint, and test
+just check        # format, lint, and every test suite
 just test
+just test-js      # the folio's own script, without a browser
+just test-browser # a rendered folio, driven in a headless Chromium
 just render <session>
-just bench      # time rendering the fixtures, with hyperfine
-just bench-huge # the same, over generated sessions of megabytes
-just profile    # sample a render and report where the time went, with perf and samply
+just bench        # time rendering the fixtures, with hyperfine
+just bench-huge   # the same, over generated sessions of megabytes
+just profile      # sample a render and report where the time went, with perf and samply
 ```
+
+The folio ships one inlined script, split into a functional core
+(`src/illumination.core.js`) and the shell that wires it to the document
+(`src/illumination.shell.js`), so the arithmetic behind its controls is tested
+as plain values and only the wiring needs a browser.
 
 Profiling needs perf and two kernel settings; `just setup-profiling` installs
 them (once per machine, with sudo).
@@ -290,9 +318,11 @@ Formatting runs under nightly rustfmt, since `rustfmt.toml` uses unstable
 options. Committing runs the same formatting and linting through pre-commit.
 
 `mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
-`just`, `samply`, `uv`), so [mise](https://mise.jdx.dev) users get all of them
-with `mise install`. The Rust toolchain comes from `rust-toolchain.toml`
-instead, since rustup is what resolves the nightly rustfmt.
+`just`, `node`, `samply`, `uv`), so [mise](https://mise.jdx.dev) users get all
+of them with `mise install`. The Rust toolchain comes from
+`rust-toolchain.toml` instead, since rustup is what resolves the nightly
+rustfmt. The only JS dependency is [Playwright](https://playwright.dev), used
+by the browser tests; nothing it installs reaches a folio.
 
 ## Fonts
 

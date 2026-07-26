@@ -487,7 +487,17 @@ pub fn hint(
 ) -> Option<String> {
     const PAST_THE_COLUMN: usize = 160;
 
-    let text = spoken(content).ok()?;
+    let text = match spoken(content) {
+        Ok(text) => text,
+        // A tool search answers with references rather than with text, and the
+        // fold sets them as the list of names they are, so the hint names them
+        // too: without this the one line a reader sees of a search's answer was
+        // blank. Anything else that comes back as blocks is content in its own
+        // right (an image, a nested result) and has no line to preview.
+        Err(blocks) => Cow::Owned(
+            references(answering.map(|answered| answered.tool.as_str()), blocks)?.join(", "),
+        ),
+    };
     let shown = if is_error {
         // A failure's own first line is the most useful hint there is, and the
         // tag around it is the harness's rather than the tool's.
@@ -1099,10 +1109,13 @@ fn spoken_blocks(blocks: &[Block]) -> Option<String> {
         .map(|spoken| spoken.join("\n"))
 }
 
-/// A result that came back as blocks rather than text. A tool search answers
-/// with references to the tools it found, which are names; everything else is
-/// content in its own right and renders as the block it is.
-fn blocks_result(scribe: &Scribe, tool: Option<&str>, blocks: &[Block]) -> Markup {
+/// The tools a search found, when that is the whole of what came back. Every
+/// block must be a reference: a result carrying anything else is content in its
+/// own right and is set as the blocks it is.
+fn references<'a>(tool: Option<&str>, blocks: &'a [Block]) -> Option<Vec<&'a str>> {
+    if tool != Some("ToolSearch") {
+        return None;
+    }
     let names: Vec<&str> = blocks
         .iter()
         .filter_map(|block| match block {
@@ -1110,14 +1123,21 @@ fn blocks_result(scribe: &Scribe, tool: Option<&str>, blocks: &[Block]) -> Marku
             Block::Known(_) => None,
         })
         .collect();
-    if tool == Some("ToolSearch") && names.len() == blocks.len() && !names.is_empty() {
-        return html! {
+    (!names.is_empty() && names.len() == blocks.len()).then_some(names)
+}
+
+/// A result that came back as blocks rather than text. A tool search answers
+/// with references to the tools it found, which are names; everything else is
+/// content in its own right and renders as the block it is.
+fn blocks_result(scribe: &Scribe, tool: Option<&str>, blocks: &[Block]) -> Markup {
+    match references(tool, blocks) {
+        Some(names) => html! {
             ul .tool.tool--references {
                 @for name in names { li .tool__reference { (name) } }
             }
-        };
+        },
+        None => html! { @for block in blocks { (scribe.block(block, false)) } },
     }
-    html! { @for block in blocks { (scribe.block(block, false)) } }
 }
 
 /// The language token for a path, taken from its extension. syntect resolves it

@@ -316,11 +316,19 @@ impl<'a> Scribe<'a> {
                         (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
-                    // The folio's own behaviour: theme, search, copy, and the
-                    // navigation dock. It sits in <head> so the stored theme
-                    // applies before the body paints, avoiding a flash of the
-                    // wrong scheme.
-                    script { (PreEscaped(include_str!("illumination.js"))) }
+                    // The folio's own behaviour: theme, search, copy, the
+                    // navigation dock, and the minimap. It sits in <head> so the
+                    // stored theme applies before the body paints, avoiding a
+                    // flash of the wrong scheme, which is also why it stays a
+                    // classic script rather than a module (a module is deferred,
+                    // and would paint first). The core is inlined ahead of the
+                    // shell, in the same script, so the shell closes over it:
+                    // two files because one is pure and testable without a
+                    // browser, one script because a folio is one file.
+                    script {
+                        (PreEscaped(include_str!("illumination.core.js")))
+                        (PreEscaped(include_str!("illumination.shell.js")))
+                    }
                 }
                 // The session the folio was set from, so the app script can key
                 // what it remembers about this folio to this folio: a fold's
@@ -372,11 +380,10 @@ impl<'a> Scribe<'a> {
                             }
                         }
                     }
-                    // The reading rail: the key, and stacked under it the panels
-                    // that answer to it. Standing them in one column is what says
-                    // they are tied together, without a word of explanation. A
-                    // minimap belongs here too when there is one, and will read
-                    // the same key rather than carrying controls of its own.
+                    // The reading rail: the key, and stacked under it the search,
+                    // the dock, and the minimap, all of which answer to it.
+                    // Standing them in one column is what says they are tied
+                    // together, without a word of explanation.
                     div .rail {
                         // The folio's key leads the rail, because everything
                         // under it answers to it: which kinds are in play, and,
@@ -447,6 +454,34 @@ impl<'a> Scribe<'a> {
                             button .dock__btn .dock__btn--fold type="button" data-fold="expand" aria-label="expand all" title="expand all" { span .dock__chevron { "⌃" } span .dock__chevron { "⌄" } }
                             button .dock__btn .dock__btn--fold type="button" data-fold="collapse" aria-label="collapse all" title="collapse all" { span .dock__chevron { "⌄" } span .dock__chevron { "⌃" } }
                         }
+                        }
+                        // The folio seen edge-on, under the controls that steer
+                        // it: a band per panel in that panel's own pigment,
+                        // sized to the share of the document the panel takes,
+                        // with the reader's own view of the leaf drawn over
+                        // them. A drag along it scrubs the folio, landing on
+                        // whichever panel the key leaves in play, so it steps
+                        // through the same kinds the dock above it does, and the
+                        // wheel zooms the map alone, so a stretch of a
+                        // thousand-panel folio can be opened up and picked
+                        // through without leaving the place being read.
+                        //
+                        // The bands are recovered from the panels themselves
+                        // rather than written out here, since what a band states
+                        // is the share of the document its panel takes, which
+                        // only the browser knows and which changes every time a
+                        // fold opens. The empty track is what tells the app
+                        // script to draw them, exactly as the follow button's
+                        // presence tells it a folio can be followed.
+                        //
+                        // Hidden from assistive tech: every band is a second way
+                        // to a panel the dock already steps to and the panel's
+                        // own number already links to, and a stop per panel in
+                        // the tab order would bury both.
+                        div .minimap aria-hidden="true" {
+                            div .minimap__track title="drag to scrub, scroll to zoom" {
+                                div .minimap__view {}
+                            }
                         }
                     }
                     // Presentation controls, opposite the navigation dock:

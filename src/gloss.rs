@@ -309,6 +309,13 @@ pub fn attachment(attachment: &Value) -> Option<Gloss> {
                     "cancelled"
                 },
             ),
+        // Only the rules and `CLAUDE.md` files the harness pulls in *during* a
+        // session are recorded, one attachment each: what a session starts with
+        // (the project's own `CLAUDE.md`, the user's global one, every rule with
+        // no path to trigger on) is assembled into the system prompt, which the
+        // transcript does not carry at all. So a folio can only ever set the
+        // instructions a session reached for as it worked, and never the ones it
+        // began with.
         "nested_memory" => Gloss::new(GlossKind::Rule)
             .maybe_gist(subject(attachment))
             .maybe_note(text(attachment.get("content")?, "type").map(str::to_lowercase))

@@ -304,6 +304,17 @@ fn a_web_search_sets_the_links_it_found_as_links() {
 }
 
 #[test]
+fn a_tool_searchs_result_previews_the_tools_it_found() {
+    let html = render(&playground(), &highlighter());
+
+    // A search answers with references rather than text, so its summary line
+    // had nothing to preview and came back blank: the one line a reader sees of
+    // the answer must show what the fold below it lists.
+    assert!(html.contains(r#"<span class="marginalia__gist">WebSearch, WebFetch</span>"#));
+    assert!(html.contains(r#"<li class="tool__reference">WebSearch</li>"#));
+}
+
+#[test]
 fn a_background_tasks_answer_splits_into_its_facts_and_its_output() {
     let html = render(&playground(), &highlighter());
 
@@ -872,6 +883,56 @@ fn the_dock_leaps_to_either_end_of_the_folio() {
 }
 
 #[test]
+fn the_minimap_is_the_last_card_in_the_rail() {
+    let html = render(&fixture(), &highlighter());
+
+    // It answers to the key exactly as the search and the dock do, so it stands
+    // in the same column, under the controls it navigates alongside.
+    let rail = html
+        .split(r#"<div class="rail">"#)
+        .nth(1)
+        .expect("the rail holds the cards that answer to the key");
+    let dock = rail
+        .find("<nav class=\"dock\"")
+        .expect("the dock is in the rail");
+    let minimap = rail
+        .find(r#"<div class="minimap""#)
+        .expect("the minimap is in the rail");
+    assert!(
+        dock < minimap,
+        "the minimap is above the dock it sits under"
+    );
+    // An empty track: a band states the share of the document its panel takes,
+    // which only the browser knows, so the bands are drawn from the panels
+    // themselves rather than written out here.
+    assert!(html.contains(r#"<div class="minimap__view"></div>"#));
+    assert!(html.contains(r#"title="drag to scrub, scroll to zoom""#));
+}
+
+#[test]
+fn every_kind_of_panel_is_pigmented_wherever_it_is_stood_for() {
+    let html = render(&fixture(), &highlighter());
+
+    // A chip in the key and a band in the minimap both stand for panels rather
+    // than being one, and both take the pigment of the kind they answer for.
+    // The two are declared together, so a kind cannot reach one and miss the
+    // other; `note` is the catch-all and deliberately keeps the neutral ink.
+    for kind in PanelKind::EVERY {
+        let label = kind.label();
+        if label == "note" {
+            continue;
+        }
+        assert!(
+            html.contains(&format!(
+                r#".key__chip[data-scope="{label}"],
+.minimap__band[data-kind="{label}"] {{"#
+            )),
+            "{label} has no pigment of its own in the key or the minimap"
+        );
+    }
+}
+
+#[test]
 fn the_stylesheet_is_inlined_not_linked() {
     let html = render(&fixture(), &highlighter());
 
@@ -1074,7 +1135,14 @@ fn the_folios_own_chrome_stays_inside_the_cut_faces() {
     // go quietly missing in every folio.
     for (name, source) in [
         ("illumination.css", include_str!("../src/illumination.css")),
-        ("illumination.js", include_str!("../src/illumination.js")),
+        (
+            "illumination.core.js",
+            include_str!("../src/illumination.core.js"),
+        ),
+        (
+            "illumination.shell.js",
+            include_str!("../src/illumination.shell.js"),
+        ),
     ] {
         let reached = render::beyond_cut(source);
         assert!(

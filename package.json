@@ -1,0 +1,12 @@
+{
+  "name": "claude-scriptorium",
+  "private": true,
+  "description": "Test-only JS toolchain: the folio's own script is inlined by the Rust build and depends on nothing.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/js/*.test.mjs\" \"tests/browser/*.test.mjs\""
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}

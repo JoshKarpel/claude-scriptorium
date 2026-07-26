@@ -4,6 +4,12 @@
 // snippet `serve` injects). Transcript content is always escaped, never run;
 // this code is the one script the artifact carries deliberately. Keep it small
 // and dependency-free so a folio stays a single portable file.
+//
+// The imperative shell: everything that reads the document, listens for the
+// reader, or writes to storage. The core it stands on is
+// `illumination.core.js`, inlined ahead of this and answering as `core`.
+// Anything that can be worked out from values belongs there, where it is tested
+// without a browser; what is left here is the wiring.
 (() => {
   "use strict";
 
@@ -16,21 +22,30 @@
   // sits in <head>) so a forced theme never flashes the system one.
 
   const THEME_KEY = "scriptorium-theme";
-  const THEMES = ["system", "light", "dark"];
 
   // The theme above is the reader's, and holds across everything they open.
   // What follows is about one folio and is stored under the session the markup
   // names: which marginalia stand open, and whether the reader is following the
-  // end of the session. A fold's own key is a turn number and a position within
-  // that turn, which names a different marginalia in every session, and
-  // following a session still being written says nothing about a folio finished
-  // months ago. Every folio a reader opens from disk shares the `file://`
-  // origin, as does every folio served through one viewer, so an unscoped store
-  // is one folio's state imposed on all of them.
+  // end of the session. Following a session still being written says nothing
+  // about a folio finished months ago, and every folio a reader opens from disk
+  // shares the `file://` origin, as does every folio served through one viewer,
+  // so an unscoped store is one folio's state imposed on all of them.
   const FOLDS = "scriptorium-folds";
   const TAIL = "scriptorium-tail";
-  const perFolio = (store) =>
-    store + ":" + (document.body.dataset.folio || "?");
+  const MAP = "scriptorium-map";
+  const KEY = "scriptorium-key";
+  const perFolio = (store) => core.perFolio(store, document.body.dataset.folio);
+
+  // Storage is a privilege a folio can be opened without (a `file://` page under
+  // some settings has none at all), so every read of it answers with nothing
+  // rather than throwing.
+  const stored = (key) => {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
 
   // Keys whose default action scrolls the page, so pressing one counts as the
   // reader taking over from follow mode (unless focus is in a control).
@@ -46,8 +61,7 @@
 
   const readTheme = () => {
     try {
-      const stored = localStorage.getItem(THEME_KEY);
-      return THEMES.includes(stored) ? stored : "system";
+      return core.theme(localStorage.getItem(THEME_KEY));
     } catch {
       return "system";
     }
@@ -123,7 +137,6 @@
   };
 
   const markHits = (container, query, scopes) => {
-    const needle = query.toLowerCase();
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) {
@@ -142,22 +155,20 @@
     const hits = [];
     for (const node of nodes) {
       const text = node.nodeValue;
-      const hay = text.toLowerCase();
-      let from = hay.indexOf(needle);
-      if (from === -1) continue;
+      const spans = core.spans(text, query);
+      if (!spans.length) continue;
       const frag = document.createDocumentFragment();
       let pos = 0;
-      while (from !== -1) {
+      for (const { from, to } of spans) {
         if (from > pos) {
           frag.appendChild(document.createTextNode(text.slice(pos, from)));
         }
         const mark = document.createElement("mark");
         mark.className = HIT;
-        mark.textContent = text.slice(from, from + query.length);
+        mark.textContent = text.slice(from, to);
         frag.appendChild(mark);
         hits.push(mark);
-        pos = from + query.length;
-        from = hay.indexOf(needle, pos);
+        pos = to;
       }
       if (pos < text.length) {
         frag.appendChild(document.createTextNode(text.slice(pos)));
@@ -174,11 +185,10 @@
   };
 
   // The folio's key: which kinds of panel are in play. It is deliberately not
-  // the search's own control. The search and the dock both read it, so a reader
-  // says once what they are looking through rather than once per panel that
-  // looks, and a minimap added later reads the same thing without controls of
-  // its own. Read fresh each time rather than cached, so nothing has to be told
-  // when a chip is pressed.
+  // the search's own control. The search, the dock, and the minimap all read it,
+  // so a reader says once what they are looking through rather than once per
+  // control that looks. Read fresh each time rather than cached, so nothing has
+  // to be told when a chip is pressed.
   const keyChips = () => document.querySelectorAll(".key__chip");
 
   const enabledKinds = () => {
@@ -189,6 +199,53 @@
       }
     });
     return kinds;
+  };
+
+  // The key owns the chips' state, and is the only thing that writes it: the
+  // search, the dock, and the minimap each read it fresh and repaint on their
+  // own listeners, which run after this one because it is wired first.
+  //
+  // What is stored is the kinds set *aside*, not the ones in play, so a kind
+  // added to a later folio arrives in play rather than silently missing from a
+  // reader's stored list.
+  const wireKey = () => {
+    const key = document.querySelector(".key");
+    if (!key) return;
+    const setAside = () =>
+      new Set(
+        Array.from(keyChips())
+          .filter((chip) => chip.getAttribute("aria-pressed") !== "true")
+          .map((chip) => chip.dataset.scope),
+      );
+
+    let aside;
+    try {
+      const held = JSON.parse(stored(perFolio(KEY)) || "[]");
+      aside = new Set(Array.isArray(held) ? held : []);
+    } catch {
+      aside = new Set();
+    }
+    keyChips().forEach((chip) => {
+      chip.setAttribute("aria-pressed", String(!aside.has(chip.dataset.scope)));
+    });
+
+    // Captured, not bubbled: the search and the minimap listen for the same
+    // click, and a listener on the chip itself runs before one on the key that
+    // waits for the click to reach it. They would then read the state this is
+    // about to flip, and paint the press before it happened.
+    key.addEventListener(
+      "click",
+      (event) => {
+        const chip = event.target.closest(".key__chip");
+        if (!chip) return;
+        const active = chip.getAttribute("aria-pressed") === "true";
+        chip.setAttribute("aria-pressed", String(!active));
+        try {
+          localStorage.setItem(perFolio(KEY), JSON.stringify([...setAside()]));
+        } catch {}
+      },
+      true,
+    );
   };
 
   const wireSearch = () => {
@@ -246,13 +303,9 @@
     });
     prev.addEventListener("click", () => step(-1));
     next.addEventListener("click", () => step(1));
-    chips.forEach((button) => {
-      button.addEventListener("click", () => {
-        const active = button.getAttribute("aria-pressed") === "true";
-        button.setAttribute("aria-pressed", String(!active));
-        run();
-      });
-    });
+    // The chip's own state is the key's to flip (see `wireKey`); the search only
+    // looks again once it has.
+    chips.forEach((button) => button.addEventListener("click", run));
   };
 
   // --- The nib: a quill's scratch as a copy is taken ---------------------
@@ -454,6 +507,11 @@
 
   // --- Dock: jump between messages, fold every marginalia ---------------
 
+  // How far down the viewport a panel still counts as the one being read: enough
+  // to clear a turn's own scroll-margin, so the panel just navigated to is
+  // current rather than the one before it.
+  const THRESHOLD = 40;
+
   const wireDock = () => {
     const dock = document.querySelector(".dock");
     const container = document.querySelector("main.folio");
@@ -492,38 +550,54 @@
       );
     };
 
+    // Land on a panel: name it in the URL, and scroll to its start. Every way of
+    // arriving at a panel goes through here, so a folio's URL always names where
+    // its reader is, whether they stepped with the dock, leapt to an end, or
+    // scrubbed the minimap.
+    //
+    // `replaceState` rather than assigning `location.hash`, so twenty steps
+    // don't cost twenty presses of Back; it performs no scroll of its own, hence
+    // the explicit one, which honours the turn's `scroll-margin-top`.
+    //
+    // The panel is marked as well as named, because `:target` answers to
+    // navigation and `replaceState` is not navigation: the URL changes and the
+    // browser's own idea of the target does not follow it. The gilt wash that
+    // says "you landed here" would otherwise appear only when a reader arrived
+    // by a link, and stay stuck on that panel through every step after. The
+    // stylesheet draws the mark and `:target` the same way, so a landing and an
+    // arrival read alike.
+    const marked = () => container.querySelectorAll("[data-landed]");
+
+    const name = (target) => {
+      marked().forEach((panel) => delete panel.dataset.landed);
+      target.dataset.landed = "";
+      try {
+        history.replaceState(null, "", `#${target.id}`);
+      } catch {
+        location.hash = `#${target.id}`;
+      }
+    };
+
+    const landOn = (target, marking = true) => {
+      releaseTail();
+      if (marking) name(target);
+      target.scrollIntoView({ behavior: "auto", block: "start" });
+    };
+
     const jump = (direction, side) => {
-      // The message at the top of the viewport is the last one whose top has
-      // scrolled to or above the threshold; the threshold clears a turn's own
-      // scroll-margin so the one just navigated to counts as current, not next.
-      const threshold = 40;
       const panels = messages(side);
-      let current = -1;
-      panels.forEach((turn, index) => {
-        if (turn.getBoundingClientRect().top <= threshold) current = index;
-      });
-      const next = Math.min(Math.max(current + direction, 0), panels.length - 1);
-      const target = panels[next];
+      const tops = panels.map((turn) => turn.getBoundingClientRect().top);
+      const target = panels[core.stepIndex(tops, direction, THRESHOLD)];
       if (!target) return;
       // Step by the turn's own permalink, and land at once rather than gliding.
       // Both follow from the same thing: `serve` re-renders under the reader, so
       // a smooth scroll still in flight is simply lost when it does, and the
       // scroll position it was heading for is not recorded anywhere. Writing the
       // hash makes the URL name where the reader is, which the deep-link handler
-      // above already restores on the next load, and an instant landing is what
+      // below already restores on the next load, and an instant landing is what
       // stepping through a folio wants in any case: an animation is a thing to
       // wait out when the reader means to press the button again.
-      //
-      // `replaceState` rather than assigning `location.hash`, so twenty steps
-      // don't cost twenty presses of Back; it performs no scroll of its own,
-      // hence the explicit one, which honours the turn's `scroll-margin-top`.
-      releaseTail();
-      try {
-        history.replaceState(null, "", `#${target.id}`);
-      } catch {
-        location.hash = `#${target.id}`;
-      }
-      target.scrollIntoView({ behavior: "auto", block: "start" });
+      landOn(target);
     };
 
     const fold = (open) => {
@@ -554,38 +628,68 @@
       return panels[panels.length - 1] || null;
     };
 
-    const readTail = () => {
-      if (!canFollow) return false;
-      try {
-        return localStorage.getItem(perFolio(TAIL)) === "1";
-      } catch {
-        return false;
-      }
-    };
-
-    let tailing = readTail();
+    // What following remembers is not a flag but the permalink it last wrote:
+    // the mode and where it had reached, in one value rather than two that could
+    // disagree. The pin is what tells a hash the folio wrote itself apart from
+    // one the reader arrived with, which a flag alone cannot do: a live session
+    // grows between loads, so by the time a followed folio is reloaded the hash
+    // it wrote no longer names the end.
+    let pinned = canFollow ? stored(perFolio(TAIL)) : null;
+    let tailing = Boolean(pinned);
 
     const paintTail = () => {
       if (tailButton) tailButton.setAttribute("aria-pressed", String(tailing));
     };
 
+    // Following is a mode, not a jump: while it is on, the newest panel's
+    // permalink is the folio's to write, and it is rewritten every time the end
+    // moves. `serve` re-renders under the reader, so the end moves on every
+    // reload of a live session and again whenever the leaf reflows beneath them
+    // (a fold opening, the web fonts landing). The URL therefore keeps naming
+    // the turn the reader is actually on, so a reload resumes at the end and a
+    // link copied out of a followed folio names what was on the screen.
     const scrollToEnd = (behavior) => {
       const target = lastMessage();
-      if (target) target.scrollIntoView({ behavior, block: "start" });
+      if (!target) return;
+      name(target);
+      if (tailing) {
+        pinned = target.id;
+        try {
+          localStorage.setItem(perFolio(TAIL), pinned);
+        } catch {}
+      }
+      target.scrollIntoView({ behavior, block: "start" });
     };
 
     const scrollToTop = (behavior) => {
       const target = firstMessage();
-      if (target) target.scrollIntoView({ behavior, block: "start" });
+      if (!target) return;
+      name(target);
+      target.scrollIntoView({ behavior, block: "start" });
     };
 
+    // While following, the folio decides where a reload lands, so the browser
+    // must not: left on "auto" it restores the scroll position it recorded
+    // before the reload, asynchronously and after this script has run, quietly
+    // undoing the snap to the end. `serve` reloads the page every time the
+    // session grows, which is exactly when the two disagree.
+    const holdScroll = () => {
+      try {
+        history.scrollRestoration = tailing ? "manual" : "auto";
+      } catch {}
+    };
+
+    // Turning it on pins the end (`scrollToEnd` records where); turning it off
+    // forgets, so the absence of a pin is the absence of the mode.
     const setTail = (on, behavior) => {
       tailing = canFollow && on;
-      if (canFollow) {
+      if (!tailing) {
+        pinned = null;
         try {
-          localStorage.setItem(perFolio(TAIL), on ? "1" : "0");
+          localStorage.removeItem(perFolio(TAIL));
         } catch {}
       }
+      holdScroll();
       paintTail();
       if (on) scrollToEnd(behavior);
     };
@@ -609,29 +713,61 @@
     // the hash survives the reloads a live session drives, and a suppression
     // that didn't persist would fight the anchor on every one.
     //
-    // The hash is arbitrary text off the end of a shared URL, so it need be
-    // neither a valid selector (hence getElementById, as querySelector throws)
-    // nor validly escaped (hence the guard, as a stray "%" throws).
-    const anchorId = () => {
-      const raw = location.hash.slice(1);
-      try {
-        return decodeURIComponent(raw);
-      } catch {
-        return raw;
-      }
+    // Unless it is the hash following itself last wrote, which is the folio
+    // naming where the reader is rather than the reader naming where they want
+    // to be. That is what the pin is for: reading every hash as the reader's
+    // meant following survived exactly one reload, and none at all once a step
+    // of the dock had left a permalink in the URL.
+    //
+    // The hash need not be a valid selector either, hence getElementById, as
+    // querySelector throws on one that isn't.
+    const anchoredPanel = () => {
+      const anchored = location.hash
+        ? document.getElementById(core.anchorId(location.hash))
+        : null;
+      return anchored && container.contains(anchored) ? anchored : null;
     };
-    const anchored = location.hash ? document.getElementById(anchorId()) : null;
-    const deepLink = anchored && container.contains(anchored) ? anchored : null;
+    const named = anchoredPanel();
+    const deepLink =
+      named && core.readersHash(location.hash, pinned) ? named : null;
     if (deepLink) releaseTail();
+
+    // Following a turn's own number is the reader naming where they are, so it
+    // hands control back the way a scroll does. The folio's own writes go
+    // through `replaceState`, which fires nothing here, and the fallback path
+    // records the pin before the event can run.
+    window.addEventListener("hashchange", () => {
+      // A real navigation, so the browser's own `:target` takes over the mark:
+      // leaving one behind would wash two panels at once.
+      marked().forEach((panel) => delete panel.dataset.landed);
+      if (core.readersHash(location.hash, pinned)) releaseTail();
+    });
 
     // On load, if still following, snap to the newest message at once; a second
     // pass after layout settles (web fonts shift it) lands it precisely. A
     // deep-linked turn needs that second pass too, since the browser's own
     // anchor scroll happens before the fonts land.
     paintTail();
+    holdScroll();
+    // Keep the end pinned as the leaf changes height under the reader: the
+    // fonts land, an image decodes, a fold is opened. Each moves the newest
+    // panel's start, and following means being there rather than where it used
+    // to be. Watching whether or not this load began by following, since the
+    // reader can turn it on at any point after.
+    if (canFollow) {
+      new ResizeObserver(() => {
+        if (tailing) scrollToEnd("auto");
+      }).observe(container);
+    }
     if (tailing) {
       scrollToEnd("auto");
+      // Again on the next frame, and again once every resource is in: a folio
+      // is megabytes of markup and its layout is still settling long after this
+      // script runs, and each settling moves the end.
       requestAnimationFrame(() => {
+        if (tailing) scrollToEnd("auto");
+      });
+      window.addEventListener("load", () => {
         if (tailing) scrollToEnd("auto");
       });
     } else if (deepLink) {
@@ -667,18 +803,17 @@
       const turn = details.closest(".turn");
       const marginalia = turn ? turn.querySelectorAll("details") : [details];
       const index = Array.prototype.indexOf.call(marginalia, details);
-      return `${turn ? turn.dataset.turn : "?"}:${index}`;
+      return core.foldKey(turn && turn.dataset.turn, index);
     };
 
     const readOpenFolds = () => {
       try {
-        const stored = JSON.parse(localStorage.getItem(perFolio(FOLDS)) || "[]");
-        return new Set(Array.isArray(stored) ? stored : []);
+        const held = JSON.parse(stored(perFolio(FOLDS)) || "[]");
+        return new Set(Array.isArray(held) ? held : []);
       } catch {
         return new Set();
       }
     };
-
 
     const open = readOpenFolds();
     container.querySelectorAll("details").forEach((details) => {
@@ -701,6 +836,242 @@
       },
       true,
     );
+
+    // Handed to the minimap, which is another way of arriving at a panel and so
+    // must arrive the same way: releasing follow, naming the turn, landing at
+    // its start. Passed rather than reached for, so the two agree by
+    // construction instead of by a second copy of this.
+    return { landOn };
+  };
+
+  // --- Minimap: the whole folio at a glance, and a place to scrub it -----
+
+  // A hairline under a band, so a one-line note is still somewhere to aim at in
+  // a folio whose tool output runs to thousands of lines, and a thicker one
+  // under the reader's own view, which a long folio otherwise draws as a pixel.
+  const BAND_FLOOR = 2;
+  const VIEW_FLOOR = 12;
+
+  // How fast the wheel zooms the map, and how far in it can go. The rate is per
+  // pixel of wheel delta and exponential, so a notch is the same proportion of a
+  // zoom wherever it is turned; the limit is generous because the folios that
+  // want zoom are the ones with a thousand panels in them.
+  const ZOOM_RATE = 0.002;
+  const MOST_ZOOM = 64;
+
+  const wireMinimap = (dock) => {
+    const minimap = document.querySelector(".minimap");
+    const container = document.querySelector("main.folio");
+    if (!minimap || !container || !dock) return;
+    const track = minimap.querySelector(".minimap__track");
+    const view = minimap.querySelector(".minimap__view");
+    const panels = Array.from(container.querySelectorAll(".turn"));
+    if (!track || !view || !panels.length) return;
+
+    // A band per panel, in the panel's own pigment. Drawn from the panels
+    // themselves rather than written into the markup: what a band states is the
+    // share of the document its panel takes, which only the browser knows and
+    // which changes every time a fold opens.
+    const bands = panels.map((panel) => {
+      const band = document.createElement("div");
+      band.className = "minimap__band";
+      band.dataset.kind = panel.dataset.kind || "";
+      band.dataset.turn = panel.dataset.turn || "";
+      if (panel.dataset.sidechain !== undefined) band.dataset.sidechain = "";
+      band.title = `#${panel.dataset.turn} ${panel.dataset.kind}`;
+      track.insertBefore(band, view);
+      return { band, panel };
+    });
+
+    // The whole scrollable page rather than the folio's own extent, so the
+    // reader's view sits on the map where it sits on the document.
+    const leaf = () => document.documentElement.scrollHeight || 1;
+
+    // The stretch of the leaf the track is showing. Zoomed in, the map stops
+    // being the whole folio and becomes a part of it, which is the point: a
+    // session of a thousand panels draws most of them two pixels tall, and two
+    // pixels is a mark rather than a target.
+    //
+    // How it was last framed is a fact about this folio, so it is remembered
+    // under this folio, and survives the reload a live session drives: a reader
+    // who has opened up the stretch they are working through keeps it.
+    const framed = core.framing(stored(perFolio(MAP)));
+    let lens = core.lens({
+      leaf: leaf(),
+      track: track.clientHeight,
+      zoom: framed.zoom,
+    });
+    lens = core.lens({ ...lens, origin: framed.at * lens.leaf });
+
+    const remember = () => {
+      // An unzoomed map is the whole folio, which is where every map starts:
+      // nothing to remember, so nothing is kept.
+      try {
+        if (lens.zoom <= 1) localStorage.removeItem(perFolio(MAP));
+        else {
+          localStorage.setItem(
+            perFolio(MAP),
+            JSON.stringify({ zoom: lens.zoom, at: lens.origin / lens.leaf }),
+          );
+        }
+      } catch {}
+    };
+
+    // Re-measured whenever the leaf or the track changes size. Following the
+    // reader is *not* part of that: zoom is the map's own, so looking into one
+    // stretch of a folio while reading another is exactly what it is for. Only
+    // the reader's own scrolling brings the map back to them.
+    const relens = (follow) => {
+      lens = core.lens({ ...lens, leaf: leaf(), track: track.clientHeight });
+      if (follow) lens = core.followed(lens, window.scrollY, window.innerHeight);
+      // Zoomed, the map stands for a part of the folio rather than the whole of
+      // it, and the stylesheet says so.
+      if (lens.zoom > 1) minimap.dataset.zoomed = "";
+      else delete minimap.dataset.zoomed;
+    };
+
+    const layout = () => {
+      bands.forEach(({ band, panel }) => {
+        const box = panel.getBoundingClientRect();
+        band.hidden = box.height === 0;
+        if (band.hidden) return;
+        const placed = core.bandBox(
+          box.top + window.scrollY,
+          box.height,
+          lens,
+          BAND_FLOOR,
+        );
+        band.style.top = `${placed.top}px`;
+        band.style.height = `${placed.height}px`;
+      });
+    };
+
+    const paintView = () => {
+      const placed = core.viewBox(
+        window.scrollY,
+        window.innerHeight,
+        lens,
+        VIEW_FLOOR,
+      );
+      view.style.top = `${placed.top}px`;
+      view.style.height = `${placed.height}px`;
+    };
+
+    // The key narrows the map as it narrows the search and the dock: a kind out
+    // of play is still drawn, since the map would otherwise misstate where
+    // everything else sits, but it goes faint and is no longer somewhere the
+    // scrub can land.
+    const paintKinds = () => {
+      const kinds = enabledKinds();
+      bands.forEach(({ band }) => {
+        band.dataset.inPlay = String(kinds.has(band.dataset.kind));
+      });
+    };
+
+    const nearest = (clientY) => {
+      const y = clientY - track.getBoundingClientRect().top;
+      const index = core.nearestIndex(
+        y,
+        bands.map(({ band }) => ({
+          top: band.offsetTop,
+          height: band.offsetHeight,
+          inPlay: !band.hidden && band.dataset.inPlay === "true",
+        })),
+      );
+      return index === -1 ? null : bands[index].panel;
+    };
+
+    let scrubbing = false;
+    let landed = null;
+
+    // The permalink is written when the scrub settles, not at every panel it
+    // passes over: a drag crosses dozens, and the browsers that throttle
+    // `replaceState` count them all.
+    const scrub = (event, settled) => {
+      const target = nearest(event.clientY);
+      if (!target || (target === landed && !settled)) return;
+      landed = target;
+      dock.landOn(target, settled);
+    };
+
+    track.addEventListener("pointerdown", (event) => {
+      scrubbing = true;
+      track.setPointerCapture(event.pointerId);
+      scrub(event, false);
+      event.preventDefault();
+    });
+
+    track.addEventListener("pointermove", (event) => {
+      if (scrubbing) scrub(event, false);
+    });
+
+    const settle = (event) => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      landed = null;
+      scrub(event, true);
+    };
+
+    track.addEventListener("pointerup", settle);
+    track.addEventListener("pointercancel", settle);
+
+    // Everything the map draws is a frame's worth of work over every panel, and
+    // a wheel or a scroll arrives many times a frame, so a redraw is asked for
+    // rather than done.
+    let asked = false;
+    const redraw = (follow) => {
+      if (asked) return;
+      asked = true;
+      requestAnimationFrame(() => {
+        asked = false;
+        relens(follow);
+        layout();
+        paintView();
+      });
+    };
+
+    window.addEventListener("scroll", () => redraw(true), { passive: true });
+
+    // Zoom, on the map alone: the wheel over the track narrows what it shows
+    // instead of scrolling the leaf, so a reader can open up a stretch of a
+    // thousand-panel folio where every band is two pixels tall, and pick one
+    // out, without leaving the place they are reading. Held about the pointer,
+    // as a map zooms about the cursor.
+    //
+    // The wheel is stopped here rather than let through: it must not scroll the
+    // page under the reader, and it must not reach the window listener that
+    // takes following as released, since looking at the map is not the reader
+    // leaving the end of the session.
+    track.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        lens = core.zoomedAbout(
+          lens,
+          event.clientY - track.getBoundingClientRect().top,
+          Math.exp(-event.deltaY * ZOOM_RATE),
+          MOST_ZOOM,
+        );
+        relens(false);
+        layout();
+        paintView();
+        remember();
+      },
+      { passive: false },
+    );
+
+    // Every height the map states can change without a scroll: a fold opening,
+    // the web fonts landing, the window resizing. Observing the folio catches
+    // all three, and fires once on its own to draw the map in the first place.
+    // None of them is the reader moving, so none of them brings the map back to
+    // where they are.
+    new ResizeObserver(() => redraw(false)).observe(container);
+    window.addEventListener("resize", () => redraw(false));
+    const key = document.querySelector(".key");
+    if (key) key.addEventListener("click", paintKinds);
+    paintKinds();
+    redraw(true);
   };
 
   const onReady = (fn) => {
@@ -712,9 +1083,12 @@
   };
 
   onReady(() => {
+    // The key first: it restores which kinds are in play, and everything below
+    // reads that as it wires itself.
+    wireKey();
     wireThemeToggle();
     wireSearch();
     wireCopy();
-    wireDock();
+    wireMinimap(wireDock());
   });
 })();

@@ -10,5 +10,6 @@ minimum_release_age = "7d"
 gh = "latest"                       # publish, fetch, gists, delete
 hyperfine = "latest"                # bench
 just = "latest"
+node = "latest"                     # test-js, test-browser
 "ubi:mstange/samply" = "latest"     # profile
-uv = "latest"                       # pre-commit, playwright, fonttools
+uv = "latest"                       # pre-commit, fonttools, profile report

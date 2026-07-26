@@ -8,6 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A minimap at the foot of the reading rail: the whole session seen edge-on, a
+  band per message in that message's own pigment and sized to the share of the
+  folio it takes, with your place on the leaf drawn over it. Drag along it to
+  travel, and turn the wheel over it to zoom the map alone, so a long session's
+  messages come apart far enough to pick one out without moving from where you
+  are reading. It answers to the key like everything else in the rail, fading
+  the kinds you have set aside. It is drawn as the book itself rather than as
+  another card: a volume bound in tooled leather, raised cords and a lettering
+  piece down its spine, boards standing proud at head and tail, and the painted
+  edges of its leaves between them.
+- A folio now remembers more of how you left it, each under the session it
+  belongs to: which kinds the key leaves in play, and how the minimap was
+  framed, alongside the folds and the follow mode it already kept.
+- The line a tool search's answer opens on names the tools it found. It came
+  back blank, since a search answers with references rather than with text.
+
 - What the harness writes into a session is now on the page rather than hidden
   or dropped: a hook's output, a `CLAUDE.md` or rule file pulled into context,
   the instructions a skill or custom slash command carries, the slash command
@@ -142,6 +158,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Following the end of a live session survived at most one reload, and none at
+  all once a step of the dock had left a permalink in the URL: the folio read
+  the hash it had written itself as a reader arriving at a turn, and the browser
+  restored the scroll position from before the reload over the top of it.
+  Following now keeps the newest message named in the URL as the session grows,
+  so a reload resumes at the end and a link copied out of a followed folio names
+  what was on the screen.
+- The gilt wash marking where you landed appeared only when you arrived by a
+  link, and then stayed on that message through every step afterward. Every way
+  of arriving at a message now marks it, and only it.
+- The labels in the key sat visibly high in their pills.
 - The cut faces carry the angle brackets and arrows that sessions turned out to
   write (`⟨these⟩`, `⬆`), so a folio using one no longer falls back to embedding
   the whole faces and quadrupling in size. The two blocks cost well under a

@@ -415,14 +415,19 @@ body {
 /* --- Search: a fixed widget that steps through matches --------------- */
 
 /* The reading rail: a column of panels down the right, each its own card, all of
- * them answering to the key at its foot. One declared width, since nothing
+ * them answering to the key at its head. One declared width, since nothing
  * inside asks for one any more (an `<input>` otherwise reports its `size` as an
- * intrinsic width and silently becomes the widest thing here). A minimap would
- * be another card in this stack. */
+ * intrinsic width and silently becomes the widest thing here).
+ *
+ * It reaches the foot of the leaf because the minimap at its own foot stands for
+ * the whole folio, and the taller it is the finer a distinction it can draw. The
+ * cards above it are each their own natural height and the map takes what is
+ * left, so a short viewport shrinks the map alone rather than the controls. */
 .rail {
   position: fixed;
   top: 0.8rem;
   right: 0.8rem;
+  bottom: 0.8rem;
   z-index: 10;
   /* The key's two columns of chips are the floor here, and their width is set
    * by the longest labels ("assistant", "command"). Nothing else asks for a
@@ -435,8 +440,13 @@ body {
 }
 
 /* Every card in the rail is cut the same way, so each rule below carries only
- * its own layout. A minimap added to the rail is a card by being put there. */
+ * its own layout: what is put here is a card by being put here. The minimap is
+ * the one deliberate exception, and undoes all of this in its own rules, being
+ * the book rather than a card describing it. `flex: none` so a card keeps its
+ * natural height however tall the rail is; the minimap alone asks for the
+ * slack, and asks for it there too. */
 .rail > * {
+  flex: none;
   padding: 0.34rem 0.5rem;
   background: var(--leaf);
   border: 1px solid var(--rule);
@@ -484,61 +494,87 @@ body {
   justify-content: center;
 }
 
+/* The padding is asymmetric because the type is: Fira Code's em box reaches
+ * further above its capitals than below its descenders, so a chip padded evenly
+ * sets its label visibly high in the pill. Measured rather than guessed, against
+ * a label with a descender and one without, so both sit centred on the ink they
+ * actually draw. */
 .key__chip {
-  --scope-hue: var(--ink-soft);
-  padding: 0.05rem 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--scope-hue) 45%, transparent);
+  padding: 0.14rem 0.4rem 0;
+  border: 1px solid color-mix(in srgb, var(--kind-hue) 45%, transparent);
   border-radius: 999px;
   background: transparent;
-  color: var(--scope-hue);
+  color: var(--kind-hue);
   font: inherit;
   line-height: 1.4;
   cursor: pointer;
 }
 
-/* A chip takes the hue of the panels it scopes, so the filter reads against the
- * column it filters. The glosses keep the neutral ink: they span several
- * pigments, and picking one of them to stand for all would say the wrong thing.
- */
-.key__chip[data-scope="user"] {
-  --scope-hue: var(--user-edge);
+/* What each kind is pigmented in, declared once for both the things that stand
+ * for a panel rather than being one: a chip in the key, and a band in the
+ * minimap. Each takes the hue of the panels it answers for, so the key doubles
+ * as the legend for every edge in the margin and a band reads as the panel it
+ * marks. `note` is deliberately absent and keeps the neutral ink below: it is
+ * the catch-all, and no pigment can stand for what it collects. */
+.key__chip,
+.minimap__band {
+  --kind-hue: var(--ink-soft);
 }
 
-.key__chip[data-scope="command"] {
-  --scope-hue: var(--command-edge);
+.key__chip[data-scope="user"],
+.minimap__band[data-kind="user"] {
+  --kind-hue: var(--user-edge);
 }
 
-.key__chip[data-scope="skill"] {
-  --scope-hue: var(--skill-edge);
+.key__chip[data-scope="command"],
+.minimap__band[data-kind="command"] {
+  --kind-hue: var(--command-edge);
 }
 
-.key__chip[data-scope="rule"] {
-  --scope-hue: var(--rule-edge);
+.key__chip[data-scope="skill"],
+.minimap__band[data-kind="skill"] {
+  --kind-hue: var(--skill-edge);
 }
 
-.key__chip[data-scope="hook"] {
-  --scope-hue: var(--hook-edge);
+.key__chip[data-scope="rule"],
+.minimap__band[data-kind="rule"] {
+  --kind-hue: var(--rule-edge);
 }
 
-.key__chip[data-scope="assistant"] {
-  --scope-hue: var(--assistant-edge);
+.key__chip[data-scope="hook"],
+.minimap__band[data-kind="hook"] {
+  --kind-hue: var(--hook-edge);
 }
 
-.key__chip[data-scope="thinking"] {
-  --scope-hue: var(--thinking-edge);
+.key__chip[data-scope="assistant"],
+.minimap__band[data-kind="assistant"] {
+  --kind-hue: var(--assistant-edge);
 }
 
-.key__chip[data-scope="tool"] {
-  --scope-hue: var(--tool-edge);
+.key__chip[data-scope="thinking"],
+.minimap__band[data-kind="thinking"] {
+  --kind-hue: var(--thinking-edge);
 }
 
-.key__chip[data-scope="plan"] {
-  --scope-hue: var(--plan-edge);
+.key__chip[data-scope="tool"],
+.minimap__band[data-kind="tool"] {
+  --kind-hue: var(--tool-edge);
+}
+
+.key__chip[data-scope="plan"],
+.minimap__band[data-kind="plan"] {
+  --kind-hue: var(--plan-edge);
+}
+
+/* Whose turn it is, not what kind: a subagent's band takes the same purple its
+ * panel's edge does, and so must be able to outweigh its kind's own hue. */
+.minimap__band[data-sidechain] {
+  --kind-hue: var(--sidechain-edge);
 }
 
 .key__chip[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--scope-hue) 20%, transparent);
-  border-color: var(--scope-hue);
+  background: color-mix(in srgb, var(--kind-hue) 20%, transparent);
+  border-color: var(--kind-hue);
 }
 
 /* Off reads as struck out: dimmed and no longer searched. */
@@ -697,6 +733,214 @@ mark.search__hit.is-current {
   color: color-mix(in srgb, var(--dock-hue), white 30%);
 }
 
+/* --- Minimap: the folio seen edge-on --------------------------------- */
+
+/* The last card in the rail, and the only one that asks for the slack: it stands
+ * for the whole folio, so the taller it is the finer a distinction it can draw.
+ * A floor under it, since a map of a hundred panels in three lines is no map.
+ *
+ * It is deliberately not cut like the cards above it. Those are leaves of the
+ * folio's own chrome; this is the book itself, shut and seen from the fore-edge,
+ * so it takes boards of tooled leather with the painted edges of its leaves
+ * between them. The boards stand a little proud at head and tail, as a binding's
+ * squares do, which is why the padding is not even. */
+.minimap {
+  --leather: color-mix(in srgb, var(--sienna) 40%, #1b1007);
+  --leather-lit: color-mix(in srgb, var(--sienna) 72%, #2b1a0b);
+  --leather-dark: #150c05;
+  flex: 1 1 auto;
+  min-height: 5rem;
+  display: flex;
+  /* The binding wraps the leaves rather than framing them, so the padding is
+   * not even: the boards stand proud at head and tail (a binding's squares),
+   * and the spine, which is the whole reason this reads as a book at all, takes
+   * the near side. The far side is the fore-edge, where the leaves simply end. */
+  padding: 0.55rem 0.28rem 0.55rem 1.15rem;
+  /* Not cut as a card: no leaf, no border, no radius of the rail's. The
+   * silhouette is the volume, and a rounded rectangle drawn round it would only
+   * say "panel" again. The shadow is the book's own, cast on the leaf. */
+  background:
+    /* The lettering-piece, in the second compartment where a binder puts it:
+     * too small to letter, so it is the patch of colour a reader reads as one. */
+    linear-gradient(
+        to bottom,
+        color-mix(in srgb, var(--gold) 45%, transparent) 0 1px,
+        var(--rubric) 1px calc(100% - 1px),
+        color-mix(in srgb, var(--gold) 30%, transparent) calc(100% - 1px)
+      )
+      0.28rem 26% / 0.6rem 7% no-repeat,
+    /* The cords: five raised bands across the spine, each lit along its top and
+     * shadowed under its lower edge, tiled so a spine of any height carries the
+     * same five. What a reader recognises a bound book by before anything else. */
+    linear-gradient(
+        to bottom,
+        transparent 0 44%,
+        color-mix(in srgb, var(--gold) 38%, transparent) 44% 47%,
+        var(--leather-lit) 47% 62%,
+        color-mix(in srgb, var(--leather-dark) 80%, transparent) 62% 70%,
+        transparent 70%
+      )
+      left top / 1.15rem 20% repeat-y,
+    /* The leather itself: the spine turns away into shadow at its outer edge,
+     * catches the light along its curve, and darkens again into the joint where
+     * the boards are hinged onto it. */
+    linear-gradient(
+      to right,
+      var(--leather-dark) 0,
+      var(--leather) 0.16rem,
+      var(--leather-lit) 0.6rem,
+      var(--leather) 1rem,
+      color-mix(in srgb, var(--leather-dark) 70%, var(--leather)) 1.15rem,
+      var(--leather) 1.5rem,
+      var(--leather-lit) 60%,
+      var(--leather) 88%,
+      var(--leather-dark) 100%
+    );
+  border: 0;
+  border-radius: 0.32rem 0.1rem 0.1rem 0.32rem;
+  box-shadow: none;
+  filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.34));
+}
+
+/* The bands are positioned against this, in fractions of the document's own
+ * height, so the track is the leaf and the map is to scale.
+ *
+ * It is drawn as the book itself, seen from the fore-edge: a block of leaves
+ * whose edges are painted, the way a gilt binding shows its colour before it is
+ * opened. The stack runs down the track (the document's own axis) and the width
+ * is the depth of the block, so the shading across it rounds the edge and the
+ * striations along it are the leaves. Everything below is a gradient rather than
+ * an image, so the whole thing costs no bytes and resolves `light-dark()` like
+ * the rest of the palette. */
+.minimap__track {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  /* Squared and set in from the boards on either side, which is what makes the
+   * boards read as boards: a binding's squares overhang the leaves they close
+   * over. Cut flat, because a book's edge is. */
+  margin: 0 0.28rem;
+  border-radius: 0;
+  background: var(--leaf-sunk);
+  cursor: pointer;
+  /* The wheel zooms the map and a drag scrubs the folio, so the browser's own
+   * touch panning and pinch-zooming would fight both. */
+  touch-action: none;
+}
+
+/* The leaves themselves, ruled across the painted edges: a hairline every other
+ * pixel, faint enough to read as a texture rather than as content. Over the
+ * bands rather than under them, since it is the same paper they are painted on. */
+.minimap__track::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--ink) 13%, transparent) 0 0.5px,
+    transparent 0.5px 2px
+  );
+}
+
+/* The roundness of the block and its gilding: the edge falls away into shadow at
+ * both sides, catches the light down the middle, and takes a gold hairline where
+ * the leaf ends. The head and tail darken under the boards that overhang them. */
+.minimap__track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--ink) 34%, transparent) 0,
+      transparent 12%,
+      /* The light along the edge: barely a sheen, and less after dark, where a
+       * pale wash over the painted leaves reads as a glow rather than as the
+       * turn of a surface. */
+        light-dark(
+            color-mix(in srgb, var(--page) 14%, transparent),
+            color-mix(in srgb, var(--page) 6%, transparent)
+          )
+          42%,
+      transparent 70%,
+      color-mix(in srgb, var(--ink) 26%, transparent) 100%
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, #150c05 55%, transparent) 0 1px,
+      color-mix(in srgb, #150c05 26%, transparent) 1px 0.3rem,
+      transparent 0.5rem,
+      transparent calc(100% - 0.5rem),
+      color-mix(in srgb, #150c05 26%, transparent) calc(100% - 0.3rem),
+      color-mix(in srgb, #150c05 55%, transparent) 100%
+    );
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, var(--gold) 55%, transparent),
+    inset -1px 0 0 color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+/* Zoomed, the map is no longer the whole folio but a stretch of it, and a map
+ * that has stopped standing for the whole must say so: a gilt edge, the same
+ * pigment the reader's own view is drawn in. */
+.minimap[data-zoomed] .minimap__track {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 60%, transparent);
+}
+
+.minimap__band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--kind-hue) 55%, transparent);
+}
+
+/* Out of play by the key: still drawn, since the map would misstate where
+ * everything else sits if it were not, but no longer somewhere to land. Faded
+ * rather than repainted in a neutral, which is what the key's own chips do when
+ * they are struck out, and which leaves a stretch still legible as the kind it
+ * is. A neutral wash over this parchment reads as a pigment of its own. */
+.minimap__band[data-in-play="false"] {
+  opacity: 0.2;
+}
+
+.minimap__band:hover {
+  background: var(--kind-hue);
+}
+
+/* What of the leaf the reader has in front of them, drawn over the bands rather
+ * than among them, and never a pointer target: the pointer is scrubbing the
+ * folio, and the view is the one thing on the map that is not a place to go. */
+/* Ruled in ink and haloed in the leaf's own colour, with a gilt wash between:
+ * the bands it is drawn over are every pigment the folio has, so the mark that
+ * says "here" cannot be one of them. Gold alone was lost the moment it crossed a
+ * stretch of tool calls, which are ochre themselves. Ink against page is the one
+ * pair that reads over anything, in either scheme, and a folio of any length
+ * puts the whole viewport into a few pixels of map. */
+.minimap__view {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Over the leaves and their gilding both: where the reader is is the one
+   * thing on the block that is not part of the book. */
+  z-index: 3;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--gold) 25%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--page) 85%, transparent);
+  pointer-events: none;
+}
+
+/* A short viewport has no room to spare: the controls above are what a folio
+ * cannot be read without, so the map is what goes. */
+@media (max-height: 34rem) {
+  .minimap {
+    display: none;
+  }
+}
+
 /* --- Plaque: title, facts, and colophon on demand -------------------- */
 /* A disclosure in the top corner, opposite the search widget: the reading
  * column stays pure transcript, and the folio's metadata is a click away. */
@@ -814,8 +1058,15 @@ mark.search__hit.is-current {
  * a faint gilt wash so the reader sees where they landed. The wash reaches as
  * far right of the turn number as the left padding sets the text in from the
  * border bar, so it sits symmetric; the negative margin lets the box grow
- * rightward (into the leaf's own margin) without reflowing its content. */
-.turn:target {
+ * rightward (into the leaf's own margin) without reflowing its content.
+ *
+ * `data-landed` is the same thing for a landing the folio made itself, from the
+ * dock, the minimap, or following the end. Those write the URL with
+ * `replaceState`, which `:target` does not answer to, so the mark is what says
+ * where the reader is; the two are drawn identically because they mean the same
+ * thing. */
+.turn:target,
+.turn[data-landed] {
   background: color-mix(in srgb, var(--gold) 9%, transparent);
   border-radius: 0 var(--radius) var(--radius) 0;
   padding-right: 1.1rem;
@@ -823,7 +1074,8 @@ mark.search__hit.is-current {
 }
 
 /* Hold the copy button on the turn number as the wash widens the box. */
-.turn:target .copy-button--meta {
+.turn:target .copy-button--meta,
+.turn[data-landed] .copy-button--meta {
   right: 1.1rem;
 }
 
