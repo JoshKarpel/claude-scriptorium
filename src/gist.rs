@@ -123,13 +123,26 @@ pub fn publish(html: &str, session_id: &str, description: &str, public: bool) ->
                 existing.url
             );
         }
+        // Content and description in one call, and the trailing `-` is what
+        // makes it safe: `gh gist edit --desc` does not return once it has set
+        // the description, it falls through to the file-edit loop, and with no
+        // source file that loop opens $EDITOR. A second, description-only call
+        // would therefore launch an editor against a piped stdin rather than
+        // update anything. One call sets both in a single request.
         gh_stdin(
-            &["gist", "edit", &existing.id, "--filename", &filename, "-"],
+            &[
+                "gist",
+                "edit",
+                &existing.id,
+                "--filename",
+                &filename,
+                "--desc",
+                description,
+                "-",
+            ],
             html,
         )
         .context("editing the existing gist")?;
-        gh(&["gist", "edit", &existing.id, "--desc", description])
-            .context("updating the gist description")?;
         return Ok(Published {
             url: existing.url,
             updated: true,

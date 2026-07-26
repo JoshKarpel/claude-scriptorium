@@ -8,14 +8,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 recipes.
 
 ```bash
-just setup            # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
-just check            # format, lint, then test
-just test             # cargo test --all-features
-just test <name>      # single test, e.g. just test markdown_becomes_html
-just render <session> # write a session to HTML (CLI `render` subcommand)
-just serve <session>  # live-reload dev server, rebuilds on source change
-just fix              # pre-commit across the staged tree
+just setup             # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
+just check             # format, lint, then test
+just test              # cargo test --all-features
+just test <name>       # single test, e.g. just test markdown_becomes_html
+just render <session>  # write a session to HTML (CLI `render` subcommand)
+just serve <session>   # live-reload dev server, rebuilds on source change
+just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
+just bench             # hyperfine over the release binary rendering the fixtures
+just bench-huge        # the same, over generated sessions of megabytes
+just setup-profiling   # perf and the kernel settings just profile needs (once, needs sudo)
+just profile <session> # sample a render and print where the time went
+just fix               # pre-commit across the staged tree
 ```
+
+`just render`, `just publish`, and `just serve` build with `--release`, and so
+should any render you run by hand. A render is heavy enough (highlighting,
+base64'ing the fonts, megabytes of markup) that an unoptimized build takes
+longer to render a session than an optimized one takes to compile *and* render
+it, so a debug render is
+slower even counting the build. Tests still run unoptimized.
+
+`just bench` times that binary with [hyperfine](https://github.com/sharkdp/hyperfine)
+over the fixtures, so a run measures the whole artifact a reader waits on
+(parse, render, write) rather than a library call. It is the check for a change
+that claims to make rendering faster; take a reading before and after, since a
+folio's own plaque reports a single run and says nothing about variance.
+
+`just bench-huge` is the same measurement at length, over sessions of 5 and 20
+MB that `scripts/synthetic_session.py` deals out from the committed fixtures'
+own turns (`just fixtures` writes them under `target/fixtures`, and they are
+generated rather than committed because they are millions of bytes of repeated
+fixture). The two readings are not interchangeable, so take both. A short
+session is dominated by compiling a language's highlighting regexes the first
+time it is met; a long one has amortized that away and is dominated by the
+per-byte work that follows, with thousands of panels to set rather than dozens.
+A change can move one and leave the other alone.
+
+`just bench` says a change is slower; `just profile` says what it is spending
+the time on. It samples a render and prints a text report (self time by crate
+and by symbol, time on the stack, and the hottest stacks) rather than opening a
+UI, so the reading is something an agent can act on directly; the same recording
+opens in the Firefox Profiler with `samply load target/profile/profile.json`
+when a human wants the timeline and flamegraph. Both are measurements of the
+whole binary, so read them together: a stack that is 40% of a profile is only
+worth attacking if `just bench` says the render is slow enough to care.
+`just setup-profiling` installs perf and writes the two kernel settings sampling
+needs, once per machine.
+
+It records the `profiling` cargo profile (release, plus the debug info a
+profiler needs to name a frame, which is why it isn't just `release`) and runs
+the render several times into one recording, since a single render is over in a
+couple of hundred milliseconds and a hundred samples say nothing. The recorder
+is `perf`, with the binary built under `-Cforce-frame-pointers=yes` so perf can
+walk the frame-pointer chain in the kernel:
+[samply](https://github.com/mstange/samply)'s own sampler unwinds a fixed 32 KB
+copy of each sample's stack, and a render's stacks are deep enough in recursive
+regex compilation that four fifths of them lost every frame above the window,
+which quietly turned the inclusive figures into undercounts. The report leads
+with the share of stacks that reached a common root, so that failure is visible
+rather than inferred. samply still reads the `perf.data` (`samply import`), so
+the report and the UI are unchanged.
+
+`scripts/profile_report.py` folds that recording: it resolves the binary's own
+addresses with `addr2line`, so frames inlined into an outer symbol are recovered
+rather than charged to it (without that, an optimized render reads as little but
+`main`), and names shared-library frames from the dynamic symbol table with
+`nm`, sizes included, because a stripped system library has no debug info and
+addr2line then answers with the nearest preceding exported symbol rather than
+admitting it doesn't know: that is how a memmove variant came back as
+`_dl_mcount_wrapper` and took 8% of a render with it. An address inside an
+unexported function stays an address, and the caller above it in the stack
+table is what says which one it is.
 
 `just format` runs `cargo +nightly fmt`, not stable. `rustfmt.toml` sets
 unstable options (`imports_granularity`, `group_imports`,
@@ -25,6 +89,13 @@ than an error, so formatting silently diverges from CI if you run stable.
 `rust-toolchain.toml` pins 1.96.0, but a `RUSTUP_TOOLCHAIN` environment
 variable (mise sets one) overrides the file. The pin therefore takes effect in
 CI and often not locally.
+
+`mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
+`just`, `samply`, `uv`), so `mise install` is enough to run any of them. It
+deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
+is what resolves the `+nightly` that `just format` needs. `fswatch`, which
+`just serve` and `just watch` need, has no mise package and stays a system
+dependency.
 
 When a change is user-visible (a new subcommand or flag, changed output, a bug
 fix), add an entry to `CHANGELOG.md` under the current unreleased version,
@@ -63,6 +134,30 @@ reads the clock or touches the filesystem breaks the test suite's ability to
 assert on exact output. Interactive I/O (the picker, browser-opening) lives in
 the shell and its modules, never in the renderer.
 
+That purity is also what makes a render parallel: `Scribe::folio` sets the
+panels with rayon before writing the document around them, collected in order so
+the folio reads the same. It is worth having because of where a render's time
+goes. Highlighting is around nine tenths of it, and nearly all of that is a
+syntax's regexes compiling the first time its language is met (syntect compiles
+them lazily, through a `once_cell::sync` cell, so the whole session shares one
+compile per pattern and a thread that wants a pattern another is already
+compiling waits for it rather than repeating it). Sequentially, meeting a new
+language stops everything; in parallel, the languages compile alongside each
+other. A `Scribe` that read the clock or held mutable state would take that away
+as surely as it would break the tests.
+
+A folio states what its own render cost, in the plaque's colophon. Neither
+figure can be known while the markup is being written, so `Scribe::folio` leaves
+an HTML-comment placeholder for each and `render::inscribe` fills them in once
+the markup exists (a transcript can't forge one: raw HTML in transcript content
+is escaped, so only the scribe's own markup reaches the document unescaped).
+Substituting shifts the document's length, so the size a folio carries is the
+markup it measured itself from rather than the file on disk, a difference the
+human-readable figure rounds away. The shell measures the render alone, so the
+figure means the same thing under every subcommand, and prints it (with the
+finished document's exact size) on **stderr**, keeping stdout the folio's path
+alone for a script to consume.
+
 `serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
 load and injects a live-reload snippet so the browser refreshes when the
 session file grows or the server restarts with fresh code. `just serve`
@@ -93,23 +188,32 @@ this tool didn't publish. `delete --all` lists every marked gist and confirms as
 a batch. Gists published before the marker existed carry an older description
 and are deliberately not recognised.
 
-A folio over GitHub's ~1 MB inline-render cutoff can't be viewed on the gist
-page, so browser viewing goes through a **viewer**: a ~6 KB static page
-(`docs/index.html`, vendored from GistHost under MIT) whose script fetches the
-gist from the GitHub API in the reader's browser and `document.write`s it. The
-transcript's path is GitHub to the reader; the viewer's host never receives it,
-unlike a re-serving proxy. That one file is both served from this project's own
-Pages site and `include_str!`'d into the binary, so `scaffold_viewer` emits a
-self-hostable copy from the same source (rewriting the API base for a GHES host).
-`publish` prints the preview link by default, with no opt-in flag or
-confirmation: printing a link is harmless, and the accompanying note makes clear
-only a reader's browser (never the viewer's host) fetches the transcript. Its
-base comes from `--preview-base`, then
-`$CLAUDE_SCRIPTORIUM_VIEWER_BASE`, then this project's viewer for github.com; a
-host with no viewer (a GHES instance without `--preview-base`) simply prints no
-link. `fetch` stays the no-network-rendering path for sensitive sessions. The pure helpers (host precedence, identity parsing, URL and
-viewer construction) are unit-tested; the `gh`-shelling and prompts stay in the
-shell.
+**Nothing on GitHub renders a folio, at any size.** The gist page shows its
+HTML source, and the raw URL is served `text/plain; charset=utf-8` with
+`x-content-type-options: nosniff`, so a browser will not execute it there
+either. Browser viewing therefore always goes through a **viewer**: a ~6 KB
+static page (`docs/index.html`, vendored from GistHost under MIT) whose script
+fetches the gist from the GitHub API in the reader's browser and
+`document.write`s it. The transcript's path is GitHub to the reader; the
+viewer's host never receives it, unlike a re-serving proxy. That one file is
+both served from this project's own Pages site and `include_str!`'d into the
+binary, so `scaffold_viewer` emits a self-hostable copy from the same source
+(rewriting the API base for a GHES host).
+
+GitHub's ~1 MB limit is a real thing but a *different* thing, and the two are
+easy to conflate: it governs whether the API returns the file's content or
+truncates it, which the viewer already handles by falling back to the raw URL.
+It has nothing to do with whether a folio can be viewed, and no folio is ever
+readable without the viewer or `fetch`. So `publish` always prints the preview
+link and says outright that the gist page shows source. Don't reintroduce a
+size condition here, and don't describe the limit as an "inline-render cutoff".
+
+The viewer base comes from `--preview-base`, then `$CLAUDE_SCRIPTORIUM_VIEWER_BASE`,
+then this project's viewer for github.com; a host with no viewer (a GHES
+instance without `--preview-base`) simply prints no link. `fetch` stays the
+no-network-rendering path for sensitive sessions. The pure helpers (host
+precedence, identity parsing, URL and viewer construction) are unit-tested; the
+`gh`-shelling and prompts stay in the shell.
 
 `docs/index.html` is dual-purpose: this repo's own GitHub Pages viewer (Pages
 serves from `main`'s `/docs`) and the template `scaffold_viewer` copies. Editing
@@ -276,11 +380,10 @@ selections joined into one answer, and a timeout), each with a test.
 - **Self-contained and gist-shareable.** Everything the folio needs is inlined:
   no external CSS, JS, fonts, or image files, so the one written file works
   offline and travels as a single artifact. The delivery path is a GitHub gist,
-  and a bundled folio (~3 MB, mostly the embedded Junicode faces) already
-  exceeds GitHub's ~1 MB inline-render cutoff, so a shared folio is viewed
-  through the `gist` module's viewer (or downloaded with `fetch`) rather than
-  GitHub's own file view. The constraint to respect is therefore **total bundle
-  size** (keep it within what a gist and viewer will serve), *not* scripts: the
+  which never renders HTML at any size, so a shared folio is read through the
+  `gist` module's viewer (or downloaded with `fetch`) rather than GitHub's own
+  file view. The constraint to respect is therefore **total bundle size** (keep
+  it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
   behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
   the same way the stylesheet is; keep it small. Do **not** reintroduce a "no
@@ -290,14 +393,45 @@ selections joined into one answer, and a timeout), each with a test.
   persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings and versals) are woff2 vendored
-  under `src/fonts/`, `include_bytes!`'d in `render.rs`, and base64'd into
-  `@font-face` data URIs at render time (once, via a `LazyLock`). `just fonts`
-  re-vendors them from pinned upstreams; it needs `uvx` because UnifrakturCook
-  ships only a TTF and gets compressed to woff2 with `fonttools`. All four are
+  under `src/fonts/` and base64'd into `@font-face` data URIs by `build.rs`,
+  which `render.rs` `include_str!`s from `OUT_DIR` as constants: the faces
+  never change between renders, so no render pays to encode them, and adding or
+  swapping a face means editing `build.rs`'s `FACES`. `just fonts`
+  re-vendors them from pinned upstreams; it needs `uv` and `uvx` for
+  `fonttools`, which compresses UnifrakturCook (upstream ships only a TTF) and
+  cuts the other three down. All four are
   SIL OFL 1.1: the license texts live in `src/fonts/licenses/`, and every folio
   carries the copyright notice (a comment above `<html>`) plus a colophon credit
   (in the folio's plaque), so each artifact satisfies the OFL's redistribution
   terms on its own.
+- **Cut faces, with the whole ones behind them.** The faces are ~98% of a short
+  folio, so `scripts/subset_fonts.py` (run by `just fonts`) vendors each one
+  twice: as upstream shipped it in `src/fonts/`, and cut down in
+  `src/fonts/cut/`. The cut pins the axes the stylesheet never varies (Junicode
+  is variable on width and ENLA as well as weight; only weight is ever set) and
+  subsets to the blocks a transcript sets, which is ~80% off. `build.rs` encodes
+  both into `font-faces-cut.css` and `font-faces-whole.css`.
+
+  Which one a folio carries is decided per folio, and the rule is that **cutting
+  must never render a character worse than upstream would**. `dropped.txt`
+  therefore records the *regression* (what a face had upstream and lost in the
+  cut), not the cut faces' coverage: `build.rs` compiles it into `DROPPED`, and
+  `Scribe::folio` weighs each panel against it as the panel is set, on the rayon
+  threads already running. Any hit and the folio carries the whole faces
+  instead, and the shell says so on stderr. A character *no* face ever carried
+  (an emoji, a CJK ideograph) is deliberately absent from `dropped.txt`: it fell
+  back to the reader's own fonts before the cut existed and still does, so
+  growing the folio by 2 MB would buy nothing. `--whole-fonts` forces the whole
+  faces for a folio that will later gain text this session did not have.
+
+  `render::beyond_cut` skips runs of bytes under `0x80` without decoding them,
+  which is only sound while nothing below that can be dropped; the tests hold
+  that, and hold the stylesheet and app script inside the cut faces too, since
+  the scan weighs the transcript rather than this crate's own markup. Widening
+  the cut means editing `KEEP` in `scripts/subset_fonts.py` and re-running `just
+  fonts`; it is cheap and safe, since a codepoint a face never had is simply not
+  kept. `KEEP` was chosen by measuring the corpus, not by taste: Greek is in
+  because real sessions use it, Cyrillic is out because none did.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -406,7 +540,7 @@ been looked at, not just asserted on in a string test. `just setup` installs a
 Playwright-managed headless Chromium; render a folio and screenshot it:
 
 ```bash
-cargo run -q -- render <session.jsonl> -o /tmp/folio.html
+cargo run -q --release -- render <session.jsonl> -o /tmp/folio.html
 uvx --from playwright python - /tmp/folio.html /tmp/folio.png <<'PY'
 import sys
 from playwright.sync_api import sync_playwright
@@ -427,12 +561,17 @@ serve <session>` reloads the browser as you edit the renderer or CSS.
 
 `docs/index.html` renders a folio in the browser by fetching the gist from the
 GitHub API and `document.write`-ing it, so a `file://` screenshot of a rendered
-folio never exercises it. Confirming a change to the viewer (or to a folio big
-enough to trip GitHub's ~1 MB API truncation) means going through a real gist.
-This publishes to a real account, so treat it as outward-facing: get the user's
-go-ahead first, and delete the gist afterward.
+folio never exercises it. Confirming a change to the viewer means going through
+a real gist. This publishes to a real account, so treat it as outward-facing:
+get the user's go-ahead first, and delete the gist afterward.
 
-1. `cargo run -q -- publish tests/fixtures/session.jsonl --yes` and capture the
+The viewer has two paths through it, and the fixtures no longer cover both by
+default: since the faces were cut, `session.jsonl` renders well under GitHub's
+~1 MB API truncation limit, so it exercises only the inline-content path. Add
+`--whole-fonts` (or publish a long session) to push a folio over the limit and
+exercise the raw-URL fallback the truncated case takes.
+
+1. `cargo run -q --release -- publish tests/fixtures/session.jsonl --yes` and capture the
    gist id from the printed URL.
 2. Serve `docs/` over local **HTTP** (not `file://`, or the loader's `fetch`
    hits a null origin) and load `?<id>/<file>` in Playwright. `document.write`

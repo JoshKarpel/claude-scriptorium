@@ -1,6 +1,6 @@
 //! Turning a parsed folio into a self-contained HTML document.
 
-use std::sync::LazyLock;
+use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use comrak::{
@@ -8,54 +8,13 @@ use comrak::{
 };
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
+use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{
     tools,
     transcript::{Block, Folio, ImageSource, Known, Panel, PanelKind, Usage},
 };
-
-/// One embedded web font: the family and posture the stylesheet asks for, the
-/// weight range the variable file covers, and the woff2 bytes themselves.
-struct Face {
-    family: &'static str,
-    style: &'static str,
-    weight: &'static str,
-    woff2: &'static [u8],
-}
-
-/// The fonts are inlined so a folio stays self-contained (see the rendering
-/// invariants in CLAUDE.md). `just fonts` vendors these from upstream.
-///
-/// Junicode 2 (serif body, roman + italic) and Fira Code (monospace) are
-/// variable, so one file per posture spans every weight; UnifrakturCook is the
-/// single-weight blackletter used for headings and dropped versals.
-const FACES: [Face; 4] = [
-    Face {
-        family: "Junicode",
-        style: "normal",
-        weight: "300 700",
-        woff2: include_bytes!("fonts/JunicodeVF-Roman.woff2"),
-    },
-    Face {
-        family: "Junicode",
-        style: "italic",
-        weight: "300 700",
-        woff2: include_bytes!("fonts/JunicodeVF-Italic.woff2"),
-    },
-    Face {
-        family: "UnifrakturCook",
-        style: "normal",
-        weight: "400",
-        woff2: include_bytes!("fonts/UnifrakturCook.woff2"),
-    },
-    Face {
-        family: "Fira Code",
-        style: "normal",
-        weight: "300 700",
-        woff2: include_bytes!("fonts/FiraCode-VF.woff2"),
-    },
-];
 
 /// Copyright notices for the embedded fonts, emitted into every folio. The SIL
 /// OFL requires each copy of the font to carry its copyright and license; the
@@ -82,22 +41,79 @@ fn font_notice() -> String {
     notice
 }
 
-/// The `@font-face` block, built once: base64 is deterministic and the bytes
-/// are compile-time constants, so encoding on every render would be wasted work
-/// on the `serve` hot path.
-static FONT_FACES: LazyLock<String> = LazyLock::new(|| {
-    FACES
-        .iter()
-        .map(|face| {
-            let data = STANDARD.encode(face.woff2);
-            format!(
-                "@font-face{{font-family:\"{}\";font-style:{};font-weight:{};font-display:swap;\
-                 src:url(data:font/woff2;base64,{}) format(\"woff2\")}}",
-                face.family, face.style, face.weight, data,
-            )
+/// The `@font-face` blocks: the vendored woff2 files as data URIs, encoded by
+/// `build.rs` so a render inlines a constant rather than base64'ing megabytes.
+/// The fonts are inlined at all so a folio stays self-contained (see the
+/// rendering invariants in CLAUDE.md); `just fonts` vendors them from upstream.
+///
+/// Two blocks, because the faces are almost the whole of a short folio: the cut
+/// ones carry what a transcript sets and are a fifth the bytes, the whole ones
+/// carry everything upstream shipped. [`Scribe::folio`] picks per folio.
+const CUT_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-cut.css"));
+const WHOLE_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-whole.css"));
+
+include!(concat!(env!("OUT_DIR"), "/dropped.rs"));
+
+/// Which cut of the embedded faces a folio should carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fonts {
+    /// The cut faces, unless the folio's own text reaches a character they
+    /// dropped, in which case the whole ones. Never renders a character worse
+    /// than upstream would, and is a fifth the bytes for a folio that stays
+    /// inside what a transcript usually sets.
+    #[default]
+    Fitted,
+    /// The whole faces, whatever this folio happens to set.
+    Whole,
+}
+
+/// The characters in `text` that an embedded face carries whole but not cut,
+/// tallied by how often each occurs.
+///
+/// This is the *regression* the cut introduced, not the faces' coverage: a
+/// character no face ever carried (an emoji, a CJK ideograph) is absent, since
+/// it falls back to the reader's own fonts either way and always did.
+pub fn beyond_cut(text: &str) -> BTreeMap<char, usize> {
+    let mut tally = BTreeMap::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        // Nothing below U+0080 is ever dropped (the tests hold that), and a
+        // folio is overwhelmingly ASCII: hundreds of kilobytes of base64 font
+        // before a word of transcript. So skip to the next lead byte rather
+        // than decoding every character. Everything skipped is single-byte, so
+        // the index stays on a character boundary.
+        let Some(offset) = bytes[index..].iter().position(|byte| *byte >= 0x80) else {
+            break;
+        };
+        index += offset;
+        let character = text[index..]
+            .chars()
+            .next()
+            .expect("index lands on a character boundary");
+        if dropped(character) {
+            *tally.entry(character).or_insert(0) += 1;
+        }
+        index += character.len_utf8();
+    }
+    tally
+}
+
+fn dropped(character: char) -> bool {
+    let codepoint = character as u32;
+    DROPPED
+        .binary_search_by(|(low, high)| {
+            if codepoint < *low {
+                Ordering::Greater
+            } else if codepoint > *high {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
         })
-        .collect()
-});
+        .is_ok()
+}
 
 /// The generation metadata recorded in every folio's plaque.
 pub struct Colophon {
@@ -107,16 +123,65 @@ pub struct Colophon {
     pub home: &'static str,
 }
 
+/// What a render cost: how long the scribe took, and how large the folio came
+/// out. Neither can be known while the markup is being written, so the plaque
+/// carries a placeholder for each and [`inscribe`] fills them in afterwards.
+pub struct Labour {
+    pub took: Duration,
+    pub bytes: usize,
+}
+
+/// The placeholders the plaque carries until the render's own cost is known.
+/// Comments, so an uninscribed folio still reads correctly, and so no transcript
+/// can forge one: raw HTML in a transcript is escaped, and only the scribe's own
+/// markup reaches the document unescaped.
+const TOOK_MARK: &str = "<!--folio:took-->";
+const SIZE_MARK: &str = "<!--folio:size-->";
+
+/// Fills a finished folio's own cost into its plaque.
+///
+/// The numbers displace the placeholders they replace, so the size a folio
+/// states is the markup it was measured from rather than the document it ends
+/// up as. The difference is a few dozen bytes against a folio of megabytes, and
+/// the human-readable figure rounds it away.
+pub fn inscribe(markup: String, labour: &Labour) -> String {
+    markup
+        .replace(TOOK_MARK, &elapsed(labour.took))
+        .replace(SIZE_MARK, &size(labour.bytes))
+}
+
+/// A duration in the coarsest unit that still says something: whole
+/// milliseconds under a second, then seconds to one decimal place.
+pub fn elapsed(took: Duration) -> String {
+    let seconds = took.as_secs_f64();
+    if seconds < 1.0 {
+        format!("{:.0} ms", seconds * 1_000.0)
+    } else {
+        format!("{seconds:.1} s")
+    }
+}
+
+/// A byte count as a size a reader can hold in mind, in the decimal units file
+/// sizes are quoted in.
+pub fn size(bytes: usize) -> String {
+    match bytes {
+        ..1_000 => format!("{bytes} B"),
+        1_000..1_000_000 => format!("{:.0} kB", bytes as f64 / 1_000.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_000_000.0),
+    }
+}
+
 /// Renders folios, carrying the decisions a render depends on: how markdown
 /// becomes HTML, how code gets highlighted, and which zone timestamps read in.
 pub struct Scribe<'a> {
     options: Options<'a>,
     plugins: Plugins<'a>,
     timezone: TimeZone,
+    fonts: Fonts,
 }
 
 impl<'a> Scribe<'a> {
-    pub fn new(highlighter: &'a SyntectAdapter, timezone: TimeZone) -> Self {
+    pub fn new(highlighter: &'a SyntectAdapter, timezone: TimeZone, fonts: Fonts) -> Self {
         let mut options = Options::default();
         options.extension.strikethrough = true;
         options.extension.table = true;
@@ -132,6 +197,7 @@ impl<'a> Scribe<'a> {
             options,
             plugins,
             timezone,
+            fonts,
         }
     }
 
@@ -147,12 +213,48 @@ impl<'a> Scribe<'a> {
         timestamp.to_zoned(self.timezone.clone())
     }
 
-    pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> Markup {
+    /// Sets a folio, and reports which characters (if any) drove it onto the
+    /// whole faces. An empty tally means the cut faces served it.
+    pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> (Markup, BTreeMap<char, usize>) {
         let title = format!("folio {}", folio.session_id());
         let panels = folio.panels();
+        let source = folio.source.display().to_string();
+        // A panel's cost is dominated by highlighting its tool bodies, where a
+        // syntax's regexes compile the first time that language is met, so the
+        // panels are set concurrently and several languages compile at once
+        // rather than each waiting on the last. Collected in order, so the
+        // folio reads as the session ran.
+        //
+        // Each panel is also weighed against the cut faces as it is set, which
+        // rides along on the threads already running rather than costing a
+        // second pass over the finished markup.
+        let (rendered_panels, reaches): (Vec<Markup>, Vec<BTreeMap<char, usize>>) = panels
+            .par_iter()
+            .map(|panel| {
+                let markup = self.panel(panel);
+                let reach = beyond_cut(&markup.0);
+                (markup, reach)
+            })
+            .unzip();
+
+        // The panels are the transcript; the source path is the only other
+        // place a folio sets text it didn't choose. The rest of the chrome is
+        // this crate's own markup, which the tests hold inside the cut faces.
+        let mut reached = beyond_cut(&source);
+        for reach in reaches {
+            for (character, count) in reach {
+                *reached.entry(character).or_insert(0) += count;
+            }
+        }
+        let faces = match self.fonts {
+            Fonts::Whole => WHOLE_FACES,
+            Fonts::Fitted if !reached.is_empty() => WHOLE_FACES,
+            Fonts::Fitted => CUT_FACES,
+        };
+
         let left_border = margin_strip(border_seed(folio.session_id(), "left"));
         let right_border = margin_strip(border_seed(folio.session_id(), "right"));
-        html! {
+        let document = html! {
             (DOCTYPE)
             (PreEscaped(font_notice()))
             html lang="en" {
@@ -161,7 +263,7 @@ impl<'a> Scribe<'a> {
                     meta name="viewport" content="width=device-width, initial-scale=1";
                     title { (title) }
                     style {
-                        (PreEscaped(FONT_FACES.as_str()))
+                        (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
                     // The folio's own behaviour (theme, and more to come). It
@@ -186,7 +288,7 @@ impl<'a> Scribe<'a> {
                         div .plaque__panel {
                             h1 .plaque__title { (title) }
                             dl .plaque__facts {
-                                dt { "source" } dd { code { (folio.source.display().to_string()) } }
+                                dt { "source" } dd { code { (source) } }
                                 dt { "turns" } dd { (panels.len()) }
                                 @if let Some(first) = panels.first() {
                                     dt { "opened" } dd { (self.stamp(first.timestamp)) }
@@ -200,9 +302,14 @@ impl<'a> Scribe<'a> {
                                     dt { "tokens" } dd title=(folio_flux(input, output)) { (tally(input, output)) }
                                 }
                             }
+                            // The render's own cost is stated here rather than
+                            // among the facts above, which are the session's.
+                            // Both figures arrive after the markup exists, as
+                            // placeholders `inscribe` fills in.
                             p .plaque__colophon {
                                 "Written by " a href=(colophon.home) { (colophon.tool) } " " (colophon.version)
-                                " on " (self.stamp(colophon.generated)) "."
+                                " on " (self.stamp(colophon.generated)) ", taking "
+                                (PreEscaped(TOOK_MARK)) " to set " (PreEscaped(SIZE_MARK)) "."
                             }
                             p .plaque__colophon {
                                 "Set in Junicode, Fira Code, and UnifrakturCook, under the "
@@ -267,13 +374,14 @@ impl<'a> Scribe<'a> {
                         }
                     }
                     main .folio {
-                        @for panel in &panels {
-                            (self.panel(panel))
+                        @for panel in &rendered_panels {
+                            (panel)
                         }
                     }
                 }
             }
-        }
+        };
+        (document, reached)
     }
 
     fn stamp(&self, timestamp: Timestamp) -> String {
@@ -714,6 +822,36 @@ mod tests {
         assert_eq!(separated(1_206), "1,206");
         assert_eq!(separated(47_603), "47,603");
         assert_eq!(separated(7_643_812), "7,643,812");
+    }
+
+    #[test]
+    fn a_render_reads_in_milliseconds_until_it_takes_a_second() {
+        assert_eq!(elapsed(Duration::from_micros(412_400)), "412 ms");
+        assert_eq!(elapsed(Duration::from_millis(999)), "999 ms");
+        assert_eq!(elapsed(Duration::from_millis(1_000)), "1.0 s");
+        assert_eq!(elapsed(Duration::from_millis(3_260)), "3.3 s");
+    }
+
+    #[test]
+    fn a_folio_is_sized_in_the_units_files_are_quoted_in() {
+        assert_eq!(size(742), "742 B");
+        assert_eq!(size(6_140), "6 kB");
+        assert_eq!(size(812_600), "813 kB");
+        assert_eq!(size(2_947_312), "2.9 MB");
+    }
+
+    #[test]
+    fn a_folio_states_the_render_it_came_out_of() {
+        let markup = format!("<p>taking {TOOK_MARK} to set {SIZE_MARK}.</p>");
+        let labour = Labour {
+            took: Duration::from_millis(412),
+            bytes: 2_947_312,
+        };
+
+        assert_eq!(
+            inscribe(markup, &labour),
+            "<p>taking 412 ms to set 2.9 MB.</p>"
+        );
     }
 
     #[test]

@@ -1,14 +1,16 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::IsTerminal,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use claude_scriptorium::{
-    discovery, gist, picker,
-    render::{Colophon, Scribe},
+    discovery, gist, picker, render,
+    render::{Colophon, Labour, Scribe},
     serve,
     transcript::Folio,
 };
@@ -48,6 +50,27 @@ enum Command {
     ScaffoldViewer(ScaffoldViewerArgs),
 }
 
+/// How a folio should carry its fonts. Shared by every subcommand that writes
+/// one, so a folio means the same thing however it was produced.
+#[derive(Args)]
+struct Faces {
+    /// Embed the whole upstream fonts rather than the cut ones, adding ~2 MB.
+    /// A folio only needs this when it will later gain text the session did not
+    /// have; a folio that already sets such a character switches on its own.
+    #[arg(long)]
+    whole_fonts: bool,
+}
+
+impl Faces {
+    fn choice(&self) -> render::Fonts {
+        if self.whole_fonts {
+            render::Fonts::Whole
+        } else {
+            render::Fonts::Fitted
+        }
+    }
+}
+
 /// How to choose the session when the user doesn't name a file. Shared by the
 /// subcommands so `render` and `serve` resolve a session the same way.
 #[derive(Args)]
@@ -67,6 +90,9 @@ struct RenderArgs {
     #[command(flatten)]
     selection: Selection,
 
+    #[command(flatten)]
+    faces: Faces,
+
     /// Where to write the folio: a file, or a directory to write
     /// `<session-id>.html` into. Defaults to `<session-id>.html` here.
     #[arg(short, long)]
@@ -82,6 +108,9 @@ struct ServeArgs {
     #[command(flatten)]
     selection: Selection,
 
+    #[command(flatten)]
+    faces: Faces,
+
     /// Port to serve on.
     #[arg(long, default_value_t = 7878)]
     port: u16,
@@ -95,6 +124,9 @@ struct ServeArgs {
 struct PublishArgs {
     #[command(flatten)]
     selection: Selection,
+
+    #[command(flatten)]
+    faces: Faces,
 
     /// List the gist publicly instead of keeping it secret (the default).
     #[arg(long)]
@@ -177,12 +209,12 @@ fn render(args: RenderArgs) -> Result<()> {
     let output = output_path(args.output, &folio)?;
 
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system());
-    let markup = scribe.folio(&folio, &colophon());
+    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
+    let (html, labour, reached) = inscribe(&scribe, &folio);
 
-    fs::write(&output, markup.into_string())
-        .with_context(|| format!("writing {}", output.display()))?;
+    fs::write(&output, &html).with_context(|| format!("writing {}", output.display()))?;
     println!("{}", output.display());
+    report(&html, &labour, &reached);
 
     if args.open {
         open::that(&output).with_context(|| format!("opening {}", output.display()))?;
@@ -193,11 +225,13 @@ fn render(args: RenderArgs) -> Result<()> {
 fn serve(args: ServeArgs) -> Result<()> {
     let session = resolve_session(args.selection)?;
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system());
+    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
 
     serve::run(args.port, &session, args.open, || {
         let folio = Folio::read(&session)?;
-        Ok(scribe.folio(&folio, &colophon()).into_string())
+        let (html, labour, reached) = inscribe(&scribe, &folio);
+        report(&html, &labour, &reached);
+        Ok(html)
     })
 }
 
@@ -215,8 +249,9 @@ fn publish(args: PublishArgs) -> Result<()> {
     let viewer_base = resolve_viewer(&identity, base_override);
 
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system());
-    let html = scribe.folio(&folio, &colophon()).into_string();
+    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
+    let (html, labour, reached) = inscribe(&scribe, &folio);
+    report(&html, &labour, &reached);
 
     let session_id = folio.session_id();
     let filename = format!("{session_id}.html");
@@ -224,23 +259,31 @@ fn publish(args: PublishArgs) -> Result<()> {
     let published = gist::publish(&html, session_id, &description, args.public)?;
 
     if published.updated {
-        println!("updated the gist already published for this session");
+        println!("Updated the gist already published for this session");
     }
     let gist_url = published.url;
     println!("{gist_url}");
 
+    // The gist page shows a folio's HTML source, never the folio: GitHub serves
+    // gist content as text/plain with `nosniff`, on the raw URL as much as the
+    // page, so nothing on GitHub renders it at any size. Reading a published
+    // folio therefore always takes one of the two routes below.
+    //
+    // Prose unindented, a blank line, then the thing to click or run indented
+    // under it, so both routes read the same way.
     let preview = viewer_base.map(|base| gist::preview_url(&base, &gist_url, &filename));
     if let Some(preview) = &preview {
         println!();
-        println!("preview (renders the folio in a browser through a viewer page):");
+        println!("The gist page shows this folio's source, not the folio. A viewer page");
+        println!("renders it in a browser, fetching the gist straight from GitHub in the");
+        println!("reader's own browser, so the viewer's host never sees the transcript:");
+        println!();
         println!("  {preview}");
-        println!(
-            "  the reader's browser fetches the gist straight from GitHub, so the viewer's host never sees the transcript."
-        );
     }
 
     println!();
-    println!("anyone can view it locally, with no proxy, by running:");
+    println!("Anyone can view it locally, with no proxy, by running:");
+    println!();
     println!("  {} fetch {gist_url} --open", env!("CARGO_PKG_NAME"));
 
     if args.open {
@@ -264,20 +307,23 @@ fn confirm_publish(identity: &gist::Identity, public: bool, assume_yes: bool) ->
     }
 
     let visibility = if public { "public" } else { "secret" };
-    println!("Publishing this session as a {visibility} gist, as {identity}.");
-    if public {
-        println!(
-            "  A public gist is listed on {} and readable by anyone.",
+    // What the visibility actually means rides on the prompt as its help line,
+    // so the caveat is in front of the reader at the moment they answer rather
+    // than scrolled above it.
+    let caveat = if public {
+        format!(
+            "A public gist is listed on {} and readable by anyone.",
             identity.host
-        );
+        )
     } else {
-        println!(
-            "  A secret gist is unlisted, but anyone with access to {} and the URL can read it.",
+        format!(
+            "A secret gist is unlisted, but anyone with access to {} and the URL can read it.",
             identity.host
-        );
-    }
+        )
+    };
 
-    if !ask(&format!("Publish this {visibility} gist?"))? {
+    println!("Publishing this session as a {visibility} gist, as {identity}.");
+    if !ask(&format!("Publish this {visibility} gist?"), Some(&caveat))? {
         bail!("aborted");
     }
     Ok(())
@@ -297,7 +343,7 @@ fn resolve_viewer(identity: &gist::Identity, base_override: Option<String>) -> O
         None if identity.host == "github.com" => Some(gist::DEFAULT_VIEWER_BASE.to_owned()),
         None => {
             eprintln!(
-                "note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and pass --preview-base. Publishing without a preview link.",
+                "Note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and pass --preview-base. Publishing without a preview link.",
                 identity.host,
                 env!("CARGO_PKG_NAME")
             );
@@ -307,8 +353,13 @@ fn resolve_viewer(identity: &gist::Identity, base_override: Option<String>) -> O
 }
 
 /// Prompts a yes/no question, treating a cancellation (Esc / Ctrl-C) as "no".
-fn ask(question: &str) -> Result<bool> {
-    match Confirm::new(question).with_default(false).prompt() {
+/// `help` rides along under the prompt, for a caveat the answer turns on.
+fn ask(question: &str, help: Option<&str>) -> Result<bool> {
+    let mut prompt = Confirm::new(question).with_default(false);
+    if let Some(help) = help {
+        prompt = prompt.with_help_message(help);
+    }
+    match prompt.prompt() {
         Ok(answer) => Ok(answer),
         Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(false),
         Err(error) => Err(error.into()),
@@ -324,7 +375,7 @@ fn require_confirmation(question: &str, assume_yes: bool) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         bail!("refusing without confirmation: pass --yes");
     }
-    if !ask(question)? {
+    if !ask(question, None)? {
         bail!("aborted");
     }
     Ok(())
@@ -335,7 +386,7 @@ fn gists() -> Result<()> {
     let ours = gist::list_ours()?;
     if ours.is_empty() {
         println!(
-            "no gists published by {} as {identity}",
+            "No gists published by {} as {identity}",
             env!("CARGO_PKG_NAME")
         );
         return Ok(());
@@ -371,7 +422,7 @@ fn delete(args: DeleteArgs) -> Result<()> {
     print_gist(&found);
     require_confirmation("Delete it?", args.yes)?;
     gist::delete(&found.id)?;
-    println!("deleted {}", found.id);
+    println!("Deleted {}", found.id);
     Ok(())
 }
 
@@ -381,7 +432,7 @@ fn delete_all(identity: &gist::Identity, assume_yes: bool) -> Result<()> {
     let ours = gist::list_ours()?;
     if ours.is_empty() {
         println!(
-            "no gists published by {} as {identity}",
+            "No gists published by {} as {identity}",
             env!("CARGO_PKG_NAME")
         );
         return Ok(());
@@ -397,7 +448,7 @@ fn delete_all(identity: &gist::Identity, assume_yes: bool) -> Result<()> {
     require_confirmation("Delete all of them?", assume_yes)?;
     for gist in &ours {
         gist::delete(&gist.id)?;
-        println!("deleted {}", gist.id);
+        println!("Deleted {}", gist.id);
     }
     Ok(())
 }
@@ -448,7 +499,7 @@ fn scaffold_viewer(args: ScaffoldViewerArgs) -> Result<()> {
     println!("{}", index.display());
     println!("{}", readme.display());
     println!(
-        "next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then publish with --preview-base <your Pages URL>",
+        "Next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then publish with --preview-base <your Pages URL>",
         args.output.display()
     );
     Ok(())
@@ -465,7 +516,7 @@ fn git_init(dir: &Path) {
         .status();
     if !matches!(ran, Ok(status) if status.success()) {
         eprintln!(
-            "note: could not run `git init` in {}; do it yourself",
+            "Note: could not run `git init` in {}; do it yourself",
             dir.display()
         );
     }
@@ -559,6 +610,68 @@ fn highlighter() -> SyntectAdapter {
     SyntectAdapterBuilder::new()
         .css_with_class_prefix("ink-")
         .build()
+}
+
+/// Sets a folio and records what setting it cost, filling both figures into the
+/// plaque's placeholders. The time is the render alone, so it means the same
+/// thing under every subcommand; the size is of the markup the figures are
+/// substituted into, which is the whole folio bar the substitution itself.
+fn inscribe(scribe: &Scribe, folio: &Folio) -> (String, Labour, BTreeMap<char, usize>) {
+    let started = Instant::now();
+    let (markup, reached) = scribe.folio(folio, &colophon());
+    let markup = markup.into_string();
+    let labour = Labour {
+        took: started.elapsed(),
+        bytes: markup.len(),
+    };
+    (render::inscribe(markup, &labour), labour, reached)
+}
+
+/// Reports what a render cost, using the same formatting helpers as the folio's own plaque.
+/// The size is the finished document's, so it is exact where the plaque's is
+/// the pre-substitution measure it could take of itself. It goes to stderr so
+/// stdout stays the folio's path alone, for a script to consume.
+///
+/// A folio driven onto the whole faces says so and names what drove it, since
+/// it is otherwise a silent five-fold jump in the file a reader downloads.
+fn report(html: &str, labour: &Labour, reached: &BTreeMap<char, usize>) {
+    eprintln!(
+        "{} in {}",
+        render::size(html.len()),
+        render::elapsed(labour.took)
+    );
+    if !reached.is_empty() {
+        eprintln!("Note: embedding the whole fonts: {}", named(reached));
+    }
+}
+
+/// Names the characters that drove a folio onto the whole faces, most frequent
+/// first, keeping the note to one line however long the tail is.
+fn named(reached: &BTreeMap<char, usize>) -> String {
+    const SHOWN: usize = 5;
+
+    let mut by_frequency: Vec<(&char, &usize)> = reached.iter().collect();
+    by_frequency.sort_by_key(|(character, count)| (std::cmp::Reverse(**count), **character));
+
+    let named: Vec<String> = by_frequency
+        .iter()
+        .take(SHOWN)
+        .map(|(character, count)| format!("{character} (U+{:04X}) ×{count}", **character as u32))
+        .collect();
+    let rest = by_frequency.len().saturating_sub(SHOWN);
+    let tail = if rest > 0 {
+        format!(", and {rest} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "this session sets {} the cut ones drop: {}{tail}",
+        match by_frequency.len() {
+            1 => "a character".to_owned(),
+            count => format!("{count} characters"),
+        },
+        named.join(", "),
+    )
 }
 
 fn colophon() -> Colophon {

@@ -1,0 +1,14 @@
+# The tools the justfile shells out to, beyond the Rust toolchain that
+# rust-toolchain.toml pins (rustup owns that, since `just format` needs a
+# nightly rustfmt alongside the pinned stable). `fswatch`, which `just serve`
+# and `just watch` need, has no mise package and stays a system dependency.
+[settings]
+# Supply-chain cooldown: ignore releases newer than this when resolving.
+minimum_release_age = "7d"
+
+[tools]
+gh = "latest"                       # publish, fetch, gists, delete
+hyperfine = "latest"                # bench
+just = "latest"
+"ubi:mstange/samply" = "latest"     # profile
+uv = "latest"                       # pre-commit, playwright, fonttools
