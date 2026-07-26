@@ -627,7 +627,7 @@ fn inscribe(scribe: &Scribe, folio: &Folio) -> (String, Labour, BTreeMap<char, u
     (render::inscribe(markup, &labour), labour, reached)
 }
 
-/// Reports what a render cost, in the same words the folio's own plaque uses.
+/// Reports what a render cost, using the same formatting helpers as the folio's own plaque.
 /// The size is the finished document's, so it is exact where the plaque's is
 /// the pre-substitution measure it could take of itself. It goes to stderr so
 /// stdout stays the folio's path alone, for a script to consume.
