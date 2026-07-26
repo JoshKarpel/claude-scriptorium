@@ -342,7 +342,10 @@
   const scratch = () => {
     const pen = nib();
     if (!pen) return;
-    if (pen.state === "suspended") pen.resume();
+    // resume() is a promise, and it rejects where the browser won't let the
+    // context start. The word simply goes unheard, which is not worth an
+    // unhandled rejection surfacing on a page whose copy already worked.
+    if (pen.state === "suspended") pen.resume().catch(() => {});
     // A lead on the first stroke, so scheduling the word can't run late into
     // its own opening.
     let when = pen.currentTime + 0.01;
