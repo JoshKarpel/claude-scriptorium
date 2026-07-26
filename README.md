@@ -137,10 +137,11 @@ Assistant and user turns, in order, with:
   as the markdown it was composed as, a read's result as the language of the
   file it read, a search's result as the links it found. A call its label
   already states in full is one flat line; everything else folds. Each result
-  sits with the call it answers and names it, so a batch of calls issued at once
-  doesn't leave you counting to work out which result is which. A result that
-  says only that the call was carried out is left out, since the call above it
-  already shows what happened.
+  sits with the call it answers, and its line previews the first thing that came
+  back rather than naming the call again: what a command printed, a file's
+  opening line, the option that was chosen. A result that says only that the
+  call was carried out is left out, since the call above it already shows what
+  happened.
 - Terminal colour kept: output written with ANSI escapes reads in the folio's
   own pigments, rather than showing the escapes
 - Pasted images inlined as data URLs
@@ -176,7 +177,7 @@ a summary line:
 | --- | --- |
 | `hook` | What a hook printed, injected, or failed with |
 | `rule` | A `CLAUDE.md` or rule file pulled into context |
-| `skill` | The instructions a skill or custom slash command carries |
+| `skill` | The instructions a skill carries, whether a command loaded it or the assistant reached for it |
 | `command` | A slash command, its arguments, and what it printed |
 | `plan` | Entering plan mode, and leaving it with or without a plan |
 | `note` | A file edited outside the session or attached to it, a truncated read, a model swapped mid-conversation |
@@ -189,12 +190,15 @@ Glosses are never navigation targets, and searching them is its own scope, so
 the reading column stays the conversation while the context behind it stays a
 click away.
 
-Every kind of panel carries its own pigment, so scrolling tells you what you're
-passing without reading the labels: the speakers keep lapis and orange, a tool
-call takes the one cool hue nothing else holds, reasoning takes the assistant's
-own drawn back toward the ink, and the harness's notes take malachite, ochre,
-and a rubricated vermilion for a plan boundary, with the ambient ones left in
-faint ink.
+Every kind of panel carries its own pigment, along one axis: **warm is what the
+model produced, cool is what reached it from outside.** So scrolling tells you
+which side of the exchange you're passing before you read a label. The assistant
+speaks in its own orange, reasons in that orange drawn back toward the ink, and
+reaches for a tool in ochre; you speak in lapis, type a command in that lapis
+drawn back toward the ink, and your skills and hooks arrive in teal and
+malachite. A plan boundary is the exception, rubricated in vermilion because it
+marks a division in the text rather than anything said in it, and the ambient
+kinds stay in faint ink so the rest can stay loud.
 
 ### Unrecognized content
 
@@ -216,18 +220,26 @@ a built-in whose input doesn't match the shape its view expects.
 A folio is interactive, driven by one small script inlined alongside the
 styles, so the file stays a single self-contained artifact:
 
+- **Set the key** in the corner: a chip per kind of panel, carrying that kind's
+  own pigment, so it says what every edge in the margin means as well as which
+  kinds you want. What reached the model runs down one column and what it
+  produced down the other. Everything else answers to it, so you say once what
+  you're reading through.
 - **Search** the session from the fixed box: matches are highlighted, and
   `‹ ›` or Enter steps through them, opening any collapsed fold that holds a
-  hit. Scope the search to what you're after, so a query need not wade through
-  tool output, reasoning, or the harness's notes.
+  hit. It looks only at the kinds the key leaves in play.
 - **Theme** it light, dark, or system; the default follows your OS preference
   and the choice is remembered across visits.
-- **Copy** any code block, or a whole message, from the button that appears on
+- **Copy** any code block, a whole message, or a fold's prose (a skill's
+  instructions, a rule, a plan, a subagent's prompt), from the button that appears on
   hover, and hear a quill take it down: the scratch is synthesized on the spot,
   so it costs the folio no bytes to carry.
-- **Navigate** from the corner dock: jump between user and assistant messages
-  (skipping tool, thinking, and gloss panels), and collapse or expand every fold
-  at once.
+- **Navigate** from the corner dock: step along either side of the exchange, the
+  cool arrows seeking what reached the model and the warm ones what it produced,
+  or the middle pair taking both. The arrows honour the key too, so narrowing it
+  to skills walks you through the skills alone. Each step names the turn in the
+  URL, so it is a link you can share and a place a reload returns you to.
+  Collapse or expand every fold at once from the same dock.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
 - **Read by candlelight** after dark, or by the sun in the day: the luminary
   over the theme toggle flickers or turns its rays, and casts a faint glow
@@ -247,6 +259,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | quire | The gathering of folios belonging to one project |
 | marginalia | A collapsible tool call or result |
 | gloss | A note the harness wrote into the session, set as its own panel |
+| key | Which kinds of panel are in play, and what each edge's pigment means |
 | drollery | A marginal creature drawn in the border |
 | luminary | The candle or sun the folio is read by, and the light it casts |
 | colophon | Generation metadata, shown in the plaque |

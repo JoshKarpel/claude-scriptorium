@@ -51,7 +51,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recorded one line each, so they became several panels and every result piled
   onto the last of them while its siblings showed none: a batch of five searches
   put all five results under the fifth. Each result now joins its own call's
-  panel, and its summary line names that call rather than reading only "result".
+  panel.
+- A result's summary line previews what came back rather than saying "result".
+  Since each result now sits with its own call, the box above it already names
+  the tool and its subject, so the line shows the first thing the tool actually
+  said instead: what a command printed, a file's opening line, the option that
+  was chosen. Only a failure is still named, being the exception worth marking.
+- A slash command and what it printed are one panel. The harness records the
+  output as a line of its own, which stood as a second panel whose whole summary
+  was the word "output"; the two are now joined on the line the harness itself
+  names as the parent. A command that only works the harness takes its output
+  with it when it goes.
+- The folio's colours run on one axis: **warm is what the model produced, cool
+  is what reached it from outside.** So a tool call takes the ochre its own name
+  is set in rather than a cool hue, a skill takes the teal it vacates, and a
+  reader scrolling learns which side of the exchange they are passing before
+  reading a label. A plan boundary stays rubricated and the ambient kinds stay
+  in faint ink, deliberately off the axis.
+- The dock steps along that same axis: the cool arrows seek what reached the
+  model (your words, commands, skills, and hooks) and the warm ones what it
+  produced (replies, reasoning, tool calls), where before they sought one
+  speaker and skipped everything else.
+- Each step names its turn in the URL, so a reload returns you to where you were
+  reading and the position is a link you can share. Stepping also lands at once
+  instead of gliding: a smooth scroll was an animation to wait out, and one that
+  a live session's re-render could interrupt and lose.
+- The reading controls stand together in one column down the right, led by the
+  key, with the search and the navigation dock under it. They were scattered to
+  opposite corners, which hid that they are one mechanism.
+- The folio has a **key**: a chip per kind of panel, in its own card above the
+  search rather than inside it, set as a column per side of the exchange and
+  carrying each kind's own pigment, so it says what every edge in the margin
+  means as well as which kinds are wanted. The search and the navigation arrows
+  both answer to it, so narrowing it to skills searches skills and steps through
+  skills alike: one place to say what you are reading through, rather than one
+  per control that reads.
+- A gloss's edge is solid rather than dotted. The dots said "nobody's speech"
+  back when the notes shared a few pigments between them; now each kind has its
+  own, they were a second mark for something already said.
+- A hook keeps the line breaks it printed. Its injected context was set as
+  ordinary markdown, which folds a single newline into a space, so a hook
+  reporting on a working tree came out as one unreadable run of filenames. It
+  sits between the two readings and is now set as such: read as markdown, so
+  headings and lists survive, but keeping its own breaks.
+- A rule takes a cool pigment of its own rather than the neutral ink, since it
+  is a file you wrote: the skill's teal, drawn back toward the ink because
+  rules arrive a dozen at a time where a skill arrives singly.
+- Output that redrew itself reads as the terminal left it. A spinner or a
+  progress bar emits a frame per carriage return, overwriting its line each
+  time; the folio set every frame instead, running dozens of them together into
+  one line with no breaks, which is the shape a build log most often takes.
+- A built-in skill reads as a skill. One with a directory on disk names it, and
+  that name is how a skill was recognised; a built-in (`/review`, `/init`,
+  `/security-review`) has no directory, so its instructions were set as an
+  anonymous passing note. The slash command in front of them now names them, so
+  a skill looks the same whether a command loaded it or the assistant reached
+  for it unbidden.
+- A slash command takes the reader's own pigment rather than the skill's. The
+  harness wrote it into the session, but the user typed it: it is the only note
+  in a folio that anyone actually spoke, and sharing a skill's ochre said
+  otherwise just where a command stands in front of the skill it loaded.
+- A fold whose body is prose carries a copy button, so a skill's instructions, a
+  rule pulled into context, a plan, or a subagent's prompt can be lifted out
+  whole. Only code and output blocks had one.
+- Prose in a fold is set at the size the conversation is. It took the marginalia's
+  smaller measure, which suits a summary line and a list of facts but not a
+  skill's whole instructions, which are read rather than scanned.
+- Inline code breaks rather than running out of whatever holds it. A single
+  unbreakable token (a flag's comma-separated values, a deep path) had nowhere
+  to go, since inline code has no scroller of its own the way a block does, and
+  it showed worst inside a fold, where the body is the box.
+- The folio is set a little larger, and its head and foot sit closer to the
+  first and last panel than its illuminated margins do to the text.
 - One firing of a hook is one panel, however many lines it wrote. A hook that
   answers in the control protocol records what it decided and what it injected
   separately, which stood as two panels each saying half of it; they are now

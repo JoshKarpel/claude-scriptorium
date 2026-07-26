@@ -350,6 +350,29 @@ otherwise be lost at the column's edge. The
 stylesheet keys the body off `details > pre` rather than a class, because a
 highlighted body is comrak's markup and can't carry one.
 
+**The subject goes in the gist and never in a note.** The summary line is a flex
+row and the gist is the only part of it that can shrink (`overflow: hidden` is
+what zeroes a flex item's automatic minimum size); `.marginalia__note` and
+`.marginalia__outcome` are both `flex: none`, so a note holding a path drives the
+line clean out of the fold and squeezes the gist to nothing on the way.
+
+**A result's line previews what came back, and says nothing else.** Every panel
+holds exactly one call and one result (one assistant line carries one call, and
+`panels` puts each result in its own call's panel), so naming the tool or its
+subject again would only repeat the box directly above. The line is therefore the
+*hint*, `tools::hint`, in the gist. Success is unmarked: the box under the call
+is what says the call was answered, and `error` is set only because a failure is
+the exception, which is what makes the mark worth reading.
+
+**A hint must show what the fold shows**, so `hint`'s match shadows `result`'s
+arm for arm, fallbacks included. Where a view sheds something, the hint sheds it
+too (a read's line-number gutter, the tag around a failure); where a view
+recomposes, the hint is drawn from what the fold *leads with* (the first thing
+chosen out of an `AskUserQuestion` sentence, a task's first fact) rather than
+from the markup it arrived in. Taking the raw first line instead puts back onto
+the summary exactly what the view took out, which is how a read's line came to
+open on a bare `1`. Adding an arm to `result` means deciding its arm in `hint`.
+
 ### Setting the tools
 
 `tools.rs` owns every per-tool decision, keyed on the tool's name: `call`
@@ -367,14 +390,25 @@ markdown through `prose`; code is a highlighted code block; a list of small
 structured things (questions and their options, findings, todos) is its own
 markup in the mono face.
 
+That split decides the type, too. A marginalia is pitched below the reading size
+because its summary line is a label and its other bodies are data, but
+`.tool--prose` is set back at `1rem`: a skill's instructions or a plan are the
+same kind of text as the conversation around them and are read rather than
+scanned. It also carries its own copy button, since it has no `pre` for the
+one that every code block gets. And **inline code wraps** (`overflow-wrap:
+break-word` on `:not(pre) > code`), because a fold's body is its box and inline
+code has no scroller of its own: one unbreakable token would otherwise run
+straight out of the fold. Code inside a `pre` is deliberately excluded, since a
+block scrolls and breaking its lines would misreport the source.
+
 A result's setting takes the call it answers. The wire format names the tool
 only on the call, so `Folio::panels` resolves each result's `tool_use_id`
 against the session's calls and stamps it with an `Answered` (the tool's name,
 and the path where the call had one). That field is `#[serde(skip)]`: it is
 never on the wire, and it exists so the renderer walks a stream where every
-result already knows what produced it. The same `Answered` also labels the
-result's own summary line, so a run of results says which call each answers
-rather than repeating the word "result".
+result already knows what produced it. `tools::hint` keys on that same name to
+decide what its summary line can honestly preview, and `tools::result` uses the
+path to pick the language a read's contents are set in.
 
 Naming a result is also what lets `panels` **drop** the ones that say nothing
 their call doesn't: a write answering that the file was written, a skill
@@ -417,7 +451,8 @@ selections joined into one answer, and a timeout), each with a test.
 `gloss.rs` is `tools.rs`'s counterpart for what the harness writes into a
 session, and follows the same rules: it keys on the shape, every reading answers
 `Option`, and an unrecognised shape is simply left unset. A `Gloss` is pure data
-(a kind, a gist, notes, and a `Body` that is either `Prose` or `Plain`);
+(a kind, a gist, notes, and the `Body`s it has to say, each either `Prose` or
+`Plain`, since one firing of a hook can say more than one thing);
 `gloss::setting` turns it into the same `Setting` a tool call produces, so both
 go through one `render::marginalia` and read as one kind of thing on the page.
 Harvest real transcripts before adding a kind, as with a tool view.
@@ -427,6 +462,23 @@ The six kinds name *what wrote the note*, not what it holds: `hook`, `rule`,
 small is deliberate, because the summary line is where the specific labelling
 belongs, exactly as a tool's name and gist divide the work.
 
+**A skill reads the same however it was loaded.** `gloss::meta` knows one by the
+directory it opens on, but a *built-in* skill (`/review`, `/init`,
+`/security-review`) has none on disk, so its instructions arrive as bare prose
+and would fall through to `note`. The slash command standing directly in front of
+them is what says otherwise, so `Folio::panels` calls `Gloss::ran_by` to relabel
+and name it. This matters because a skill is not a command's payload: across the
+corpus 55 were loaded by a command of the same name and **28 by the model itself
+with no command at all**. Were the command-loaded ones folded away or left as
+notes, the same event would take a different shape purely by who triggered it.
+
+**A command is not a skill, and the two take different pigments.** A command is a
+gloss by where it sits rather than by whose it is: the harness recorded it, but
+the user typed it. So `--command-edge` is the user's own hue drawn back toward
+the ink, exactly as `--thinking-edge` is the assistant's, while a skill takes the
+teal. Both are cool, because neither is the model; see the palette below for why
+that is the deciding question.
+
 One firing of a hook writes several lines (what it decided, what it injected,
 what it printed), and `Folio::panels` gathers them into one panel the same way
 it gathers a tool result into the call it answers: the decision labels the
@@ -435,12 +487,32 @@ each saying half of it. The key is `Gloss::firing`, and **it is the `toolUseID`
 plus the hook's own command, not the id alone**: the id names the *event*, one
 event runs every hook matching it, and keying on it alone folds four
 `SessionStart` hooks into one panel claiming to be a single hook that ran four
-commands. The lines with no command of their own key on the id, which is exactly
-what gathers them onto the hook they came from.
+commands. So `Firing::joins` is not equality: two notes join when the event
+matches and no two *different* commands stand between them, which is what lets
+the lines a hook wrote through the harness (they carry no command of their own)
+join the hook's own line. `Gloss::absorb` then narrows the panel's firing to
+that command, so a *third* hook of the same event can no longer join what is now
+identified, and it stacks the bodies rather than keeping the first: one firing
+that had two things to say says both, in the order it said them.
+
+A slash command's output is gathered the same way: the harness records what a
+command printed as its own `system` line, and `GlossPanel::gathers` joins it to
+the panel holding the command. **`parentUuid` is not a semantic pointer.** It
+chains every line to the one before it, attachments included, so it says "the
+previous line" and not "the line I am about". What makes the join sound is that
+the output is *always* the very next line (138 of 138 across the corpus) and that
+`panels` only ever joins into the panel it just opened; the uuid is what confirms
+the pairing rather than what establishes it. Don't reach for `parentUuid` to tie
+two lines together where adjacency isn't already doing the work.
+
+That adjacency is also why `panels` keeps `unset`: a command the folio leaves
+unset (one that only works the harness, or a `/clear` boundary) is dropped, and
+its output line has to go the same way, or the folio sets what `/copy` printed
+while never mentioning `/copy`.
 
 What a note has to say is what decides whether it is set at all, mirroring the
 `ACKNOWLEDGEMENTS` drop: a note with neither a gist nor a body is dropped rather
-than set as a bare line saying something ran. Three drops are worth knowing:
+than set as a bare line saying something ran. Four drops are worth knowing:
 
 - A `hook_success` records `content` (what the hook contributed to the session)
   and `stdout` (what it printed), and for a hook that just prints context they
@@ -587,13 +659,74 @@ tell each other apart. Keep it that way when adding a kind.
   15px), because it is both the position indicator and a drag target. A test
   guards all three.
 
+### The palette: warm is the model, cool is what reached it
+
+**One axis decides every edge in the folio.** Warm hues are what the model
+produced; cool hues are what reached it from outside. A reader scrolling learns
+which side of the exchange they are passing before reading a single label, and
+**a new kind has its side decided for it rather than chosen by taste**. This is
+the first question to answer when adding one.
+
+| Warm: the model's own | Cool: what reached it |
+|---|---|
+| `assistant` — `--claude` | `user` — `--lapis` |
+| `thinking` — `--claude` toward the ink | `command` — `--lapis` toward the ink |
+| `tool` — `--sienna` | `skill` — the teal |
+| `plan` — `--rubric` | `hook` — `--verdigris` |
+| | `rule` — the teal toward the ink |
+
+A plan boundary is the model's: the mode is the user's to ask for, but entering
+and leaving it is the model reporting on its own working, so it reads beside the
+reasoning rather than beside the asking. It is rubricated rather than given a
+hue of its own, because marking a division in the text is what a scribe ground
+vermilion for. A rule is the user's own writing pulled into the conversation, so
+it is theirs however the harness fetched it.
+
+Three pairs are deliberately the same hue drawn back toward the ink rather than a
+colour of their own, because none of them is a third party: reasoning is the
+assistant's own voice unvoiced, a command is the user's own voice recorded as a
+note, and a rule is a skill at lower volume (both are instruction files the user
+wrote, but rules arrive a dozen at a time at the head of a session where a skill
+arrives singly). `tool` takes the ochre a tool's *name* is already set in, so the
+panel and the names inside it agree.
+
+The cool side is ordered by how far from the reader each came: a command the user
+typed, a skill they wrote (loaded by a command or by the model itself), a hook
+answering on their behalf. Malachite sits furthest from a voice while still
+being cool.
+
+**A side is not a loudness.** Which side a kind is on decides *which way* it is
+pitched; how far it is drawn back toward the ink is a separate call, and the
+quiet kinds are the frequent ones. Deciding the side is compulsory; how loud to
+be is not.
+
+**One kind sits off the axis**, and only one: `note`, the catch-all, which by
+definition has nothing in common to pitch. It stays in faint ink and is the only
+kind the dock steps past. It is not vestigial, either: across a 60-session sample
+it turned up 129 times against `rule`'s 141, almost all of them a file edited
+outside the session while it ran, which is exactly the sort of thing a reader
+needs and nothing else records.
+
+`data-sidechain` is a third, orthogonal axis (whose turn it is, not what kind),
+and takes Tyrian purple across every kind at once.
+
+**The axis is declared once, in code.** `PanelKind::side` answers it and
+`Scribe` writes the answer onto every panel as `data-side`, so the axis is
+*recovered* by everything downstream rather than restated: the dock's flanking
+arrows step along `[data-side]`, the search box groups its chips into a column
+per side, and the stylesheet pitches each kind's pigment to match. `PanelKind::EVERY`
+is the matching single declaration of the kinds themselves, which is what the
+search chips are built from. The match in `side` is exhaustive on purpose, so
+**a new kind will not compile until its side is decided** — and deciding it is
+what then gives the kind its pigment, its chip, and whether the dock stops at it.
+Don't add a list of kinds anywhere else; derive it from these two.
+
 Markup carries `data-sidechain` for subagent turns so a stylesheet can
 distinguish them. **Nothing in a folio is hidden with no way to reveal it.** A
-gloss panel takes a dotted edge (against the sidechain's dashed) because it is
-nobody's speech, and a pigment no speaker holds: malachite for a hook, ochre for
-a skill or command, and rubricated vermilion for a plan boundary, since marking
-a division in the text is what a scribe ground red for. A rule and a note stay
-in faint ink, because colouring every kind would leave nothing quiet. Each kind
+gloss panel's edge is solid like any other's: it was dotted while the glosses
+shared a few pigments and the edge had to say "nobody's speech" by itself, and
+once every kind had its own hue that was a second mark for something already
+said. The sidechain keeps its dashes, being a different axis. Each kind
 sets the `--gloss-edge` token rather than `border-left-color`, so
 `.turn[data-sidechain]`, which sets the colour outright, still wins and a
 subagent's gloss still reads as a subagent. Its fold sheds its own frame while
@@ -605,13 +738,44 @@ lose to it at equal specificity.
 
 The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
-the panel stream. Reading controls sit on the right (search top, scoped by kind
-of message, and a navigation dock bottom that steps between user/assistant
-messages, skipping tool, thinking, and gloss panels, jumps to the end, and folds
-every marginalia); appearance
+the panel stream. Reading controls sit on the right, as a **rail**: one column of
+cards led by the **key**, with the search and the navigation dock stacked under
+it. They are in one column because they are one mechanism, the key governing the
+two below it, and standing them together is what says so; appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
 facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
 with the luminary standing over it). There is no in-column header or footer.
+
+**The key is a control in its own right, not the search's.** It is a chip per
+`PanelKind::EVERY`, each carrying its own kind's pigment so it doubles as the
+legend for every edge in the margin. The chips are one grid of five rows filled
+*by column*, so `EVERY`'s first half runs down the cool side and its second down
+the warm one, rather than each side being nested in an element of its own. That
+is what lets the halves be five and five with nothing stranded on a row alone,
+which is why `note` sits at the foot of the warm column despite being
+`Side::Aside`. **The order in `EVERY` is a layout, not a classification**: every
+chip carries its own `data-side`, so the dock still steps past `note` and its
+neutral ink still keeps it from reading as the model's. The search and
+the dock both read it (`enabledKinds` in the app script), so a reader says once
+what they are looking through rather than once per panel that looks: narrow the
+key to `skill` and the search finds only skills *and* the arrows step only to
+them. That is why it sits in the rail beside the search rather than inside it,
+and why a minimap added later belongs in the same rail and needs no controls of
+its own. The `aside` kinds stay out of the dock however the key is set, since the
+arrows are the two sides and those kinds are on neither.
+
+**The dock steps by writing the turn's permalink**, not by scrolling to it:
+`history.replaceState` to `#turn-N`, then an instant `scrollIntoView`. All three
+parts are load-bearing. The hash is what makes the position survive a reload,
+which matters because `serve` re-renders under the reader and a scroll in flight
+is simply lost when it does, with nothing recording where it was headed. The
+landing is instant because an animation is a thing to wait out when the reader
+means to press the button again. And it is `replaceState` rather than assigning
+`location.hash` so that twenty steps don't cost twenty presses of Back;
+`replaceState` performs no scroll of its own, which is why the scroll is
+explicit. The deep-link handler already restores such a hash on load (and
+releases follow, since a named turn is the reader taking control), so the dock
+gets reload-correctness by joining that path rather than adding one.
 
 The luminary (`luminary.svg`, inline in the appearance corner) is the light the
 folio is read by: a guttering candle after dark, the sun with its rays circling
@@ -701,8 +865,10 @@ for one project), `Colophon` (generation metadata, shown in the plaque),
 a later hand annotates a manuscript). Markup classes continue it with
 `marginalia` (a collapsible tool call or result), `drollery` (a marginal
 creature), `versal` (the dropped initial that opens a speaker's paragraph),
-`luminary` (the candle or sun the folio is read by, and its `radiance` over the
-leaf), and `illumination` (the theme layer).
+`key` (which kinds of panel are in play, and what each edge's pigment means),
+`rail` (the column of cards the key leads), `luminary` (the candle or sun the
+folio is read by, and its `radiance` over the leaf), and `illumination` (the
+theme layer).
 
 ## Testing against real data
 

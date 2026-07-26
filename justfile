@@ -192,7 +192,7 @@ serve *args:
     trap 'kill "${pid:-}" 2>/dev/null || true' EXIT
     while true; do
       pid=""
-      if cargo build -q --release; then
+      if cargo build --release; then
         "$bin" serve {{ args }} &
         pid=$!
       else

@@ -136,6 +136,12 @@ pub(crate) fn prose(scribe: &Scribe, source: &str) -> Markup {
     html! { div .tool.tool--prose { (scribe.markdown(source)) } }
 }
 
+/// A body a program printed rather than composed: read as markdown, but keeping
+/// the line breaks it printed. See [`Scribe::markdown_printed`].
+pub(crate) fn printed(scribe: &Scribe, source: &str) -> Markup {
+    html! { div .tool.tool--prose { (scribe.markdown_printed(source)) } }
+}
+
 fn flag(input: &Value, field: &str) -> bool {
     input.get(field).and_then(Value::as_bool).unwrap_or(false)
 }
@@ -441,6 +447,85 @@ fn findings(input: &Value) -> Option<Setting> {
     )
 }
 
+/// The error text with the tag the harness wraps it in shed.
+fn shed_error_tag(text: &str) -> &str {
+    text.trim()
+        .strip_prefix("<tool_use_error>")
+        .and_then(|text| text.strip_suffix("</tool_use_error>"))
+        .unwrap_or(text)
+}
+
+/// The first thing a result has to say, for its summary line.
+///
+/// A result sits in the panel holding the call it answers, so naming that call
+/// again only repeats the line above it. What the line has no other way to show
+/// is what came *back*, so it previews that instead and the fold holds the rest.
+///
+/// **A hint must show what the fold shows.** The match below therefore shadows
+/// [`result`]'s, arm for arm: where a view sheds something on the way into the
+/// fold the hint sheds the same thing, and where a view recomposes the text the
+/// hint is drawn from what the fold leads with rather than from the markup it
+/// arrived in. Taking the raw line instead puts back onto the summary exactly
+/// what the view took out of the fold, which is how a read came to open on its
+/// own line number. Each arm also follows its view's *fallback*: a shape that
+/// doesn't parse is set as it came in both places. **Adding an arm to `result`
+/// means deciding its arm here.**
+///
+/// The escapes a terminal wrote are dropped: colour is a fact about the body,
+/// which sets it, and a hint carrying them would show their bytes as text. Blank
+/// lines are skipped, so a file that opens on one still hints at its first real
+/// line. A result that is an image or a reference has no line to take at all.
+///
+/// The hint is cut well past the column's width rather than at it: the gist
+/// ellipsises in the stylesheet, which is what decides where a reader sees it
+/// end, and this only keeps a single-line result of many kilobytes out of the
+/// markup.
+pub fn hint(
+    answering: Option<&Answered>,
+    content: &ToolResultContent,
+    is_error: bool,
+) -> Option<String> {
+    const PAST_THE_COLUMN: usize = 160;
+
+    let text = spoken(content).ok()?;
+    let shown = if is_error {
+        // A failure's own first line is the most useful hint there is, and the
+        // tag around it is the harness's rather than the tool's.
+        Cow::Borrowed(shed_error_tag(text.as_ref()))
+    } else {
+        match answering.map(|answered| answered.tool.as_str()) {
+            // The numbering down a listing's edge is the harness's rather than
+            // the file's, and `source` takes it off on the way into the fold.
+            Some("Read") => Cow::Owned(unnumbered(text.as_ref())),
+            // The fold shows the answers parsed out of the sentence they arrive
+            // buried in, so the hint is the first thing chosen, which is what a
+            // reader opened the fold for. A sentence that doesn't parse is set
+            // as it came, in the fold and here alike.
+            Some("AskUserQuestion") => match answers(text.as_ref()) {
+                Some(answered) => Cow::Owned(answered.first()?.chosen.to_string()),
+                None => text,
+            },
+            // The fold leads with the tags as a list of facts, so the hint is
+            // the first of them rather than the markup they arrive in.
+            Some("TaskOutput") => match tags(text.as_ref()).first() {
+                Some((_, value)) => Cow::Owned((*value).to_owned()),
+                None => text,
+            },
+            // Everything else reaches the fold as it came, whether as prose, as
+            // a search's own opening line, or as the terminal wrote it.
+            _ => text,
+        }
+    };
+    let line = shown.lines().find_map(|line| {
+        let written: String = ansi_runs(line).into_iter().map(|(_, run)| run).collect();
+        (!written.trim().is_empty()).then(|| written.trim().to_owned())
+    })?;
+    let Some((cut, _)) = line.char_indices().nth(PAST_THE_COLUMN) else {
+        return Some(line);
+    };
+    Some(format!("{}…", line[..cut].trim_end()))
+}
+
 /// How a result is set, which takes the call it answers: the wire format says
 /// only that some text came back, and what that text *is* (a file, a search, a
 /// terminal's output) is a fact about the tool that produced it.
@@ -625,14 +710,9 @@ fn chosen(scribe: &Scribe, text: &str) -> Markup {
 /// A failure is a diagnostic, so it is shown as it came, less the tag the
 /// harness wraps a tool's own error in.
 fn failure(text: &str) -> Markup {
-    let text = text
-        .trim()
-        .strip_prefix("<tool_use_error>")
-        .and_then(|text| text.strip_suffix("</tool_use_error>"))
-        .unwrap_or(text);
     // A failing command's diagnostics are where colour carries the most: it is
     // what the tool used to mark the failure in the first place.
-    terminal(text)
+    terminal(shed_error_tag(text))
 }
 
 /// Output with no shape of its own: pretty-printed where it is JSON (several
@@ -814,10 +894,38 @@ fn indexed(index: u8) -> Pigment {
 
 /// A terminal's output with its colour kept: each run of text in the ink that
 /// was in force when it was written.
+/// What a terminal was left showing, for output that redrew itself.
+///
+/// A carriage return sends the cursor back to the start of the line, so what
+/// follows it is written *over* what came before: a spinner emits one frame per
+/// return and a progress bar one bar, and a reader watching saw only the last of
+/// them. Set as they came, those frames have no newlines between them and run
+/// together into one unreadable line dozens of frames long, which is the shape a
+/// build log most often takes.
+///
+/// Each line therefore keeps only what follows its final return. This is the
+/// coarse reading rather than a faithful one, since a return that rewrites part
+/// of a line leaves the rest standing, but nothing in the corpus does that: the
+/// returns there are all whole-line redraws. `\r\n` is a line ending rather than
+/// a redraw and is normalised first, or every line of a file written on Windows
+/// would be cut to nothing.
+fn last_frame(text: &str) -> Cow<'_, str> {
+    if !text.contains('\r') {
+        return Cow::Borrowed(text);
+    }
+    let text = text.replace("\r\n", "\n");
+    let kept: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.rsplit('\r').next().unwrap_or(line))
+        .collect();
+    Cow::Owned(kept.join("\n"))
+}
+
 fn terminal(text: &str) -> Markup {
+    let text = last_frame(text);
     html! {
         pre { code {
-            @for (ink, run) in ansi_runs(text) {
+            @for (ink, run) in ansi_runs(&text) {
                 @let classes = ink.classes();
                 @let style = ink.style();
                 @if classes.is_some() || style.is_some() {

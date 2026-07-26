@@ -191,6 +191,8 @@ pub fn size(bytes: usize) -> String {
 /// reader.
 pub struct Scribe<'a> {
     options: Options<'a>,
+    /// The same options with hard breaks, for text a program printed.
+    printed: Options<'a>,
     plugins: Plugins<'a>,
     timezone: TimeZone,
     fonts: Fonts,
@@ -212,11 +214,17 @@ impl<'a> Scribe<'a> {
         options.extension.footnotes = true;
         options.render.github_pre_lang = true;
 
+        // The same reading, with the source's own line breaks kept. See
+        // `markdown_printed`.
+        let mut printed = options.clone();
+        printed.render.hardbreaks = true;
+
         let mut plugins = Plugins::default();
         plugins.render.codefence_syntax_highlighter = Some(highlighter);
 
         Self {
             options,
+            printed,
             plugins,
             timezone,
             fonts,
@@ -228,6 +236,25 @@ impl<'a> Scribe<'a> {
         PreEscaped(markdown_to_html_with_plugins(
             source,
             &self.options,
+            &self.plugins,
+        ))
+    }
+
+    /// Markdown for text a *program* printed rather than composed: a hook's
+    /// output is the case, and it is genuinely between the two readings.
+    ///
+    /// Markdown folds a single newline into a space, which is right for prose
+    /// someone wrapped by hand and wrong for a list of things a script emitted
+    /// one to a line: `M  CLAUDE.md\nM  src/gloss.rs` came out as one run of
+    /// filenames. Keeping the breaks costs a hand-wrapped paragraph its reflow,
+    /// so it goes slightly ragged, and that is much the smaller loss. Setting
+    /// such output as preformatted text instead is worse than either: it wraps
+    /// twice, once where the source wrapped and again at the box, *and* throws
+    /// away the headings and lists these mostly carry.
+    pub(crate) fn markdown_printed(&self, source: &str) -> Markup {
+        PreEscaped(markdown_to_html_with_plugins(
+            source,
+            &self.printed,
             &self.plugins,
         ))
     }
@@ -345,39 +372,62 @@ impl<'a> Scribe<'a> {
                             }
                         }
                     }
-                    // A fixed search widget: highlights matches and steps
-                    // through them, wired by the app script.
-                    div .search role="search" {
-                        div .search__bar {
+                    // The reading rail: the key, and stacked under it the panels
+                    // that answer to it. Standing them in one column is what says
+                    // they are tied together, without a word of explanation. A
+                    // minimap belongs here too when there is one, and will read
+                    // the same key rather than carrying controls of its own.
+                    div .rail {
+                        // The folio's key leads the rail, because everything
+                        // under it answers to it: which kinds are in play, and,
+                        // since each chip carries its own kind's pigment, what
+                        // every edge in the margin means. It is a control rather
+                        // than a legend alone, and the *only* one of its sort:
+                        // the search and the dock both read it, so a reader says
+                        // once what they are looking through rather than once per
+                        // panel that looks. A column per side of the exchange, in
+                        // the order `PanelKind::EVERY` declares, so no list of
+                        // kinds is restated in the markup.
+                        div .key role="group" aria-label="kinds of message to show" {
+                            @for kind in PanelKind::EVERY {
+                                button .key__chip type="button"
+                                    data-scope=(kind.label()) data-side=(kind.side().label())
+                                    aria-pressed="true" { (kind.label()) }
+                            }
+                        }
+                        // Highlights matches and steps through them, wired by
+                        // the app script. Looks only at what the key leaves in.
+                        // Two rows: the field takes a whole one, and the count
+                        // and step arrows share the next. Sharing a single row
+                        // left the field a fraction of the rail's width, which
+                        // was both the reason the rail had to be wide and the
+                        // reason the placeholder was cut off in it.
+                        div .search role="search" {
                             input .search__input type="search" placeholder="search folio" aria-label="search folio";
-                            span .search__count aria-live="polite" {}
-                            button .search__nav type="button" data-search-nav="prev" aria-label="previous match" { "‹" }
-                            button .search__nav type="button" data-search-nav="next" aria-label="next match" { "›" }
+                            div .search__bar {
+                                span .search__count aria-live="polite" {}
+                                button .search__nav type="button" data-search-nav="prev" aria-label="previous match" { "‹" }
+                                button .search__nav type="button" data-search-nav="next" aria-label="next match" { "›" }
+                            }
                         }
-                        // Restrict the search to chosen kinds of message, so a
-                        // query need not wade through tool output or reasoning.
-                        div .search__scopes role="group" aria-label="search in" {
-                            button .search__scope.search__scope--user type="button" data-scope="user" aria-pressed="true" { "user" }
-                            button .search__scope.search__scope--assistant type="button" data-scope="assistant" aria-pressed="true" { "assistant" }
-                            button .search__scope type="button" data-scope="tool" aria-pressed="true" { "tool" }
-                            button .search__scope type="button" data-scope="thinking" aria-pressed="true" { "thinking" }
-                            button .search__scope type="button" data-scope="gloss" aria-pressed="true" { "gloss" }
-                        }
-                    }
-                    // A fixed dock: jump between messages, leap to either end
+                    // A dock: jump between messages, leap to either end
                     // and follow new ones (tail -f), and fold every tool call open
                     // or shut. Wired by the app script. The nav grid is three
-                    // columns of up/down arrows: the middle steps between all
-                    // messages, flanked by a user (blue) and an assistant
-                    // (orange) column that seek only that speaker.
+                    // columns of up/down arrows: the middle steps between every
+                    // message, flanked by a column per side of the exchange, so
+                    // the cool arrows seek what reached the model (the reader's
+                    // own words, their commands, skills, and hooks) and the warm
+                    // ones seek what it produced (its replies, reasoning, and
+                    // tool calls). The dock therefore steps along the same axis
+                    // the palette is pitched on and the search box is grouped by.
                     nav .dock aria-label="folio navigation" {
                         div .dock__nav {
-                            button .dock__btn .dock__btn--user type="button" data-nav="prev" data-role="user" aria-label="previous user message" title="previous user message" { "▲" }
+                            button .dock__btn .dock__btn--entered type="button" data-nav="prev" data-side="entered" aria-label="previous message that reached the model" title="previous message that reached the model" { "▲" }
                             button .dock__btn type="button" data-nav="prev" aria-label="previous message" title="previous message" { "▲" }
-                            button .dock__btn .dock__btn--assistant type="button" data-nav="prev" data-role="assistant" aria-label="previous assistant message" title="previous assistant message" { "▲" }
-                            button .dock__btn .dock__btn--user type="button" data-nav="next" data-role="user" aria-label="next user message" title="next user message" { "▼" }
+                            button .dock__btn .dock__btn--model type="button" data-nav="prev" data-side="model" aria-label="previous message the model produced" title="previous message the model produced" { "▲" }
+                            button .dock__btn .dock__btn--entered type="button" data-nav="next" data-side="entered" aria-label="next message that reached the model" title="next message that reached the model" { "▼" }
                             button .dock__btn type="button" data-nav="next" aria-label="next message" title="next message" { "▼" }
-                            button .dock__btn .dock__btn--assistant type="button" data-nav="next" data-role="assistant" aria-label="next assistant message" title="next assistant message" { "▼" }
+                            button .dock__btn .dock__btn--model type="button" data-nav="next" data-side="model" aria-label="next message the model produced" title="next message the model produced" { "▼" }
                         }
                         // Jump to the first or last message, and, where the
                         // session can still grow, a follow toggle that re-pins
@@ -396,6 +446,7 @@ impl<'a> Scribe<'a> {
                         div .dock__fold {
                             button .dock__btn .dock__btn--fold type="button" data-fold="expand" aria-label="expand all" title="expand all" { span .dock__chevron { "⌃" } span .dock__chevron { "⌄" } }
                             button .dock__btn .dock__btn--fold type="button" data-fold="collapse" aria-label="collapse all" title="collapse all" { span .dock__chevron { "⌄" } span .dock__chevron { "⌃" } }
+                        }
                         }
                     }
                     // Presentation controls, opposite the navigation dock:
@@ -456,6 +507,7 @@ impl<'a> Scribe<'a> {
         html! {
             article id={ "turn-" (panel.turn_number) }
                 class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
+                data-side=(kind.side().label())
                 data-turn=(panel.turn_number)
                 data-sidechain[panel.is_sidechain] {
                 header .turn__meta {
@@ -490,10 +542,11 @@ impl<'a> Scribe<'a> {
     /// call's subject is: it is context a reader reaches for, not prose they
     /// read through.
     fn gloss(&self, panel: &GlossPanel) -> Markup {
-        let kind = panel.gloss.kind;
+        let kind = PanelKind::Gloss(panel.gloss.kind);
         html! {
             article id={ "turn-" (panel.turn_number) }
                 class="turn turn--gloss" data-kind=(kind.label())
+                data-side=(kind.side().label())
                 data-turn=(panel.turn_number)
                 data-sidechain[panel.is_sidechain] {
                 header .turn__meta {
@@ -532,9 +585,10 @@ impl<'a> Scribe<'a> {
                 }
             },
             Known::ToolUse { name, input, .. } => self.tool_call(name, input),
-            // A result names the call it answers. Several calls issued together
-            // come back as several results in a row, and a line reading only
-            // "result" leaves a reader counting to work out which is which.
+            // A result sits in the panel holding the call it answers, so the box
+            // above it already names the tool and its subject and the line has
+            // no need to say either again. What it shows instead is the first
+            // thing that came back, which is the one thing the call cannot show.
             Known::ToolResult {
                 content,
                 is_error,
@@ -542,14 +596,9 @@ impl<'a> Scribe<'a> {
                 ..
             } => marginalia(
                 "marginalia--result",
-                Some(if *is_error { "error" } else { "result" }),
+                None,
                 Setting::new()
-                    .maybe_gist(answers.as_ref().map(|answered| answered.tool.as_str()))
-                    .maybe_note(
-                        answers
-                            .as_ref()
-                            .and_then(|answered| answered.subject.as_deref()),
-                    )
+                    .maybe_gist(tools::hint(answers.as_ref(), content, *is_error))
                     .body(tools::result(self, answers.as_ref(), content, *is_error)),
                 if *is_error {
                     Outcome::Failed
@@ -587,11 +636,31 @@ impl<'a> Scribe<'a> {
     }
 }
 
-/// Whether a fold reports something that failed, which the stylesheet marks.
+/// Whether a fold reports a failure, which the stylesheet marks and the summary
+/// line names.
+///
+/// Success is deliberately unmarked. A result sits in the panel holding the call
+/// it answers, so the box below the call is already what says it answered, and a
+/// word saying so on every one of them is the noise a reader reads past. A
+/// failure is the exception, so it is the one that gets named; marking only the
+/// exception is what makes the mark worth anything.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     Fine,
     Failed,
+}
+
+impl Outcome {
+    fn word(self) -> Option<&'static str> {
+        match self {
+            Outcome::Fine => None,
+            Outcome::Failed => Some("error"),
+        }
+    }
+
+    fn failed(self) -> bool {
+        self == Outcome::Failed
+    }
 }
 
 /// A summary line and the fold under it: the shape a tool call and a harness
@@ -599,8 +668,15 @@ enum Outcome {
 /// its subject, and any qualifier), and the fold carries the subject itself. A
 /// setting whose line already states the whole of it has nothing left to hold,
 /// so it is set as one flat line with nothing to open.
+///
+/// The subject belongs in the setting's *gist* and never in a note: the gist is
+/// the one part of the line that can shrink, and a note holding a path drives
+/// the line out of the fold entirely.
 fn marginalia(variant: &str, label: Option<&str>, setting: Setting, outcome: Outcome) -> Markup {
     let head = html! {
+        @if let Some(word) = outcome.word() {
+            span .marginalia__outcome { (word) }
+        }
         @if let Some(label) = label {
             span .marginalia__tool { (label) }
         }
@@ -614,7 +690,7 @@ fn marginalia(variant: &str, label: Option<&str>, setting: Setting, outcome: Out
             span .marginalia__note { (note) }
         }
     };
-    let failed = outcome == Outcome::Failed;
+    let failed = outcome.failed();
     match &setting.body {
         Some(body) => html! {
             details class={ "marginalia " (variant) } data-error[failed] {

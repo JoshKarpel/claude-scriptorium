@@ -15,11 +15,12 @@
 
 use std::borrow::Cow;
 
+use maud::html;
 use serde_json::Value;
 
 use crate::{
     render::Scribe,
-    tools::{Setting, plain, prose},
+    tools::{Setting, plain, printed, prose},
 };
 
 /// What entered the note, which is what its panel is labelled by. The summary
@@ -48,12 +49,53 @@ impl GlossKind {
     }
 }
 
-/// What a gloss's fold holds, and how the body should be set: text composed as
-/// markdown, or output that is whatever a program made of it.
+/// What a gloss's fold holds, and how the body should be set.
+///
+/// Three readings, not two, because a hook's output sits between them: a program
+/// printed it, so its line breaks are its own and must be kept, but it is
+/// markdown often enough (headings, lists) that setting it as preformatted text
+/// throws away structure a reader wants. [`Body::Printed`] is that middle
+/// reading, and [`crate::render::Scribe::markdown_printed`] says what it costs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
+    /// Text composed as markdown, which reflows: a skill's instructions, a rule
+    /// pulled into context, a plan.
     Prose(String),
+    /// Text a program printed, read as markdown but keeping its own line breaks.
+    Printed(String),
+    /// Output with no shape of its own, set exactly as it came.
     Plain(String),
+}
+
+/// Which firing of a hook a note belongs to. One hook writes several lines
+/// (what it decided, what it injected, what it printed), and this is what lets
+/// [`crate::transcript::Folio::panels`] gather them into one panel, the way a
+/// tool result is gathered into the call it answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Firing {
+    /// The harness's `toolUseID`, which names the *event* and not the hook: one
+    /// event runs every hook matching it, so four `SessionStart` hooks share
+    /// this.
+    event: String,
+    /// The hook's own command, which is what tells one hook from another within
+    /// an event. The lines a hook writes *through* the harness (what it decided,
+    /// what it injected) carry no command of their own, which is what lets them
+    /// join whichever hook of the event they turn up beside.
+    command: Option<String>,
+}
+
+impl Firing {
+    /// True when two notes could have come from one hook: the same event, and
+    /// no two *different* commands between them. Two named commands under one
+    /// event are two hooks and must stay two panels, or the folio claims a
+    /// single hook ran four commands.
+    fn joins(&self, other: &Firing) -> bool {
+        self.event == other.event
+            && match (&self.command, &other.command) {
+                (Some(mine), Some(theirs)) => mine == theirs,
+                _ => true,
+            }
+    }
 }
 
 /// One note the harness wrote into the session, as data: the markup comes
@@ -67,15 +109,11 @@ pub struct Gloss {
     /// Qualifiers the gist doesn't carry: a non-zero exit, a timeout, the
     /// arguments a command took.
     pub notes: Vec<String>,
-    pub body: Option<Body>,
-    /// Which firing of a hook this note belongs to. One hook writes several
-    /// lines (what it decided, what it injected, what it printed), and they
-    /// share this key: it is what lets [`crate::transcript::Folio::panels`]
-    /// gather them into one panel, the way a tool result is gathered into the
-    /// call it answers. It is the harness's `toolUseID` *and* the hook's own
-    /// command, because the id names the event rather than the hook and one
-    /// event runs every hook matching it.
-    pub firing: Option<String>,
+    /// What the note has to say, in the order it was said. One firing of a hook
+    /// can write more than one, so this is a list rather than the one body a
+    /// single line carries.
+    pub body: Vec<Body>,
+    pub firing: Option<Firing>,
 }
 
 impl Gloss {
@@ -84,41 +122,64 @@ impl Gloss {
             kind,
             gist: None,
             notes: Vec::new(),
-            body: None,
+            body: Vec::new(),
             firing: None,
         }
     }
 
-    /// Names the firing this note belongs to. The `toolUseID` identifies the
-    /// *event* rather than the hook, and one event runs every hook matching it,
-    /// so the command has to join the key: four `SessionStart` hooks share an
-    /// id, and keying on it alone folds all four into one panel claiming to be
-    /// a single hook that ran four commands. The lines with no command of their
-    /// own (what a hook decided, what it injected) key on the id alone, which is
-    /// exactly what gathers them onto the hook they came from.
+    /// Names the firing this note belongs to.
     fn firing(mut self, event: Option<&str>, command: Option<&str>) -> Self {
-        self.firing = event.map(|event| match command {
-            Some(command) => format!("{event} {command}"),
-            None => event.to_owned(),
+        self.firing = event.map(|event| Firing {
+            event: event.to_owned(),
+            command: command.map(str::to_owned),
         });
         self
     }
 
     /// Takes in another note from the same hook firing. The first line a hook
     /// writes says what it decided and the next carries what it injected, so
-    /// what is already set wins and the incoming note fills the gaps.
+    /// what is already set labels the panel and the incoming note fills the
+    /// gaps. Nothing it had to say is dropped: the bodies stack in the fold, and
+    /// a named command narrows the firing so a *third* hook of the same event
+    /// can no longer join what is now identified.
     pub(crate) fn absorb(&mut self, other: Gloss) {
         if self.gist.is_none() {
             self.gist = other.gist;
         }
-        if self.body.is_none() {
-            self.body = other.body;
-        }
+        self.body.extend(other.body);
         for note in other.notes {
             if !self.notes.contains(&note) {
                 self.notes.push(note);
             }
         }
+        if let (Some(firing), Some(joined)) = (&mut self.firing, other.firing)
+            && firing.command.is_none()
+        {
+            firing.command = joined.command;
+        }
+    }
+
+    /// Re-reads this note as the instructions of the slash command that ran it.
+    ///
+    /// [`meta`] knows a skill by the directory it opens on, and a built-in one
+    /// has no directory on disk to name, so its instructions arrive as bare
+    /// prose and fall through to the catch-all. The command standing directly in
+    /// front of them is what says otherwise. Naming it after that command is
+    /// what makes a built-in read as the same thing a skill with a directory
+    /// does, and as the same thing again when the model reaches for one with no
+    /// command at all: one shape for "a skill was loaded", however it was.
+    ///
+    /// A note with no body is the whole of what was said on its gist alone, so
+    /// that text becomes the body rather than being dropped by the name taking
+    /// its place.
+    pub(crate) fn ran_by(&mut self, command: &str) {
+        self.kind = GlossKind::Skill;
+        if self.body.is_empty()
+            && let Some(said) = self.gist.take()
+        {
+            self.body.push(Body::Prose(said));
+        }
+        self.gist = Some(command.trim_start_matches('/').to_owned());
     }
 
     /// True when this note and the next belong to the same firing of one hook,
@@ -126,8 +187,10 @@ impl Gloss {
     pub(crate) fn same_firing_as(&self, other: &Gloss) -> bool {
         self.kind == GlossKind::Hook
             && other.kind == GlossKind::Hook
-            && self.firing.is_some()
-            && self.firing == other.firing
+            && match (&self.firing, &other.firing) {
+                (Some(mine), Some(theirs)) => mine.joins(theirs),
+                _ => false,
+            }
     }
 
     fn gist(mut self, gist: impl Into<String>) -> Self {
@@ -155,12 +218,17 @@ impl Gloss {
     }
 
     fn prose(mut self, body: impl Into<String>) -> Self {
-        self.body = Some(Body::Prose(body.into()));
+        self.body.push(Body::Prose(body.into()));
+        self
+    }
+
+    fn printed(mut self, body: impl Into<String>) -> Self {
+        self.body.push(Body::Printed(body.into()));
         self
     }
 
     fn plain(mut self, body: impl Into<String>) -> Self {
-        self.body = Some(Body::Plain(body.into()));
+        self.body.push(Body::Plain(body.into()));
         self
     }
 
@@ -181,23 +249,31 @@ impl Gloss {
     /// True when the note says nothing a reader could act on. Such a gloss is
     /// dropped rather than set as a bare line reporting that something ran.
     fn is_bare(&self) -> bool {
-        self.gist.is_none() && self.body.is_none()
+        self.gist.is_none() && self.body.is_empty()
     }
 }
 
 /// How a gloss is set: the same summary-line-and-fold vocabulary a tool call
-/// takes, so the two read as one kind of thing on the page.
+/// takes, so the two read as one kind of thing on the page. A firing that had
+/// several things to say stacks them in the one fold, in the order it said them.
 pub fn setting(scribe: &Scribe, gloss: &Gloss) -> Setting {
     let setting = Setting::new().maybe_gist(gloss.gist.as_deref());
     let setting = gloss
         .notes
         .iter()
         .fold(setting, |setting, note| setting.note(note.as_str()));
-    match &gloss.body {
-        Some(Body::Prose(text)) => setting.body(prose(scribe, text)),
-        Some(Body::Plain(text)) => setting.body(plain(scribe, text)),
-        None => setting,
+    if gloss.body.is_empty() {
+        return setting;
     }
+    setting.body(html! {
+        @for body in &gloss.body {
+            (match body {
+                Body::Prose(text) => prose(scribe, text),
+                Body::Printed(text) => printed(scribe, text),
+                Body::Plain(text) => plain(scribe, text),
+            })
+        }
+    })
 }
 
 /// The note an `attachment` line carries, or `None` when it is scaffolding: an
@@ -211,11 +287,17 @@ pub fn attachment(attachment: &Value) -> Option<Gloss> {
             .firing(text(attachment, "toolUseID"), None)
             .maybe_gist(text(attachment, "content"))
             .maybe_note(text(attachment, "hookName")),
+        // A hook printed this, so its line breaks are its own: markdown folds a
+        // single newline into a space, and `M  CLAUDE.md\nM  src/gloss.rs` came
+        // out as one run of filenames, which is the shape a hook reporting on a
+        // working tree always takes. It is still markdown often enough that
+        // setting it as preformatted text would throw away headings and lists
+        // the corpus is full of, so it takes the middle reading.
         "hook_additional_context" => Gloss::new(GlossKind::Hook)
             .firing(text(attachment, "toolUseID"), None)
             .maybe_gist(text(attachment, "hookName"))
             .note("added context")
-            .prose(paragraphs(attachment.get("content")?)?),
+            .printed(paragraphs(attachment.get("content")?)?),
         "hook_cancelled" => Gloss::new(GlossKind::Hook)
             .firing(text(attachment, "toolUseID"), text(attachment, "command"))
             .maybe_gist(text(attachment, "hookName"))
@@ -325,7 +407,7 @@ fn hook_output(attachment: &Value) -> Option<Gloss> {
 /// `/clear` is not here. It is a session boundary rather than a command with
 /// nothing to say, and [`crate::transcript::Turn::is_clear_command`] drops it
 /// before this is ever reached.
-const HARNESS_CONTROLS: [&str; 12] = [
+const HARNESS_CONTROLS: &[&str] = &[
     "/copy",
     "/skills",
     "/agents",
@@ -591,7 +673,7 @@ mod tests {
         assert_eq!(gloss.kind, GlossKind::Command);
         assert_eq!(gloss.gist.as_deref(), Some("/debug-gha"));
         assert!(gloss.notes.is_empty());
-        assert_eq!(gloss.body, None);
+        assert!(gloss.body.is_empty());
     }
 
     #[test]
@@ -608,7 +690,7 @@ mod tests {
 
         assert_eq!(gloss.gist.as_deref(), Some("/loop"));
         assert_eq!(gloss.notes, ["5m /babysit-prs"]);
-        assert_eq!(gloss.body, Some(Body::Plain("scheduled".into())));
+        assert_eq!(gloss.body, [Body::Plain("scheduled".into())]);
     }
 
     #[test]
@@ -651,7 +733,7 @@ mod tests {
         .expect("the wrapper names a command");
 
         assert!(gloss.notes.is_empty());
-        assert_eq!(gloss.body, None);
+        assert!(gloss.body.is_empty());
     }
 
     #[test]
@@ -700,10 +782,10 @@ mod tests {
         assert_eq!(gloss.gist.as_deref(), Some("debug-gha"));
         assert_eq!(
             gloss.body,
-            Some(Body::Prose(
+            [Body::Prose(
                 "# Debug GitHub Actions Runs\n\nThe objective is to **fix** the failing run."
                     .into()
-            ))
+            )]
         );
     }
 
@@ -716,7 +798,7 @@ mod tests {
             gloss.gist.as_deref(),
             Some("Continue from where you left off")
         );
-        assert_eq!(gloss.body, None);
+        assert!(gloss.body.is_empty());
     }
 
     #[test]
@@ -751,9 +833,9 @@ mod tests {
         assert_eq!(gloss.notes, ["claude-branch-journal"]);
         assert_eq!(
             gloss.body,
-            Some(Body::Plain(
+            [Body::Plain(
                 "No journal yet for branch 'wide-margins'".into()
-            ))
+            )]
         );
     }
 
@@ -773,7 +855,7 @@ mod tests {
 
         assert_eq!(
             gloss.body,
-            Some(Body::Plain("Current git status:\n\n## wide-margins".into()))
+            [Body::Plain("Current git status:\n\n## wide-margins".into())]
         );
     }
 
@@ -821,9 +903,12 @@ mod tests {
 
         assert_eq!(gloss.gist.as_deref(), Some("Stop"));
         assert_eq!(gloss.notes, ["added context"]);
+        // A hook printed this, so its own line breaks are kept: `Printed`, not
+        // `Prose`, which would fold a single newline into a space and run a
+        // list of files together.
         assert_eq!(
             gloss.body,
-            Some(Body::Prose("first thing\n\nsecond thing".into()))
+            [Body::Printed("first thing\n\nsecond thing".into())]
         );
     }
 
@@ -846,9 +931,9 @@ mod tests {
         assert_eq!(gloss.notes, ["user"]);
         assert_eq!(
             gloss.body,
-            Some(Body::Prose(
+            [Body::Prose(
                 "# Rust Style Guide\n\nUse the latest stable edition.".into()
-            ))
+            )]
         );
     }
 
@@ -926,7 +1011,7 @@ mod tests {
 
         assert_eq!(gloss.kind, GlossKind::Note);
         assert_eq!(gloss.notes, ["edited outside the session"]);
-        assert_eq!(gloss.body, Some(Body::Plain("9\tfn setting() {}".into())));
+        assert_eq!(gloss.body, [Body::Plain("9\tfn setting() {}".into())]);
     }
 
     #[test]
@@ -956,7 +1041,7 @@ mod tests {
         .expect("a command that printed something is a gloss");
 
         assert_eq!(gloss.kind, GlossKind::Command);
-        assert_eq!(gloss.body, Some(Body::Plain("Copied to clipboard".into())));
+        assert_eq!(gloss.body, [Body::Plain("Copied to clipboard".into())]);
 
         assert_eq!(
             system(&json!({

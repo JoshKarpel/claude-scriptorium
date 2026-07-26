@@ -58,25 +58,46 @@
   --sidechain-edge: var(--tyrian);
   --error-edge: var(--rubric);
 
-  /* The assistant's own working, which is its turn and not a third speaker, so
-   * neither takes a pigment that would read as one. A tool call is the
-   * instrument rather than the voice and takes the one cool hue nothing else
-   * holds; reasoning is the same voice unvoiced, so it is the assistant's own
-   * pigment drawn back toward the ink rather than a colour of its own. */
-  --tool-edge: light-dark(#1f6f77, #6fc3cb);
+  /* One axis runs through every edge in the folio: WARM is what the model
+   * produced, COOL is what reached it from outside. A reader scrolling learns
+   * which side of the exchange they are passing before they read a single
+   * label, and a new kind has its hue decided for it rather than chosen.
+   *
+   * Warm, the model's own: it speaks in `--claude`, reasons in that same hue
+   * drawn back toward the ink (the same voice, unvoiced), and reaches for a tool
+   * in the ochre a tool's name is already set in.
+   *
+   * Cool, what entered: the user's own lapis for what they said, that lapis
+   * drawn back toward the ink for a command they typed, the teal for a skill's
+   * instructions, and malachite for a hook. See the palette note in CLAUDE.md
+   * before adding a kind: the side is not a matter of taste. */
+  --tool-edge: var(--sienna);
   --thinking-edge: color-mix(in srgb, var(--claude) 55%, var(--ink-faint));
 
-  /* The harness's own notes, pitched into the hues no speaker holds so a reader
-   * scrolling past can tell one kind from another without reading the label.
-   * A hook is machinery, so it takes the malachite; a skill or a command is an
-   * instruction, so it takes the ochre the tool names are already set in; and a
-   * plan boundary is rubricated, which is what a scribe ground vermilion for,
-   * marking a division in the text rather than anything said in it. The rest
-   * stay in faint ink: a rule pulled into context and a passing note are the
-   * ambient kinds, and colouring those too would leave nothing quiet. */
+  /* The harness's notes are all on the cool side, because none of them is the
+   * model: every one is context that reached it. They differ by how far from the
+   * reader each came. A command is the user's own voice, so it takes their lapis
+   * drawn back toward the ink, exactly as reasoning takes the assistant's. A
+   * skill is theirs at one remove (they wrote it, the model or a command loads
+   * it), so it takes the teal. A hook is machinery answering on their behalf, so
+   * it takes the malachite, the furthest from a voice while still being cool.
+   *
+   * Two kinds sit off the axis on purpose. A plan boundary is rubricated, which
+   * is what a scribe ground vermilion for: it marks a division in the text
+   * rather than anything said in it, so it is warm without being the model's. A
+   * rule and a passing note stay in faint ink, because colouring every kind
+   * would leave nothing quiet. */
   --gloss-edge: var(--ink-faint);
   --hook-edge: var(--verdigris);
-  --skill-edge: var(--sienna);
+  --skill-edge: light-dark(#1f6f77, #6fc3cb);
+  --command-edge: color-mix(in srgb, var(--user-edge) 60%, var(--ink-faint));
+  /* A rule and a skill are the same thing at different volumes: both are
+   * instruction files the user wrote and the harness pulled in, and rules
+   * arrive a dozen at a time at the head of a session where a skill arrives
+   * singly. So a rule is the skill's teal drawn back toward the ink, which is
+   * the folio's third such pair after reasoning from the assistant and a
+   * command from the user: quiet, but no longer merely grey. */
+  --rule-edge: color-mix(in srgb, var(--skill-edge) 50%, var(--ink-faint));
   --plan-edge: var(--rubric);
 
   --measure: 44rem;
@@ -146,7 +167,14 @@
 
 html {
   min-height: 100%;
-  font-size: 17px;
+  /* The one size the folio is set from: every other length is in `rem` or `em`,
+   * so this is the single knob that scales the whole leaf. The reading measure
+   * scales with it, which is the point: a measure in `rem` holds the same number
+   * of characters to the line whatever the type is set at, so raising this makes
+   * the folio more legible without making the lines longer to read. The two
+   * lengths deliberately left in `px` are the scrollbar (a system affordance,
+   * not type) and the pill radii. */
+  font-size: 18px;
   /* Parchment ground with faint mottling, so the page isn't a flat fill. */
   background-color: var(--page);
   /* The parchment mottling inverts for dark: a warm highlight and a deepening
@@ -169,7 +197,10 @@ body {
   position: relative;
   max-width: var(--measure);
   margin: 2.5rem auto 3rem;
-  padding: 3rem 3.25rem 2.5rem;
+  /* The side margins carry the illuminated borders and want the room; the head
+   * and foot only want enough to sit the first and last panel off the edge, so
+   * they take half what the sides do rather than matching them. */
+  padding: 1.5rem 3.25rem 1.25rem;
   background: var(--leaf);
   color: var(--ink);
   font-family: var(--serif);
@@ -383,14 +414,29 @@ body {
 
 /* --- Search: a fixed widget that steps through matches --------------- */
 
-.search {
+/* The reading rail: a column of panels down the right, each its own card, all of
+ * them answering to the key at its foot. One declared width, since nothing
+ * inside asks for one any more (an `<input>` otherwise reports its `size` as an
+ * intrinsic width and silently becomes the widest thing here). A minimap would
+ * be another card in this stack. */
+.rail {
   position: fixed;
   top: 0.8rem;
   right: 0.8rem;
   z-index: 10;
+  /* The key's two columns of chips are the floor here, and their width is set
+   * by the longest labels ("assistant", "command"). Nothing else asks for a
+   * width: the search field takes a whole row of its own, and the dock's
+   * controls are narrower still. */
+  width: 10.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.4rem;
+}
+
+/* Every card in the rail is cut the same way, so each rule below carries only
+ * its own layout. A minimap added to the rail is a card by being put there. */
+.rail > * {
   padding: 0.34rem 0.5rem;
   background: var(--leaf);
   border: 1px solid var(--rule);
@@ -400,20 +446,45 @@ body {
   font-size: 0.7rem;
 }
 
+.search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+/* The count and the step arrows, on their own row under the field. The count
+ * takes the slack so the arrows sit against the right edge, and it no longer
+ * needs to reserve a width: nothing shares its line that a change in its text
+ * could push around. */
 .search__bar {
   display: flex;
   align-items: center;
   gap: 0.25rem;
 }
 
-.search__scopes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+/* The key: its own card, since it governs the panels above it rather than
+ * belonging to any one of them. A column per side of the exchange, what reached
+ * the model beside what it produced, so a reader who has learnt the edges in the
+ * margin already knows which column a kind will be in. `max-content` columns, so
+ * each is only as wide as its own longest label; the chips still stretch to
+ * their column, so a column reads as one stack of equal marks. */
+/* Five rows and two columns, filled column by column, so `PanelKind::EVERY`'s
+ * first half runs down the cool side and its second down the warm one. Flowing
+ * by column rather than nesting each side in its own element is what lets the
+ * halves be five and five without the odd kind out stranded on a row of its own:
+ * the grid balances, and every chip still carries its own `data-side` for the
+ * dock and its own pigment for the eye. `max-content` columns, so each is only
+ * as wide as its longest label. */
+.key {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(5, auto);
+  grid-template-columns: repeat(2, max-content);
+  gap: 0.2rem 0.35rem;
   justify-content: center;
 }
 
-.search__scope {
+.key__chip {
   --scope-hue: var(--ink-soft);
   padding: 0.05rem 0.4rem;
   border: 1px solid color-mix(in srgb, var(--scope-hue) 45%, transparent);
@@ -429,35 +500,62 @@ body {
  * column it filters. The glosses keep the neutral ink: they span several
  * pigments, and picking one of them to stand for all would say the wrong thing.
  */
-.search__scope--user {
+.key__chip[data-scope="user"] {
   --scope-hue: var(--user-edge);
 }
 
-.search__scope--assistant {
+.key__chip[data-scope="command"] {
+  --scope-hue: var(--command-edge);
+}
+
+.key__chip[data-scope="skill"] {
+  --scope-hue: var(--skill-edge);
+}
+
+.key__chip[data-scope="rule"] {
+  --scope-hue: var(--rule-edge);
+}
+
+.key__chip[data-scope="hook"] {
+  --scope-hue: var(--hook-edge);
+}
+
+.key__chip[data-scope="assistant"] {
   --scope-hue: var(--assistant-edge);
 }
 
-.search__scope[data-scope="tool"] {
-  --scope-hue: var(--tool-edge);
-}
-
-.search__scope[data-scope="thinking"] {
+.key__chip[data-scope="thinking"] {
   --scope-hue: var(--thinking-edge);
 }
 
-.search__scope[aria-pressed="true"] {
+.key__chip[data-scope="tool"] {
+  --scope-hue: var(--tool-edge);
+}
+
+.key__chip[data-scope="plan"] {
+  --scope-hue: var(--plan-edge);
+}
+
+.key__chip[aria-pressed="true"] {
   background: color-mix(in srgb, var(--scope-hue) 20%, transparent);
   border-color: var(--scope-hue);
 }
 
 /* Off reads as struck out: dimmed and no longer searched. */
-.search__scope[aria-pressed="false"] {
+.key__chip[aria-pressed="false"] {
   opacity: 0.5;
   text-decoration: line-through;
 }
 
+/* The field takes what the box gives it rather than asking for a width of its
+ * own. An `<input>` otherwise reports an intrinsic width (its `size`, or the
+ * `9rem` this used to set), and being the widest thing in the box it *was* the
+ * box's width: the chips only ever wanted 168px against the bar's 263px. With
+ * the field flexible, `.search`'s own declared width is the single knob, and the
+ * chips and the field both fall out of it. */
 .search__input {
-  width: 9rem;
+  flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--ink);
@@ -469,9 +567,11 @@ body {
   color: var(--ink-faint);
 }
 
+/* Takes the slack on its row so the arrows sit against the right edge. It needs
+ * no reserved width now it has a row to itself: nothing shares the line that a
+ * change in its text could shove around. */
 .search__count {
-  min-width: 3.4rem;
-  text-align: right;
+  flex: 1;
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
@@ -511,19 +611,14 @@ mark.search__hit.is-current {
 
 /* --- Dock: fixed jump / fold controls -------------------------------- */
 
+/* The last card in the rail rather than a thing off in the far corner: the dock
+ * answers to the key exactly as the search does, and standing them in one column
+ * is what says so without a word of explanation. */
 .dock {
-  position: fixed;
-  right: 0.8rem;
-  bottom: 0.8rem;
-  z-index: 10;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.2rem;
-  padding: 0.3rem;
-  background: var(--leaf);
-  border: 1px solid var(--rule);
-  border-radius: 0.9rem;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
 }
 
 /* Three columns of up/down arrows: a user (blue) and assistant (orange)
@@ -563,11 +658,13 @@ mark.search__hit.is-current {
   cursor: pointer;
 }
 
-.dock__btn--user {
+/* The flanking arrows take the hue of the side they seek: the reader's own lapis
+ * for what reached the model, the model's own for what it produced. */
+.dock__btn--entered {
   --dock-hue: var(--user-edge);
 }
 
-.dock__btn--assistant {
+.dock__btn--model {
   --dock-hue: var(--assistant-edge);
 }
 
@@ -760,10 +857,17 @@ mark.search__hit.is-current {
  * the sidechain's dashed and is distinct from it. It also sits closer to its
  * neighbours than two speakers do, since it belongs to the exchange around it
  * rather than standing between two of them. */
+/* A solid edge like any other panel's. It was dotted back when the glosses
+ * shared a few pigments between them and the edge had to say "nobody's speech"
+ * by itself; now every kind has its own hue, the dots were a second mark for
+ * something already said, and a broken line reads as tentative rather than as
+ * quiet. The sidechain's dashes stay, since that is a different axis: whose turn
+ * it is, not what kind. A gloss still sits closer to its neighbours than two
+ * speakers do, because it belongs to the exchange around it rather than standing
+ * between two of them. */
 .turn--gloss {
   margin: 0.8rem 0;
   border-left-color: var(--gloss-edge);
-  border-left-style: dotted;
 }
 
 /* Each kind sets the token rather than the colour, so a subagent's gloss still
@@ -773,9 +877,16 @@ mark.search__hit.is-current {
   --gloss-edge: var(--hook-edge);
 }
 
-.turn--gloss[data-kind="skill"],
-.turn--gloss[data-kind="command"] {
+.turn--gloss[data-kind="skill"] {
   --gloss-edge: var(--skill-edge);
+}
+
+.turn--gloss[data-kind="rule"] {
+  --gloss-edge: var(--rule-edge);
+}
+
+.turn--gloss[data-kind="command"] {
+  --gloss-edge: var(--command-edge);
 }
 
 .turn--gloss[data-kind="plan"] {
@@ -1254,10 +1365,13 @@ mark.search__hit.is-current {
   display: none;
 }
 
+/* The fleuron is the fold's whole affordance, and on a result's line it can be
+ * most of what the line carries, so it is set larger than the text it sits
+ * against rather than smaller: at the summary's own size it reads as a speck. */
 .marginalia > summary::before {
   content: "❧";
   color: var(--gold);
-  font-size: 0.9em;
+  font-size: 1.2em;
 }
 
 .marginalia[open] > summary::before {
@@ -1293,7 +1407,7 @@ mark.search__hit.is-current {
 .marginalia--flat .marginalia__head::before {
   content: "❧";
   color: var(--rule);
-  font-size: 0.9em;
+  font-size: 1.2em;
 }
 
 .marginalia__tool {
@@ -1329,11 +1443,12 @@ mark.search__hit.is-current {
   font-style: italic;
 }
 
-/* A result is labelled by its outcome rather than by a tool, so that label
- * takes the faint ink and small caps of a heading instead of a tool name's
- * ochre. The call it answers follows it as an ordinary gist, so several results
- * in a row say which is which. */
-.marginalia--result .marginalia__tool {
+/* A result's line opens with the word it answers for, which is a heading rather
+ * than a name: faint ink and small caps, so the call's own name and subject
+ * follow it set exactly as they are on the call itself and several results in a
+ * row say which is which. It never shrinks, being one short word. */
+.marginalia__outcome {
+  flex: none;
   color: var(--ink-faint);
   font-weight: 600;
   text-transform: uppercase;
@@ -1361,7 +1476,7 @@ mark.search__hit.is-current {
 }
 
 .marginalia[data-error] > summary,
-.marginalia[data-error] .marginalia__tool {
+.marginalia[data-error] .marginalia__outcome {
   color: var(--rubric);
 }
 
@@ -1435,6 +1550,16 @@ mark.search__hit.is-current {
 .tool {
   margin: 0;
   padding: 0.5rem 0.85rem;
+}
+
+/* Prose in a fold is read, not scanned, so it is set at the reading size rather
+ * than inheriting the marginalia's. A marginalia is pitched down because its
+ * summary line is a label and its other bodies are data (a checklist, a set of
+ * links, a task's facts), but a skill's whole instructions, a rule pulled into
+ * context, or a plan are the same kind of text as the conversation around them
+ * and want the same measure of it. */
+.tool--prose {
+  font-size: 1rem;
 }
 
 .tool--questions,
@@ -1721,6 +1846,26 @@ mark.search__hit.is-current {
   opacity: 1;
 }
 
+/* A prose body's button sits where a code block's does. The body is the fold's
+ * own box rather than a block inside it, so it establishes the containing block
+ * itself and the button rides the rule under the summary the same way. */
+.tool--prose {
+  position: relative;
+}
+
+.tool--prose > .copy-button {
+  position: absolute;
+  top: 0;
+  right: 0.5rem;
+  z-index: 1;
+  opacity: 0.6;
+  transform: translateY(-50%);
+}
+
+.tool--prose:hover > .copy-button {
+  opacity: 1;
+}
+
 /* The turn's copy button rides the panel's top edge, flush-right under the turn
  * number (which keeps the corner). It stays visible for discovery, muted until
  * the panel is hovered. The leading block's clearance below keeps it off text. */
@@ -1855,6 +2000,14 @@ mark.search__hit.is-current {
 }
 
 /* Inline code, distinct from fenced blocks. */
+/* Inline code runs inside a line of prose, so it has no scroller of its own the
+ * way a block does: a single unbreakable token (a flag's comma-separated value
+ * list, a deep path, a hash) would otherwise run straight out of whatever holds
+ * it, which is worst in a fold, where the body is the box. `break-word` breaks
+ * such a token only when it will not fit on a line by itself, so ordinary code
+ * still breaks at its spaces and the element's min-content width is unchanged.
+ * Code inside a `pre` is deliberately not matched: a block scrolls instead, and
+ * breaking its lines would misrepresent the source. */
 .folio :not(pre) > code {
   padding: 0.1em 0.35em;
   background: var(--leaf-sunk);
@@ -1862,6 +2015,7 @@ mark.search__hit.is-current {
   border-radius: 3px;
   font-family: var(--mono);
   font-size: 0.85em;
+  overflow-wrap: break-word;
 }
 
 .folio pre {

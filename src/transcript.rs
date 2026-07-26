@@ -31,6 +31,12 @@ pub struct Glossed {
     pub timestamp: Timestamp,
     pub is_sidechain: bool,
     pub gloss: Gloss,
+    /// The session's own name for this line.
+    pub uuid: Option<String>,
+    /// The line this note was written about, where it names one. A slash
+    /// command's output is a `system` line naming the command's own line as its
+    /// parent, which is the exact key that gathers the two into one panel.
+    pub answers: Option<String>,
 }
 
 /// One rendered session: the unit the tool turns into a single HTML file.
@@ -180,18 +186,31 @@ impl Folio {
         // Where each call ended up, so the result answering it can be put in
         // the same panel however many panels later it comes back.
         let mut homes: HashMap<&str, usize> = HashMap::new();
+        // The lines the folio left unset, so a note written *about* one goes the
+        // same way. A slash command that only works the harness is dropped, and
+        // what it printed is recorded as a line of its own: keeping that would
+        // set the output of a command the folio deliberately never mentions.
+        let mut unset: HashSet<&str> = HashSet::new();
         for (index, recorded) in self.recorded.iter().enumerate() {
             let turn_number = index + 1;
             let turn = match recorded {
                 Recorded::Gloss(glossed) => {
-                    // One hook writes several lines: what it decided, what it
-                    // injected, what it printed. They are one event, so they
-                    // are gathered into one panel the way a tool result is
-                    // gathered into the call it answers.
+                    if glossed
+                        .answers
+                        .as_deref()
+                        .is_some_and(|parent| unset.contains(parent))
+                    {
+                        continue;
+                    }
+                    // One hook writes several lines (what it decided, what it
+                    // injected, what it printed) and a slash command's output is
+                    // written as a line naming the command's own. Either way the
+                    // note belongs in the panel already open, the way a tool
+                    // result belongs in the panel holding its call.
                     if let Some(open) = panels
                         .last_mut()
-                        .and_then(Panel::as_gloss)
-                        .filter(|panel| panel.gloss.same_firing_as(&glossed.gloss))
+                        .and_then(Panel::as_gloss_mut)
+                        .filter(|panel| panel.gathers(glossed))
                     {
                         open.gloss.absorb(glossed.gloss.clone());
                         continue;
@@ -202,19 +221,44 @@ impl Folio {
                 Recorded::Turn(turn) => turn,
             };
             if turn.is_clear_command() {
+                // A boundary is dropped like any other command the folio leaves
+                // unset, so what it printed goes with it rather than orphaning
+                // into a panel of its own with nothing to say which command it
+                // came from.
+                unset.extend(turn.uuid.as_deref());
                 continue;
             }
             match turn.wrapped() {
-                Some(Wrapped::Note(gloss)) => {
+                Some(Wrapped::Note(mut gloss)) => {
+                    // A skill names the directory it was loaded from, which is
+                    // how `gloss::meta` knows one. A built-in has no directory
+                    // on disk, so its instructions arrive as bare prose and read
+                    // as a passing note; the command standing directly in front
+                    // of them is what says what they are. Relabelling here is
+                    // what gives a skill one shape however it was loaded, since
+                    // the model reaches for one with no command at all.
+                    if gloss.kind == GlossKind::Note
+                        && let Some(command) = panels
+                            .last()
+                            .and_then(Panel::as_gloss)
+                            .filter(|panel| panel.gloss.kind == GlossKind::Command)
+                            .and_then(|panel| panel.gloss.gist.as_deref())
+                    {
+                        gloss.ran_by(command);
+                    }
                     panels.push(Panel::Gloss(GlossPanel {
                         turn_number,
                         timestamp: turn.timestamp,
                         is_sidechain: turn.is_sidechain,
                         gloss,
+                        uuid: turn.uuid.clone(),
                     }));
                     continue;
                 }
-                Some(Wrapped::Nothing) => continue,
+                Some(Wrapped::Nothing) => {
+                    unset.extend(turn.uuid.as_deref());
+                    continue;
+                }
                 None => {}
             }
             let blocks = answered(turn.blocks(), &calls);
@@ -400,6 +444,11 @@ pub struct Turn {
     pub is_sidechain: bool,
     /// True for turns the harness injected rather than the user typing them.
     pub is_meta: bool,
+    /// The session's own name for this line, which is what a note written about
+    /// it names as its parent. A slash command's output is recorded as its own
+    /// `system` line pointing back here, so this is what lets the two be set as
+    /// one panel.
+    pub uuid: Option<String>,
 }
 
 /// What one turn cost: what the model read, split by where it came from, and
@@ -506,7 +555,14 @@ impl Panel {
         }
     }
 
-    fn as_gloss(&mut self) -> Option<&mut GlossPanel> {
+    fn as_gloss(&self) -> Option<&GlossPanel> {
+        match self {
+            Panel::Gloss(gloss) => Some(gloss),
+            Panel::Speech(_) => None,
+        }
+    }
+
+    fn as_gloss_mut(&mut self) -> Option<&mut GlossPanel> {
         match self {
             Panel::Gloss(gloss) => Some(gloss),
             Panel::Speech(_) => None,
@@ -604,6 +660,9 @@ pub struct GlossPanel {
     pub timestamp: Timestamp,
     pub is_sidechain: bool,
     pub gloss: Gloss,
+    /// What this panel's leading line was called, so a note written about that
+    /// line can be gathered into it.
+    uuid: Option<String>,
 }
 
 impl GlossPanel {
@@ -613,7 +672,18 @@ impl GlossPanel {
             timestamp: glossed.timestamp,
             is_sidechain: glossed.is_sidechain,
             gloss: glossed.gloss.clone(),
+            uuid: glossed.uuid.clone(),
         }
+    }
+
+    /// True when the note belongs in this panel rather than one of its own: one
+    /// firing of a hook writes several lines, and a slash command's output is
+    /// written as a line naming the command's own.
+    fn gathers(&self, glossed: &Glossed) -> bool {
+        if self.gloss.same_firing_as(&glossed.gloss) {
+            return true;
+        }
+        matches!((&self.uuid, &glossed.answers), (Some(mine), Some(theirs)) if mine == theirs)
     }
 }
 
@@ -660,6 +730,7 @@ enum Entry {
 /// was said. A line with no timestamp has no place in the stream to sit at.
 fn glossed_system(line: &Value) -> Option<Recorded> {
     let timestamp = line.get("timestamp")?.as_str()?.parse().ok()?;
+    let named = |field| line.get(field).and_then(Value::as_str).map(str::to_owned);
     Some(Recorded::Gloss(Glossed {
         timestamp,
         is_sidechain: line
@@ -667,6 +738,8 @@ fn glossed_system(line: &Value) -> Option<Recorded> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         gloss: gloss::system(line)?,
+        uuid: named("uuid"),
+        answers: named("parentUuid"),
     }))
 }
 
@@ -681,6 +754,8 @@ struct RawTurn {
     is_sidechain: bool,
     #[serde(default, rename = "isMeta")]
     is_meta: bool,
+    #[serde(default)]
+    uuid: Option<String>,
 }
 
 impl RawTurn {
@@ -694,6 +769,7 @@ impl RawTurn {
             usage: self.message.usage,
             is_sidechain: self.is_sidechain,
             is_meta: self.is_meta,
+            uuid: self.uuid,
         }
     }
 }
@@ -707,6 +783,8 @@ struct RawAttachment {
     timestamp: Timestamp,
     #[serde(default, rename = "isSidechain")]
     is_sidechain: bool,
+    #[serde(default)]
+    uuid: Option<String>,
     attachment: Value,
 }
 
@@ -729,12 +807,17 @@ impl RawAttachment {
                 usage: None,
                 is_sidechain: self.is_sidechain,
                 is_meta: false,
+                uuid: self.uuid,
             }));
         }
         Some(Recorded::Gloss(Glossed {
             timestamp: self.timestamp,
             is_sidechain: self.is_sidechain,
             gloss: gloss::attachment(&self.attachment)?,
+            uuid: self.uuid,
+            // A hook's notes are gathered by the firing they name rather than
+            // by the line they were written about.
+            answers: None,
         }))
     }
 }
@@ -834,7 +917,63 @@ pub enum PanelKind {
     Gloss(GlossKind),
 }
 
+/// Which side of the exchange a panel is on.
+///
+/// This is the folio's one organising axis, and it is declared here so nothing
+/// else has to restate it: the stylesheet pitches a kind's pigment warm or cool
+/// by it, the dock steps along it, and the label a reader sees is the same
+/// classification the code holds. A new [`PanelKind`] answers this question
+/// before it is given a colour or a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// What the model produced: what it said, its reasoning, the tools it
+    /// reached for. Set in the warm hues.
+    Model,
+    /// What reached the model from outside it: what the user said, the commands
+    /// they typed, the skills they wrote, the hooks that answer for them. Set in
+    /// the cool hues.
+    Entered,
+    /// Neither, deliberately. A plan boundary marks a division in the text
+    /// rather than anything said in it, and a rule or a passing note is ambient:
+    /// colouring every kind would leave nothing quiet, and stepping to every
+    /// kind would make the dock no faster than scrolling.
+    Aside,
+}
+
+impl Side {
+    pub fn label(self) -> &'static str {
+        match self {
+            Side::Model => "model",
+            Side::Entered => "entered",
+            Side::Aside => "aside",
+        }
+    }
+}
+
 impl PanelKind {
+    /// Every kind a panel can be, in the order the key reads them: down the cool
+    /// column, then down the warm one. The key builds its chips from this rather
+    /// than restating the list, so a new kind reaches it by being declared here
+    /// rather than by being remembered in the markup as well.
+    ///
+    /// The two halves are five and five so the key is a clean grid, which is why
+    /// `note` sits at the foot of the warm column despite being [`Side::Aside`].
+    /// Nothing reads the *order* as a classification: every chip carries its own
+    /// side, so the dock still steps past `note` and its neutral ink still keeps
+    /// it from reading as the model's.
+    pub const EVERY: [PanelKind; 10] = [
+        PanelKind::User,
+        PanelKind::Gloss(GlossKind::Command),
+        PanelKind::Gloss(GlossKind::Skill),
+        PanelKind::Gloss(GlossKind::Hook),
+        PanelKind::Gloss(GlossKind::Rule),
+        PanelKind::Assistant,
+        PanelKind::Thinking,
+        PanelKind::Tool,
+        PanelKind::Gloss(GlossKind::Plan),
+        PanelKind::Gloss(GlossKind::Note),
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             PanelKind::User => "user",
@@ -842,6 +981,26 @@ impl PanelKind {
             PanelKind::Tool => "tool",
             PanelKind::Thinking => "thinking",
             PanelKind::Gloss(kind) => kind.label(),
+        }
+    }
+
+    /// Which side of the exchange this kind belongs to. Exhaustive on purpose:
+    /// adding a kind will not compile until its side is decided.
+    ///
+    /// A rule is the user's own writing pulled into the conversation, so it is
+    /// theirs however the harness fetched it. A plan boundary belongs to the
+    /// model: the mode is the user's to ask for, but entering and leaving it is
+    /// the model reporting on its own working, which is why it reads beside the
+    /// reasoning rather than beside the asking.
+    pub fn side(self) -> Side {
+        match self {
+            PanelKind::Assistant | PanelKind::Tool | PanelKind::Thinking => Side::Model,
+            PanelKind::Gloss(GlossKind::Plan) => Side::Model,
+            PanelKind::User => Side::Entered,
+            PanelKind::Gloss(
+                GlossKind::Command | GlossKind::Skill | GlossKind::Hook | GlossKind::Rule,
+            ) => Side::Entered,
+            PanelKind::Gloss(GlossKind::Note) => Side::Aside,
         }
     }
 }

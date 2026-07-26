@@ -107,12 +107,14 @@
   // Which kind of message a text node belongs to, judged by the block it sits
   // in rather than its panel's label: a tool call folded into an assistant
   // panel is still "tool", and reasoning is "thinking", so scoping is precise.
-  // A gloss is judged by its panel and checked first, since its own content
-  // sits in a marginalia and would otherwise scope as a tool call.
+  // A gloss is judged by its panel's own kind and checked first, since its
+  // content sits in a marginalia and would otherwise scope as a tool call, and
+  // since each kind of note is its own chip.
   const scopeOf = (node) => {
     const el = node.parentElement;
     if (!el) return "assistant";
-    if (el.closest(".turn--gloss")) return "gloss";
+    const gloss = el.closest(".turn--gloss");
+    if (gloss) return gloss.dataset.kind;
     if (el.closest(".marginalia")) return "tool";
     if (el.closest(".block--thinking")) return "thinking";
     const turn = el.closest(".turn");
@@ -171,6 +173,24 @@
     }
   };
 
+  // The folio's key: which kinds of panel are in play. It is deliberately not
+  // the search's own control. The search and the dock both read it, so a reader
+  // says once what they are looking through rather than once per panel that
+  // looks, and a minimap added later reads the same thing without controls of
+  // its own. Read fresh each time rather than cached, so nothing has to be told
+  // when a chip is pressed.
+  const keyChips = () => document.querySelectorAll(".key__chip");
+
+  const enabledKinds = () => {
+    const kinds = new Set();
+    keyChips().forEach((chip) => {
+      if (chip.getAttribute("aria-pressed") === "true") {
+        kinds.add(chip.dataset.scope);
+      }
+    });
+    return kinds;
+  };
+
   const wireSearch = () => {
     const search = document.querySelector(".search");
     const container = document.querySelector("main.folio");
@@ -179,17 +199,7 @@
     const count = search.querySelector(".search__count");
     const prev = search.querySelector('[data-search-nav="prev"]');
     const next = search.querySelector('[data-search-nav="next"]');
-    const scopeButtons = search.querySelectorAll(".search__scope");
-
-    const enabledScopes = () => {
-      const scopes = new Set();
-      scopeButtons.forEach((button) => {
-        if (button.getAttribute("aria-pressed") === "true") {
-          scopes.add(button.dataset.scope);
-        }
-      });
-      return scopes;
-    };
+    const chips = keyChips();
 
     let hits = [];
     let index = -1;
@@ -217,7 +227,7 @@
     const run = () => {
       clearHits(container);
       const query = input.value;
-      hits = query ? markHits(container, query, enabledScopes()) : [];
+      hits = query ? markHits(container, query, enabledKinds()) : [];
       index = hits.length ? 0 : -1;
       paint();
     };
@@ -236,7 +246,7 @@
     });
     prev.addEventListener("click", () => step(-1));
     next.addEventListener("click", () => step(1));
-    scopeButtons.forEach((button) => {
+    chips.forEach((button) => {
       button.addEventListener("click", () => {
         const active = button.getAttribute("aria-pressed") === "true";
         button.setAttribute("aria-pressed", String(!active));
@@ -415,6 +425,16 @@
       pre.appendChild(makeCopyButton(() => code.textContent));
     });
 
+    // A fold whose body is prose carries no `pre` to hang a button on, so it
+    // gets its own. This is the most load-bearing text in a folio to be able to
+    // lift out: a skill's whole instructions, a rule pulled into context, a
+    // plan, the prompt a subagent was sent. The text is taken before the button
+    // is seated, since afterwards it would be inside what it copies.
+    container.querySelectorAll(".tool--prose").forEach((prose) => {
+      const text = prose.textContent.trim();
+      prose.appendChild(makeCopyButton(() => text));
+    });
+
     // Every turn copies its readable prose (text and thinking, not tool JSON).
     container.querySelectorAll(".turn").forEach((turn) => {
       const prose = turn.querySelectorAll(".block--text, .block--thinking");
@@ -444,33 +464,66 @@
       localStorage.removeItem(FOLDS);
       localStorage.removeItem(TAIL);
     } catch {}
-    // Step between the substantive messages, skipping the tool-call, thinking,
-    // and gloss panels: those are what a reader wants to jump over. Only
-    // visible ones, since a panel a reader has no way to see reports top 0 and
-    // would hijack "current". Scoped to one speaker when a role is given,
-    // otherwise every message.
-    const messages = (role) =>
-      Array.from(
+    // Step along the folio's own axis: what reached the model, and what it
+    // produced. `data-side` carries the classification the renderer already
+    // holds (see `PanelKind::side`), so this need not keep a list of kinds that
+    // would drift from it. The `aside` kinds are skipped by both arrows and by
+    // the unscoped middle pair: a plan boundary, a rule, and a passing note are
+    // context a reader reaches for rather than stops at, and stepping to every
+    // one of them would make the dock no faster than scrolling. Only visible
+    // panels, since one a reader has no way to see reports top 0 and would
+    // hijack "current".
+    // The key narrows this the same way it narrows the search: an arrow steps
+    // through the kinds a reader left in play on its own side, so turning off
+    // `tool` and `thinking` leaves the warm arrow walking replies alone. The
+    // `aside` kinds stay out of the dock however the key is set, since the
+    // arrows are the two sides and those kinds are on neither.
+    const messages = (side) => {
+      const kinds = enabledKinds();
+      return Array.from(
         container.querySelectorAll(
-          role
-            ? `.turn[data-kind="${role}"]`
-            : '.turn[data-kind="user"], .turn[data-kind="assistant"]',
+          side
+            ? `.turn[data-side="${side}"]`
+            : '.turn[data-side="entered"], .turn[data-side="model"]',
         ),
-      ).filter((turn) => turn.getClientRects().length > 0);
+      ).filter(
+        (turn) =>
+          turn.getClientRects().length > 0 && kinds.has(turn.dataset.kind),
+      );
+    };
 
-    const jump = (direction, role) => {
+    const jump = (direction, side) => {
       // The message at the top of the viewport is the last one whose top has
       // scrolled to or above the threshold; the threshold clears a turn's own
       // scroll-margin so the one just navigated to counts as current, not next.
       const threshold = 40;
-      const panels = messages(role);
+      const panels = messages(side);
       let current = -1;
       panels.forEach((turn, index) => {
         if (turn.getBoundingClientRect().top <= threshold) current = index;
       });
       const next = Math.min(Math.max(current + direction, 0), panels.length - 1);
       const target = panels[next];
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (!target) return;
+      // Step by the turn's own permalink, and land at once rather than gliding.
+      // Both follow from the same thing: `serve` re-renders under the reader, so
+      // a smooth scroll still in flight is simply lost when it does, and the
+      // scroll position it was heading for is not recorded anywhere. Writing the
+      // hash makes the URL name where the reader is, which the deep-link handler
+      // above already restores on the next load, and an instant landing is what
+      // stepping through a folio wants in any case: an animation is a thing to
+      // wait out when the reader means to press the button again.
+      //
+      // `replaceState` rather than assigning `location.hash`, so twenty steps
+      // don't cost twenty presses of Back; it performs no scroll of its own,
+      // hence the explicit one, which honours the turn's `scroll-margin-top`.
+      releaseTail();
+      try {
+        history.replaceState(null, "", `#${target.id}`);
+      } catch {
+        location.hash = `#${target.id}`;
+      }
+      target.scrollIntoView({ behavior: "auto", block: "start" });
     };
 
     const fold = (open) => {
@@ -590,9 +643,9 @@
     dock.addEventListener("click", (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { nav, role, fold: foldTo, tail } = button.dataset;
-      if (nav === "prev") jump(-1, role);
-      else if (nav === "next") jump(1, role);
+      const { nav, side, fold: foldTo, tail } = button.dataset;
+      if (nav === "prev") jump(-1, side);
+      else if (nav === "next") jump(1, side);
       // Leaping to the top is the reader taking control, so it releases follow
       // the way a wheel or arrow key does: otherwise the next reload of a live
       // session would snap straight back to the end.
