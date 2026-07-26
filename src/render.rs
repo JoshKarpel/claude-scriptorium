@@ -266,12 +266,17 @@ impl<'a> Scribe<'a> {
                         (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
-                    // The folio's own behaviour (theme, and more to come). It
-                    // sits in <head> so the stored theme applies before the
-                    // body paints, avoiding a flash of the wrong scheme.
+                    // The folio's own behaviour: theme, search, copy, and the
+                    // navigation dock. It sits in <head> so the stored theme
+                    // applies before the body paints, avoiding a flash of the
+                    // wrong scheme.
                     script { (PreEscaped(include_str!("illumination.js"))) }
                 }
-                body {
+                // The session the folio was set from, so the app script can key
+                // what it remembers about this folio to this folio: a fold's
+                // own key is a turn number and a position within it, which name
+                // a different marginalia in every session.
+                body data-folio=(folio.session_id()) {
                     // Illuminated borders down each outer margin: a per-session
                     // strip of vine sections with drolleries seated among them,
                     // tiled by the stylesheet. Purely decorative, so hidden from

@@ -386,9 +386,15 @@ selections joined into one answer, and a timeout), each with a test.
   it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
   behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
-  the same way the stylesheet is; keep it small. Do **not** reintroduce a "no
-  scripts" rule, it was dropped deliberately; the live invariant below is that
-  *transcript* content is never executed, which is a different thing. `serve`
+  the same way the stylesheet is; keep it small. The copy button's quill
+  scratch answers to that size constraint too, which is why it is a few lines
+  of Web Audio (a word's worth of strokes with the pen lifted between them,
+  each grained noise under its own pressure envelope, trimmed to the band a dry
+  point sounds in) rather than an embedded recording: a sample is the obvious
+  reach and would cost tens of kilobytes in every folio. Do **not**
+  reintroduce a "no scripts" rule, it was dropped deliberately; the live
+  invariant below is that *transcript* content is never executed, which is a
+  different thing. `serve`
   still injects its live-reload snippet only into the *served* response, never
   persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
@@ -465,6 +471,19 @@ control by scrolling or by loading a `#turn-N` deep link, state kept in
 sits on the left (a metadata plaque in the top corner revealing the title,
 facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
 There is no in-column header or footer.
+
+What the app script remembers is split by what it belongs to. The theme is the
+reader's, and holds across everything they open, so it keeps one key. Which
+marginalia stand open and whether the reader is following the end are facts
+about one *folio*, so they are stored under the session id the markup names
+(`data-folio` on `<body>`, which is the only reason that attribute exists): a
+fold's own key is a turn number and a position within that turn, which names a
+different marginalia in every session, and following a session still being
+written says nothing about a folio finished months ago. An unscoped store is one
+folio's state imposed on every other folio sharing the origin, and every folio a
+reader opens from disk shares the `file://` origin, as does every folio served
+through one viewer. Anything added that is a fact about the folio rather than
+about the reader belongs under that same scope.
 
 The outer margins are illuminated borders. Each is a per-session strip of vine
 sections with drolleries seated among them, composed in `render.rs`

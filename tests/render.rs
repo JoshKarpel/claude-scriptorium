@@ -545,6 +545,16 @@ fn the_header_offers_a_light_dark_system_theme_toggle() {
 }
 
 #[test]
+fn the_body_names_the_session_so_stored_state_is_scoped_to_this_folio() {
+    let html = render(&fixture(), &highlighter());
+
+    // Fold keys are a turn number and a position within it, so they name a
+    // different marginalia in every session; without this the app script would
+    // key them under one shared store and open panels across folios.
+    assert!(html.contains(r#"<body data-folio="session">"#));
+}
+
+#[test]
 fn a_turns_role_is_one_class_attribute_not_two() {
     let html = render(&fixture(), &highlighter());
 

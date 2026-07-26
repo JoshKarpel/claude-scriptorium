@@ -174,7 +174,8 @@ styles, so the file stays a single self-contained artifact:
 - **Theme** it light, dark, or system; the default follows your OS preference
   and the choice is remembered across visits.
 - **Copy** any code block, or a whole message, from the button that appears on
-  hover.
+  hover, and hear a quill take it down: the scratch is synthesized on the spot,
+  so it costs the folio no bytes to carry.
 - **Navigate** from the corner dock: jump between user and assistant messages
   (skipping tool and thinking panels), and collapse or expand every tool call at
   once.

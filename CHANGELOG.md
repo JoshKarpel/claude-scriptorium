@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5]
+
+### Added
+
+- A copy button scratches like a quill taking the passage down: a short word of
+  five to eight strokes, the pen lifted between them, each stroke its own
+  length, weight, and tone, so no two words are written the same way. The sound
+  is synthesized in a few lines rather than embedded as a recording, so a folio
+  stays one file that carries every byte it needs. Nothing waits on it: the pen
+  is readied when a copy button is first hovered, and the sound is made after
+  the copy is already underway.
+
+### Fixed
+
+- A marginalia left open in one folio no longer opens panels in another, and
+  following the end of a live session no longer snaps an unrelated folio to its
+  end. Both were kept in one store shared by every folio on an origin, and a
+  fold's key is a turn number and a position within that turn, which names a
+  different marginalia in every session: opening a second folio from disk, or
+  through the same viewer, imposed the first one's state on it. Each folio now
+  remembers its own, under the session its markup names. The theme is still the
+  reader's and still holds across every folio.
+
 ## [0.1.4]
 
 ### Added
