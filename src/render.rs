@@ -1,6 +1,6 @@
 //! Turning a parsed folio into a self-contained HTML document.
 
-use std::time::Duration;
+use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use comrak::{
@@ -41,11 +41,79 @@ fn font_notice() -> String {
     notice
 }
 
-/// The `@font-face` block: the vendored woff2 files as data URIs, encoded by
+/// The `@font-face` blocks: the vendored woff2 files as data URIs, encoded by
 /// `build.rs` so a render inlines a constant rather than base64'ing megabytes.
 /// The fonts are inlined at all so a folio stays self-contained (see the
 /// rendering invariants in CLAUDE.md); `just fonts` vendors them from upstream.
-const FONT_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces.css"));
+///
+/// Two blocks, because the faces are almost the whole of a short folio: the cut
+/// ones carry what a transcript sets and are a fifth the bytes, the whole ones
+/// carry everything upstream shipped. [`Scribe::folio`] picks per folio.
+const CUT_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-cut.css"));
+const WHOLE_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-whole.css"));
+
+include!(concat!(env!("OUT_DIR"), "/dropped.rs"));
+
+/// Which cut of the embedded faces a folio should carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fonts {
+    /// The cut faces, unless the folio's own text reaches a character they
+    /// dropped, in which case the whole ones. Never renders a character worse
+    /// than upstream would, and is a fifth the bytes for a folio that stays
+    /// inside what a transcript usually sets.
+    #[default]
+    Fitted,
+    /// The whole faces, whatever this folio happens to set.
+    Whole,
+}
+
+/// The characters in `text` that an embedded face carries whole but not cut,
+/// tallied by how often each occurs.
+///
+/// This is the *regression* the cut introduced, not the faces' coverage: a
+/// character no face ever carried (an emoji, a CJK ideograph) is absent, since
+/// it falls back to the reader's own fonts either way and always did.
+pub fn beyond_cut(text: &str) -> BTreeMap<char, usize> {
+    let mut tally = BTreeMap::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        // Nothing below U+0080 is ever dropped (the tests hold that), and a
+        // folio is overwhelmingly ASCII: hundreds of kilobytes of base64 font
+        // before a word of transcript. So skip to the next lead byte rather
+        // than decoding every character. Everything skipped is single-byte, so
+        // the index stays on a character boundary.
+        let Some(offset) = bytes[index..].iter().position(|byte| *byte >= 0x80) else {
+            break;
+        };
+        index += offset;
+        let character = text[index..]
+            .chars()
+            .next()
+            .expect("index lands on a character boundary");
+        if dropped(character) {
+            *tally.entry(character).or_insert(0) += 1;
+        }
+        index += character.len_utf8();
+    }
+    tally
+}
+
+fn dropped(character: char) -> bool {
+    let codepoint = character as u32;
+    DROPPED
+        .binary_search_by(|(low, high)| {
+            if codepoint < *low {
+                Ordering::Greater
+            } else if codepoint > *high {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        })
+        .is_ok()
+}
 
 /// The generation metadata recorded in every folio's plaque.
 pub struct Colophon {
@@ -109,10 +177,11 @@ pub struct Scribe<'a> {
     options: Options<'a>,
     plugins: Plugins<'a>,
     timezone: TimeZone,
+    fonts: Fonts,
 }
 
 impl<'a> Scribe<'a> {
-    pub fn new(highlighter: &'a SyntectAdapter, timezone: TimeZone) -> Self {
+    pub fn new(highlighter: &'a SyntectAdapter, timezone: TimeZone, fonts: Fonts) -> Self {
         let mut options = Options::default();
         options.extension.strikethrough = true;
         options.extension.table = true;
@@ -128,6 +197,7 @@ impl<'a> Scribe<'a> {
             options,
             plugins,
             timezone,
+            fonts,
         }
     }
 
@@ -143,19 +213,48 @@ impl<'a> Scribe<'a> {
         timestamp.to_zoned(self.timezone.clone())
     }
 
-    pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> Markup {
+    /// Sets a folio, and reports which characters (if any) drove it onto the
+    /// whole faces. An empty tally means the cut faces served it.
+    pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> (Markup, BTreeMap<char, usize>) {
         let title = format!("folio {}", folio.session_id());
         let panels = folio.panels();
+        let source = folio.source.display().to_string();
         // A panel's cost is dominated by highlighting its tool bodies, where a
         // syntax's regexes compile the first time that language is met, so the
         // panels are set concurrently and several languages compile at once
         // rather than each waiting on the last. Collected in order, so the
         // folio reads as the session ran.
-        let rendered_panels: Vec<Markup> =
-            panels.par_iter().map(|panel| self.panel(panel)).collect();
+        //
+        // Each panel is also weighed against the cut faces as it is set, which
+        // rides along on the threads already running rather than costing a
+        // second pass over the finished markup.
+        let (rendered_panels, reaches): (Vec<Markup>, Vec<BTreeMap<char, usize>>) = panels
+            .par_iter()
+            .map(|panel| {
+                let markup = self.panel(panel);
+                let reach = beyond_cut(&markup.0);
+                (markup, reach)
+            })
+            .unzip();
+
+        // The panels are the transcript; the source path is the only other
+        // place a folio sets text it didn't choose. The rest of the chrome is
+        // this crate's own markup, which the tests hold inside the cut faces.
+        let mut reached = beyond_cut(&source);
+        for reach in reaches {
+            for (character, count) in reach {
+                *reached.entry(character).or_insert(0) += count;
+            }
+        }
+        let faces = match self.fonts {
+            Fonts::Whole => WHOLE_FACES,
+            Fonts::Fitted if !reached.is_empty() => WHOLE_FACES,
+            Fonts::Fitted => CUT_FACES,
+        };
+
         let left_border = margin_strip(border_seed(folio.session_id(), "left"));
         let right_border = margin_strip(border_seed(folio.session_id(), "right"));
-        html! {
+        let document = html! {
             (DOCTYPE)
             (PreEscaped(font_notice()))
             html lang="en" {
@@ -164,7 +263,7 @@ impl<'a> Scribe<'a> {
                     meta name="viewport" content="width=device-width, initial-scale=1";
                     title { (title) }
                     style {
-                        (PreEscaped(FONT_FACES))
+                        (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
                     // The folio's own behaviour (theme, and more to come). It
@@ -189,7 +288,7 @@ impl<'a> Scribe<'a> {
                         div .plaque__panel {
                             h1 .plaque__title { (title) }
                             dl .plaque__facts {
-                                dt { "source" } dd { code { (folio.source.display().to_string()) } }
+                                dt { "source" } dd { code { (source) } }
                                 dt { "turns" } dd { (panels.len()) }
                                 @if let Some(first) = panels.first() {
                                     dt { "opened" } dd { (self.stamp(first.timestamp)) }
@@ -281,7 +380,8 @@ impl<'a> Scribe<'a> {
                     }
                 }
             }
-        }
+        };
+        (document, reached)
     }
 
     fn stamp(&self, timestamp: Timestamp) -> String {

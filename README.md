@@ -67,9 +67,9 @@ readable by anyone with the URL:
 claude-scriptorium publish <session-id>.jsonl
 ```
 
-The same session selection as `render`/`serve` applies. A gist over ~1 MB
-(every folio, once fonts are embedded) won't render inline on GitHub, so viewing
-a published one takes one of the two paths below.
+The same session selection as `render`/`serve` applies. GitHub shows a gist's
+HTML as source rather than rendering it, whatever its size, so reading a
+published folio takes one of the two paths below.
 
 #### View offline
 
@@ -87,19 +87,14 @@ HTML file directly.
 
 #### View in a browser
 
-`--preview` additionally prints a link to a **viewer** page that renders the
-folio in a browser. The viewer is a small static page (this project's
+The gist page shows the folio's HTML source, not the folio, so `publish` also
+prints a link to a **viewer** page that renders it. The viewer is a small static
+page (this project's
 [Pages site](https://joshkarpel.github.io/claude-scriptorium/) by default); the
 reader's browser fetches the gist straight from GitHub's API and writes it into
-the page, so the viewer's host never receives the transcript. It is off by
-default and asks to confirm, so nothing is surfaced for browser viewing unless
-you ask.
+the page, so the viewer's host never receives the transcript.
 
-```bash
-claude-scriptorium publish <session-id>.jsonl --preview
-```
-
-Point `--preview` at a different viewer with `--preview-base <url>`, or set
+Point it at a different viewer with `--preview-base <url>`, or set
 `CLAUDE_SCRIPTORIUM_VIEWER_BASE` to default it on a machine that always publishes
 to the same one. A github.com gist falls back to this project's viewer; any
 other host has no built-in viewer, so supply your own.
@@ -242,4 +237,13 @@ dropped initials.
 All three are licensed under the
 [SIL Open Font License 1.1](https://openfontlicense.org); their license texts
 are vendored in `src/fonts/licenses/`. `just fonts` re-vendors the woff2 files
-and licenses from those upstreams.
+and licenses from those upstreams, and cuts them down.
+
+The faces are almost the whole of a short folio, so each is vendored twice: as
+upstream shipped it, and cut down to the Latin, punctuation, symbol, and
+box-drawing blocks a transcript actually sets. A folio carries the cut faces,
+about a fifth the bytes, unless its own text reaches a character the cut ones
+dropped, in which case it carries the whole faces and says so on stderr. Pass
+`--whole-fonts` to embed the whole ones regardless. Characters no face ever
+carried, an emoji or a CJK ideograph, fall back to the reader's own fonts as
+they always have.

@@ -1,8 +1,8 @@
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use claude_scriptorium::{
     render,
-    render::{Colophon, Labour, Scribe},
+    render::{Colophon, Fonts, Labour, Scribe},
     transcript::{Content, Folio, Role},
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
@@ -19,7 +19,17 @@ fn highlighter() -> SyntectAdapter {
 }
 
 fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
-    let scribe = Scribe::new(highlighter, TimeZone::UTC);
+    set(folio, highlighter, Fonts::Fitted).0
+}
+
+/// Sets a folio, handing back both the markup and the characters that drove it
+/// onto the whole faces.
+fn set(
+    folio: &Folio,
+    highlighter: &SyntectAdapter,
+    fonts: Fonts,
+) -> (String, BTreeMap<char, usize>) {
+    let scribe = Scribe::new(highlighter, TimeZone::UTC, fonts);
     let colophon = Colophon {
         generated: "2026-03-12T09:15:00Z".parse::<Timestamp>().unwrap(),
         tool: "claude-scriptorium",
@@ -32,7 +42,8 @@ fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
         took: Duration::from_millis(412),
         bytes: 2_947_312,
     };
-    render::inscribe(scribe.folio(folio, &colophon).into_string(), &labour)
+    let (markup, reached) = scribe.folio(folio, &colophon);
+    (render::inscribe(markup.into_string(), &labour), reached)
 }
 
 #[test]
@@ -810,4 +821,99 @@ fn the_colophon_links_the_tool_to_its_home() {
     assert!(html.contains(
         r#"Written by <a href="https://example.invalid/scriptorium">claude-scriptorium</a> 0.1.0"#
     ));
+}
+
+/// The three faces' data URIs, whichever cut a folio carries. Their combined
+/// length is what distinguishes one cut from the other.
+fn embedded_font_bytes(html: &str) -> usize {
+    html.match_indices("data:font/woff2;base64,")
+        .map(|(start, marker)| {
+            let rest = &html[start + marker.len()..];
+            rest.find(')').expect("a data URI closes")
+        })
+        .sum()
+}
+
+#[test]
+fn a_folio_inside_the_cut_faces_carries_only_them() {
+    let (html, reached) = set(&fixture(), &highlighter(), Fonts::Fitted);
+
+    assert!(reached.is_empty(), "nothing in the fixture is dropped");
+    assert!(
+        embedded_font_bytes(&html) < 700_000,
+        "the cut faces are a fifth the whole ones, so a folio that needs \
+         nothing more should be far under this"
+    );
+}
+
+#[test]
+fn asking_for_the_whole_faces_embeds_them_whatever_the_folio_sets() {
+    let highlighter = highlighter();
+    let (cut, _) = set(&fixture(), &highlighter, Fonts::Fitted);
+    let (whole, reached) = set(&fixture(), &highlighter, Fonts::Whole);
+
+    assert!(reached.is_empty(), "the folio itself still needs nothing");
+    assert!(embedded_font_bytes(&whole) > embedded_font_bytes(&cut) * 3);
+}
+
+fn beyond_cut() -> Folio {
+    Folio::read(Path::new("tests/fixtures/beyond_cut.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn a_character_the_cut_faces_dropped_pulls_in_the_whole_ones() {
+    let highlighter = highlighter();
+    let (html, reached) = set(&beyond_cut(), &highlighter, Fonts::Fitted);
+    let (whole, _) = set(&beyond_cut(), &highlighter, Fonts::Whole);
+
+    // Junicode carries Cyrillic upstream, and the cut faces drop it, so setting
+    // it in the cut faces would render worse than before they were cut.
+    assert_eq!(reached.get(&'ч'), Some(&1));
+    assert_eq!(
+        embedded_font_bytes(&html),
+        embedded_font_bytes(&whole),
+        "a folio that reaches past the cut faces carries the whole ones"
+    );
+}
+
+#[test]
+fn a_character_no_face_ever_carried_is_not_a_reason_to_grow() {
+    let (_, reached) = set(&beyond_cut(), &highlighter(), Fonts::Fitted);
+
+    // The fixture also sets CJK and an emoji. No embedded face has ever carried
+    // either, so both fall back to the reader's own fonts exactly as they did
+    // before the faces were cut: growing the folio would buy nothing.
+    for character in ['日', '本', '語', '🎉'] {
+        assert!(
+            !reached.contains_key(&character),
+            "{character} was never in any face, so it is not a regression"
+        );
+    }
+}
+
+#[test]
+fn nothing_below_the_ascii_boundary_is_ever_dropped() {
+    // `beyond_cut` skips whole runs of bytes under 0x80 without decoding them,
+    // which is only sound while no such codepoint can be dropped.
+    let ascii: String = (0..0x80u8).map(char::from).collect();
+
+    assert!(render::beyond_cut(&ascii).is_empty());
+}
+
+#[test]
+fn the_folios_own_chrome_stays_inside_the_cut_faces() {
+    // The scan weighs the transcript and the source path, not this crate's own
+    // markup, so a glyph added to the stylesheet or app script could otherwise
+    // go quietly missing in every folio.
+    for (name, source) in [
+        ("illumination.css", include_str!("../src/illumination.css")),
+        ("illumination.js", include_str!("../src/illumination.js")),
+    ] {
+        let reached = render::beyond_cut(source);
+        assert!(
+            reached.is_empty(),
+            "{name} sets {reached:?}, which the cut faces drop: widen KEEP in \
+             scripts/subset_fonts.py and re-run `just fonts`"
+        );
+    }
 }

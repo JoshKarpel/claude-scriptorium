@@ -11,9 +11,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A folio's plaque states what the render cost: how long the scribe took, and
   how large the folio came out. `render`, `serve`, and `publish` report the same
   two figures on stderr, leaving stdout the folio's path alone.
+- `--whole-fonts` on `render`, `serve`, and `publish`, to embed the whole
+  upstream faces whatever the session sets. Worth it for a folio that will later
+  gain text the session did not have; a folio that already sets such a character
+  switches on its own.
 
 ### Changed
 
+- A folio carries fonts cut to what a transcript sets, which takes a typical one
+  from ~3.1 MB to ~0.8 MB. The faces were ~98% of a short folio: Junicode ships
+  3162 codepoints for medieval scholarship and varies on width and ENLA, none of
+  which this project asks for. A folio whose text reaches a character the cut
+  faces dropped carries the whole ones instead and says so on stderr, so cutting
+  can never render a character worse than upstream would. Characters no face
+  ever carried, an emoji or a CJK ideograph, still fall back to the reader's own
+  fonts and do not grow the folio.
+- `publish` says plainly that the gist page shows a folio's source rather than
+  the folio, so the viewer link beneath it reads as the way to see it rather
+  than an alternative to a page that already works.
 - A render no longer base64s the embedded fonts. They are constants, so they are
   encoded into their `@font-face` block at compile time, and every render starts
   from the finished block.
@@ -23,6 +38,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session with code in a dozen languages renders about three times faster, one
   with a single language about as much again, and a session with no code blocks
   is unchanged. The folio itself is byte for byte what it was.
+
+### Fixed
+
+- Re-publishing a session no longer opens a text editor. The description was
+  updated in a second `gh gist edit` call, and that command does not stop once
+  it has set a description: it goes on to the file-edit loop, which with no
+  source file opens `$EDITOR` against the piped stdin. The content and the
+  description now go up in one call, which is also one request rather than two.
 
 ## [0.1.3]
 

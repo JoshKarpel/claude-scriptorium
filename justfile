@@ -225,7 +225,7 @@ alias w := watch
 fonts:
     #!/usr/bin/env bash
     set -euo pipefail
-    for tool in curl unzip uvx; do
+    for tool in curl unzip uv uvx; do
       command -v "$tool" >/dev/null 2>&1 || { echo "just fonts needs $tool" >&2; exit 1; }
     done
     dir="{{ fonts-dir }}"
@@ -233,20 +233,24 @@ fonts:
     mkdir -p "$lic"
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    get() { echo "  ${2#"$dir"/}" >&2; curl -sSfL "$1" -o "$2"; }
+    get() { echo "  ${2##*/}" >&2; curl -sSfL "$1" -o "$2"; }
+
+    # Upstream lands in $tmp; scripts/subset_fonts.py cuts it down into $dir,
+    # since a folio inlines every face and upstream coverage is ~98% of one.
+    echo "vendoring:" >&2
 
     # Junicode 2 (SIL OFL): humanist medievalist serif for body text. One
     # variable file per posture spans every weight; italic is a separate face.
     juni="https://raw.githubusercontent.com/psb1558/Junicode-font/{{ junicode-ref }}"
-    get "$juni/webfiles/JunicodeVF-Roman.woff2" "$dir/JunicodeVF-Roman.woff2"
-    get "$juni/webfiles/JunicodeVF-Italic.woff2" "$dir/JunicodeVF-Italic.woff2"
+    get "$juni/webfiles/JunicodeVF-Roman.woff2" "$tmp/JunicodeVF-Roman.woff2"
+    get "$juni/webfiles/JunicodeVF-Italic.woff2" "$tmp/JunicodeVF-Italic.woff2"
     get "$juni/OFL.txt" "$lic/Junicode-OFL.txt"
 
     # Fira Code (SIL OFL): monospace for code and tool output. The variable
     # woff2 ships only inside the release zip; its license lives in the repo.
     fira="https://github.com/tonsky/FiraCode"
     get "$fira/releases/download/{{ firacode-version }}/Fira_Code_v{{ firacode-version }}.zip" "$tmp/fira.zip"
-    unzip -p "$tmp/fira.zip" "woff2/FiraCode-VF.woff2" > "$dir/FiraCode-VF.woff2"
+    unzip -p "$tmp/fira.zip" "woff2/FiraCode-VF.woff2" > "$tmp/FiraCode-VF.woff2"
     echo "  FiraCode-VF.woff2" >&2
     get "https://raw.githubusercontent.com/tonsky/FiraCode/{{ firacode-version }}/LICENSE" "$lic/FiraCode-OFL.txt"
 
@@ -258,7 +262,10 @@ fonts:
     get "$uc/OFL.txt" "$lic/UnifrakturCook-OFL.txt"
     echo "  UnifrakturCook.woff2" >&2
     uvx --with brotli --from fonttools fonttools ttLib.woff2 compress \
-      -o "$dir/UnifrakturCook.woff2" "$tmp/UnifrakturCook.ttf"
+      -o "$tmp/UnifrakturCook.woff2" "$tmp/UnifrakturCook.ttf"
+
+    echo "cutting down:" >&2
+    uv run scripts/subset_fonts.py "$tmp" "$dir"
 
 [doc("Clean build artifacts")]
 [group("rust")]

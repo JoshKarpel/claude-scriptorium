@@ -188,23 +188,32 @@ this tool didn't publish. `delete --all` lists every marked gist and confirms as
 a batch. Gists published before the marker existed carry an older description
 and are deliberately not recognised.
 
-A folio over GitHub's ~1 MB inline-render cutoff can't be viewed on the gist
-page, so browser viewing goes through a **viewer**: a ~6 KB static page
-(`docs/index.html`, vendored from GistHost under MIT) whose script fetches the
-gist from the GitHub API in the reader's browser and `document.write`s it. The
-transcript's path is GitHub to the reader; the viewer's host never receives it,
-unlike a re-serving proxy. That one file is both served from this project's own
-Pages site and `include_str!`'d into the binary, so `scaffold_viewer` emits a
-self-hostable copy from the same source (rewriting the API base for a GHES host).
-`publish` prints the preview link by default, with no opt-in flag or
-confirmation: printing a link is harmless, and the accompanying note makes clear
-only a reader's browser (never the viewer's host) fetches the transcript. Its
-base comes from `--preview-base`, then
-`$CLAUDE_SCRIPTORIUM_VIEWER_BASE`, then this project's viewer for github.com; a
-host with no viewer (a GHES instance without `--preview-base`) simply prints no
-link. `fetch` stays the no-network-rendering path for sensitive sessions. The pure helpers (host precedence, identity parsing, URL and
-viewer construction) are unit-tested; the `gh`-shelling and prompts stay in the
-shell.
+**Nothing on GitHub renders a folio, at any size.** The gist page shows its
+HTML source, and the raw URL is served `text/plain; charset=utf-8` with
+`x-content-type-options: nosniff`, so a browser will not execute it there
+either. Browser viewing therefore always goes through a **viewer**: a ~6 KB
+static page (`docs/index.html`, vendored from GistHost under MIT) whose script
+fetches the gist from the GitHub API in the reader's browser and
+`document.write`s it. The transcript's path is GitHub to the reader; the
+viewer's host never receives it, unlike a re-serving proxy. That one file is
+both served from this project's own Pages site and `include_str!`'d into the
+binary, so `scaffold_viewer` emits a self-hostable copy from the same source
+(rewriting the API base for a GHES host).
+
+GitHub's ~1 MB limit is a real thing but a *different* thing, and the two are
+easy to conflate: it governs whether the API returns the file's content or
+truncates it, which the viewer already handles by falling back to the raw URL.
+It has nothing to do with whether a folio can be viewed, and no folio is ever
+readable without the viewer or `fetch`. So `publish` always prints the preview
+link and says outright that the gist page shows source. Don't reintroduce a
+size condition here, and don't describe the limit as an "inline-render cutoff".
+
+The viewer base comes from `--preview-base`, then `$CLAUDE_SCRIPTORIUM_VIEWER_BASE`,
+then this project's viewer for github.com; a host with no viewer (a GHES
+instance without `--preview-base`) simply prints no link. `fetch` stays the
+no-network-rendering path for sensitive sessions. The pure helpers (host
+precedence, identity parsing, URL and viewer construction) are unit-tested; the
+`gh`-shelling and prompts stay in the shell.
 
 `docs/index.html` is dual-purpose: this repo's own GitHub Pages viewer (Pages
 serves from `main`'s `/docs`) and the template `scaffold_viewer` copies. Editing
@@ -371,11 +380,10 @@ selections joined into one answer, and a timeout), each with a test.
 - **Self-contained and gist-shareable.** Everything the folio needs is inlined:
   no external CSS, JS, fonts, or image files, so the one written file works
   offline and travels as a single artifact. The delivery path is a GitHub gist,
-  and a bundled folio (~3 MB, mostly the embedded Junicode faces) already
-  exceeds GitHub's ~1 MB inline-render cutoff, so a shared folio is viewed
-  through the `gist` module's viewer (or downloaded with `fetch`) rather than
-  GitHub's own file view. The constraint to respect is therefore **total bundle
-  size** (keep it within what a gist and viewer will serve), *not* scripts: the
+  which never renders HTML at any size, so a shared folio is read through the
+  `gist` module's viewer (or downloaded with `fetch`) rather than GitHub's own
+  file view. The constraint to respect is therefore **total bundle size** (keep
+  it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
   behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
   the same way the stylesheet is; keep it small. Do **not** reintroduce a "no
@@ -386,15 +394,44 @@ selections joined into one answer, and a timeout), each with a test.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings and versals) are woff2 vendored
   under `src/fonts/` and base64'd into `@font-face` data URIs by `build.rs`,
-  which `render.rs` `include_str!`s from `OUT_DIR` as one constant: the faces
+  which `render.rs` `include_str!`s from `OUT_DIR` as constants: the faces
   never change between renders, so no render pays to encode them, and adding or
   swapping a face means editing `build.rs`'s `FACES`. `just fonts`
-  re-vendors them from pinned upstreams; it needs `uvx` because UnifrakturCook
-  ships only a TTF and gets compressed to woff2 with `fonttools`. All four are
+  re-vendors them from pinned upstreams; it needs `uv` and `uvx` for
+  `fonttools`, which compresses UnifrakturCook (upstream ships only a TTF) and
+  cuts the other three down. All four are
   SIL OFL 1.1: the license texts live in `src/fonts/licenses/`, and every folio
   carries the copyright notice (a comment above `<html>`) plus a colophon credit
   (in the folio's plaque), so each artifact satisfies the OFL's redistribution
   terms on its own.
+- **Cut faces, with the whole ones behind them.** The faces are ~98% of a short
+  folio, so `scripts/subset_fonts.py` (run by `just fonts`) vendors each one
+  twice: as upstream shipped it in `src/fonts/`, and cut down in
+  `src/fonts/cut/`. The cut pins the axes the stylesheet never varies (Junicode
+  is variable on width and ENLA as well as weight; only weight is ever set) and
+  subsets to the blocks a transcript sets, which is ~80% off. `build.rs` encodes
+  both into `font-faces-cut.css` and `font-faces-whole.css`.
+
+  Which one a folio carries is decided per folio, and the rule is that **cutting
+  must never render a character worse than upstream would**. `dropped.txt`
+  therefore records the *regression* (what a face had upstream and lost in the
+  cut), not the cut faces' coverage: `build.rs` compiles it into `DROPPED`, and
+  `Scribe::folio` weighs each panel against it as the panel is set, on the rayon
+  threads already running. Any hit and the folio carries the whole faces
+  instead, and the shell says so on stderr. A character *no* face ever carried
+  (an emoji, a CJK ideograph) is deliberately absent from `dropped.txt`: it fell
+  back to the reader's own fonts before the cut existed and still does, so
+  growing the folio by 2 MB would buy nothing. `--whole-fonts` forces the whole
+  faces for a folio that will later gain text this session did not have.
+
+  `render::beyond_cut` skips runs of bytes under `0x80` without decoding them,
+  which is only sound while nothing below that can be dropped; the tests hold
+  that, and hold the stylesheet and app script inside the cut faces too, since
+  the scan weighs the transcript rather than this crate's own markup. Widening
+  the cut means editing `KEEP` in `scripts/subset_fonts.py` and re-running `just
+  fonts`; it is cheap and safe, since a codepoint a face never had is simply not
+  kept. `KEEP` was chosen by measuring the corpus, not by taste: Greek is in
+  because real sessions use it, Cyrillic is out because none did.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -524,10 +561,15 @@ serve <session>` reloads the browser as you edit the renderer or CSS.
 
 `docs/index.html` renders a folio in the browser by fetching the gist from the
 GitHub API and `document.write`-ing it, so a `file://` screenshot of a rendered
-folio never exercises it. Confirming a change to the viewer (or to a folio big
-enough to trip GitHub's ~1 MB API truncation) means going through a real gist.
-This publishes to a real account, so treat it as outward-facing: get the user's
-go-ahead first, and delete the gist afterward.
+folio never exercises it. Confirming a change to the viewer means going through
+a real gist. This publishes to a real account, so treat it as outward-facing:
+get the user's go-ahead first, and delete the gist afterward.
+
+The viewer has two paths through it, and the fixtures no longer cover both by
+default: since the faces were cut, `session.jsonl` renders well under GitHub's
+~1 MB API truncation limit, so it exercises only the inline-content path. Add
+`--whole-fonts` (or publish a long session) to push a folio over the limit and
+exercise the raw-URL fallback the truncated case takes.
 
 1. `cargo run -q --release -- publish tests/fixtures/session.jsonl --yes` and capture the
    gist id from the printed URL.
