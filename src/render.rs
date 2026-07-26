@@ -54,6 +54,19 @@ const WHOLE_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-who
 
 include!(concat!(env!("OUT_DIR"), "/dropped.rs"));
 
+/// How a folio reaches its reader, which decides whether it can gain a message
+/// under them. `serve` re-reads the session and re-renders on every load, so a
+/// served folio grows as the session is written; a written one is a fixed
+/// artifact, and the file it was rendered from could be a year old.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Delivery {
+    /// Written to a file or published as a gist: the reader holds a snapshot.
+    #[default]
+    Static,
+    /// Served by `serve`, which re-renders the session on every page load.
+    Served,
+}
+
 /// Which cut of the embedded faces a folio should carry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Fonts {
@@ -172,16 +185,24 @@ pub fn size(bytes: usize) -> String {
 }
 
 /// Renders folios, carrying the decisions a render depends on: how markdown
-/// becomes HTML, how code gets highlighted, and which zone timestamps read in.
+/// becomes HTML, how code gets highlighted, which zone timestamps read in,
+/// which cut of the embedded faces to carry, and how the folio will reach its
+/// reader.
 pub struct Scribe<'a> {
     options: Options<'a>,
     plugins: Plugins<'a>,
     timezone: TimeZone,
     fonts: Fonts,
+    delivery: Delivery,
 }
 
 impl<'a> Scribe<'a> {
-    pub fn new(highlighter: &'a SyntectAdapter, timezone: TimeZone, fonts: Fonts) -> Self {
+    pub fn new(
+        highlighter: &'a SyntectAdapter,
+        timezone: TimeZone,
+        fonts: Fonts,
+        delivery: Delivery,
+    ) -> Self {
         let mut options = Options::default();
         options.extension.strikethrough = true;
         options.extension.table = true;
@@ -198,6 +219,7 @@ impl<'a> Scribe<'a> {
             plugins,
             timezone,
             fonts,
+            delivery,
         }
     }
 
@@ -266,12 +288,17 @@ impl<'a> Scribe<'a> {
                         (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
-                    // The folio's own behaviour (theme, and more to come). It
-                    // sits in <head> so the stored theme applies before the
-                    // body paints, avoiding a flash of the wrong scheme.
+                    // The folio's own behaviour: theme, search, copy, and the
+                    // navigation dock. It sits in <head> so the stored theme
+                    // applies before the body paints, avoiding a flash of the
+                    // wrong scheme.
                     script { (PreEscaped(include_str!("illumination.js"))) }
                 }
-                body {
+                // The session the folio was set from, so the app script can key
+                // what it remembers about this folio to this folio: a fold's
+                // own key is a turn number and a position within it, which name
+                // a different marginalia in every session.
+                body data-folio=(folio.session_id()) {
                     // Illuminated borders down each outer margin: a per-session
                     // strip of vine sections with drolleries seated among them,
                     // tiled by the stylesheet. Purely decorative, so hidden from
@@ -350,13 +377,19 @@ impl<'a> Scribe<'a> {
                             button .dock__btn type="button" data-nav="next" aria-label="next message" title="next message" { "▼" }
                             button .dock__btn .dock__btn--assistant type="button" data-nav="next" data-role="assistant" aria-label="next assistant message" title="next assistant message" { "▼" }
                         }
-                        // Jump to the first or last message, and a follow toggle
-                        // that re-pins the newest message's start on every
-                        // reload until the reader scrolls away.
+                        // Jump to the first or last message, and, where the
+                        // session can still grow, a follow toggle that re-pins
+                        // the newest message's start on every reload until the
+                        // reader scrolls away. Only a served folio is re-read
+                        // as the session is written, so only it offers the
+                        // toggle: the control's presence is what tells the app
+                        // script this folio can follow.
                         div .dock__leap {
                             button .dock__btn type="button" data-nav="top" aria-label="jump to top" title="jump to top" { "⤒" }
                             button .dock__btn type="button" data-nav="end" aria-label="jump to end" title="jump to end" { "⤓" }
-                            button .dock__btn .dock__btn--tail type="button" data-tail="toggle" aria-pressed="false" aria-label="follow new messages" title="follow new messages, like tail -f" { "⇊" }
+                            @if self.delivery == Delivery::Served {
+                                button .dock__btn .dock__btn--tail type="button" data-tail="toggle" aria-pressed="false" aria-label="follow new messages" title="follow new messages, like tail -f" { "⇊" }
+                            }
                         }
                         div .dock__fold {
                             button .dock__btn .dock__btn--fold type="button" data-fold="expand" aria-label="expand all" title="expand all" { span .dock__chevron { "⌃" } span .dock__chevron { "⌄" } }
@@ -367,6 +400,18 @@ impl<'a> Scribe<'a> {
                     // light / dark / system, wired by the app script and
                     // defaulting to the reader's system preference.
                     div .controls {
+                        // The light the folio is read by, standing over the
+                        // control that chooses it: a candle after dark, the sun
+                        // by day. Purely decorative, and inline rather than a
+                        // background image so it can take the folio's own
+                        // pigments and be animated. The radiance is the light it
+                        // casts over the leaf, and is a sibling rather than a
+                        // fixed overlay of its own so it stays centred on the
+                        // flame wherever the corner puts it.
+                        div .lamp aria-hidden="true" {
+                            span .lamp__radiance {}
+                            (PreEscaped(include_str!("luminary.svg")))
+                        }
                         div .theme-toggle role="group" aria-label="colour theme" {
                             button type="button" data-theme-choice="light" { "light" }
                             button type="button" data-theme-choice="system" aria-pressed="true" { "system" }

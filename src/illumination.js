@@ -17,8 +17,20 @@
 
   const THEME_KEY = "scriptorium-theme";
   const THEMES = ["system", "light", "dark"];
-  const FOLD_KEY = "scriptorium-folds";
-  const TAIL_KEY = "scriptorium-tail";
+
+  // The theme above is the reader's, and holds across everything they open.
+  // What follows is about one folio and is stored under the session the markup
+  // names: which marginalia stand open, and whether the reader is following the
+  // end of the session. A fold's own key is a turn number and a position within
+  // that turn, which names a different marginalia in every session, and
+  // following a session still being written says nothing about a folio finished
+  // months ago. Every folio a reader opens from disk shares the `file://`
+  // origin, as does every folio served through one viewer, so an unscoped store
+  // is one folio's state imposed on all of them.
+  const FOLDS = "scriptorium-folds";
+  const TAIL = "scriptorium-tail";
+  const perFolio = (store) =>
+    store + ":" + (document.body.dataset.folio || "?");
 
   // Keys whose default action scrolls the page, so pressing one counts as the
   // reader taking over from follow mode (unless focus is in a control).
@@ -235,6 +247,114 @@
     });
   };
 
+  // --- The nib: a quill's scratch as a copy is taken ---------------------
+  //
+  // Synthesized rather than sampled, for the same reason everything else here
+  // is inlined: a folio carries every byte it needs, and a recording of a pen
+  // would cost tens of kilobytes where this costs a few lines. A nib doesn't
+  // glide over parchment, it catches and releases dozens of times a stroke,
+  // and that stick-slip is what an ear hears as a scratch rather than a hiss,
+  // so the noise is cut into grains that each bite their own amount, and then
+  // trimmed to the band a dry point on paper actually sounds in. What is
+  // written is a word rather than a mark: strokes of their own length, weight,
+  // and tone, scheduled one after another with the pen lifted between them.
+
+  let quill = null;
+
+  // Built on the first copy rather than at load: a context made with no
+  // gesture behind it starts suspended, and browsers count it against the page.
+  const nib = () => {
+    if (quill) return quill;
+    const Context = window.AudioContext || window.webkitAudioContext;
+    if (!Context) return null;
+    try {
+      quill = new Context();
+    } catch {
+      return null;
+    }
+    return quill;
+  };
+
+  // One pull of the nib: how long it is down, how hard it is pressed, how
+  // dark it sounds, how coarsely it catches, and how long the pen is off the
+  // page after. A word is a handful of these, and no two of them match: a
+  // stem is a flick where a bowl is a long pull, the hand leans in and eases
+  // off, and the nib's angle changes what each one sounds like. Skewing the
+  // length keeps most strokes short, so the occasional long one tells.
+  const strokesOfAWord = () => {
+    const strokes = [];
+    const letters = 5 + Math.floor(Math.random() * 4);
+    for (let n = 0; n < letters; n += 1) {
+      strokes.push({
+        down: 0.018 + Math.random() ** 1.6 * 0.1,
+        // No lift after the last: the word ends when the pen does.
+        lifted: n === letters - 1 ? 0 : 0.015 + Math.random() * 0.05,
+        press: 0.35 + Math.random() * 0.65,
+        floor: 600 + Math.random() * 800,
+        ceiling: 2400 + Math.random() * 2400,
+        catches: 0.0004 + Math.random() * 0.0035,
+      });
+    }
+    return strokes;
+  };
+
+  // One stroke, sounded at `when`: grains of noise under the pressure of a
+  // hand, cut at either end to the band this pull sounds in. Below is a rumble
+  // the pen doesn't have; above is the sizzle that makes the same grains read
+  // as static rather than as a nib.
+  const drawStroke = (pen, stroke, when) => {
+    const length = Math.floor(pen.sampleRate * stroke.down);
+    const buffer = pen.createBuffer(1, length, pen.sampleRate);
+    const samples = buffer.getChannelData(0);
+    let caught = 0;
+    let bite = 0;
+    for (let i = 0; i < length; i += 1) {
+      if (i >= caught) {
+        caught = i + pen.sampleRate * stroke.catches * (0.5 + Math.random());
+        bite = 0.25 + Math.random() * 0.75;
+      }
+      // The stroke's own pressure: on as the hand commits, off as it lifts, so
+      // every stroke ends at silence and the gap after it is a clean one.
+      const weight = Math.sin((Math.PI * i) / length) ** 0.7;
+      samples[i] = (Math.random() * 2 - 1) * bite * weight * stroke.press;
+    }
+    const source = pen.createBufferSource();
+    source.buffer = buffer;
+    const rumble = pen.createBiquadFilter();
+    rumble.type = "highpass";
+    rumble.frequency.value = stroke.floor;
+    const sizzle = pen.createBiquadFilter();
+    sizzle.type = "lowpass";
+    sizzle.frequency.value = stroke.ceiling;
+    sizzle.Q.value = 0.9;
+    const quiet = pen.createGain();
+    // Most strokes are pressed well under full, so the word wants a little
+    // more gain than one flat stroke would to land as loudly.
+    quiet.gain.value = 0.07;
+    source
+      .connect(rumble)
+      .connect(sizzle)
+      .connect(quiet)
+      .connect(pen.destination);
+    source.start(when);
+  };
+
+  const scratch = () => {
+    const pen = nib();
+    if (!pen) return;
+    // resume() is a promise, and it rejects where the browser won't let the
+    // context start. The word simply goes unheard, which is not worth an
+    // unhandled rejection surfacing on a page whose copy already worked.
+    if (pen.state === "suspended") pen.resume().catch(() => {});
+    // A lead on the first stroke, so scheduling the word can't run late into
+    // its own opening.
+    let when = pen.currentTime + 0.01;
+    for (const stroke of strokesOfAWord()) {
+      drawStroke(pen, stroke, when);
+      when += stroke.down + stroke.lifted;
+    }
+  };
+
   // --- Copy: a button on every code block and every message --------------
 
   const copyToClipboard = async (text) => {
@@ -262,9 +382,21 @@
     button.className = "copy-button";
     button.textContent = "copy";
     button.setAttribute("aria-label", "copy to clipboard");
+    // A hover is the reader announcing the click a moment early, so the pen is
+    // readied then: building the context is the one costly step, and doing it
+    // here leaves the click with only the stroke to draw. It starts suspended,
+    // since a hover carries no user gesture to unblock audio, and the click
+    // that follows resumes it. Once, because the context outlives the hover.
+    button.addEventListener("pointerenter", nib, { once: true });
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
-      await copyToClipboard(getText());
+      // The copy goes first and the pen follows in the same click. The hover
+      // above usually spares this click the context, but a reader who reached
+      // the button by keyboard pays tens of milliseconds to build one here, and
+      // the clipboard is what they pressed the button for.
+      const copied = copyToClipboard(getText());
+      scratch();
+      await copied;
       button.textContent = "copied";
       button.classList.add("is-done");
       setTimeout(() => {
@@ -308,6 +440,12 @@
     const dock = document.querySelector(".dock");
     const container = document.querySelector("main.folio");
     if (!dock || !container) return;
+    // The unscoped stores these replaced imposed one folio's state on every
+    // other; drop them rather than leave them to sit unread forever.
+    try {
+      localStorage.removeItem(FOLDS);
+      localStorage.removeItem(TAIL);
+    } catch {}
     // Step between the substantive messages, skipping tool-call and thinking
     // panels: those are the noise a reader wants to jump over. Only visible
     // ones, since a hidden meta panel reports top 0 and would hijack "current".
@@ -344,7 +482,13 @@
 
     // --- Follow (tail -f): keep the newest message's start pinned across the
     // reloads a live session drives, until the reader scrolls away.
+    //
+    // Only a served folio can gain a message, so only a served folio carries
+    // the toggle, and its presence is what says following is possible here. A
+    // written one is a snapshot of a session that may have ended long ago:
+    // there is nothing to follow, so jumping to its end is just a jump.
     const tailButton = dock.querySelector('[data-tail="toggle"]');
+    const canFollow = Boolean(tailButton);
 
     const visible = () =>
       Array.from(container.querySelectorAll(".turn")).filter(
@@ -359,8 +503,9 @@
     };
 
     const readTail = () => {
+      if (!canFollow) return false;
       try {
-        return localStorage.getItem(TAIL_KEY) === "1";
+        return localStorage.getItem(perFolio(TAIL)) === "1";
       } catch {
         return false;
       }
@@ -383,10 +528,12 @@
     };
 
     const setTail = (on, behavior) => {
-      tailing = on;
-      try {
-        localStorage.setItem(TAIL_KEY, on ? "1" : "0");
-      } catch {}
+      tailing = canFollow && on;
+      if (canFollow) {
+        try {
+          localStorage.setItem(perFolio(TAIL), on ? "1" : "0");
+        } catch {}
+      }
       paintTail();
       if (on) scrollToEnd(behavior);
     };
@@ -473,12 +620,13 @@
 
     const readOpenFolds = () => {
       try {
-        const stored = JSON.parse(localStorage.getItem(FOLD_KEY) || "[]");
+        const stored = JSON.parse(localStorage.getItem(perFolio(FOLDS)) || "[]");
         return new Set(Array.isArray(stored) ? stored : []);
       } catch {
         return new Set();
       }
     };
+
 
     const open = readOpenFolds();
     container.querySelectorAll("details").forEach((details) => {
@@ -496,7 +644,7 @@
         if (details.open) folds.add(foldKey(details));
         else folds.delete(foldKey(details));
         try {
-          localStorage.setItem(FOLD_KEY, JSON.stringify([...folds]));
+          localStorage.setItem(perFolio(FOLDS), JSON.stringify([...folds]));
         } catch {}
       },
       true,

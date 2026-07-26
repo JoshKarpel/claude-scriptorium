@@ -53,6 +53,11 @@ Locally serve a session over HTTP with live reload, for watching a session
 claude-scriptorium serve <session-id>.jsonl
 ```
 
+A served folio re-renders as the session is written, so its dock carries a
+follow control that keeps the newest message pinned, like `tail -f`. A written
+or published folio is a snapshot and never gains a message, so it offers no
+such control.
+
 ### Sharing a folio
 
 Publish a folio to a GitHub gist via the [`gh`](https://cli.github.com/) CLI,
@@ -145,6 +150,12 @@ vines threaded with marginal **drolleries**: colourful little beasts (snail,
 frog, cat, butterfly, stag, and more) seated among the vine at intervals,
 cycling through the whole bestiary so a long folio keeps turning up new ones.
 
+A folio is scrolled by a scroll: the scrollbar thumb is a written sheet of
+parchment wound onto two turned rollers, which lengthens and shortens with the
+document and lies on its side for a code block that runs off the edge. It is
+never hidden or narrowed, being both the position indicator and a drag target,
+and a reader in a high-contrast mode gets their own system's scrollbar instead.
+
 Turns a subagent produced carry `data-sidechain`, and turns the harness injected
 carry `data-meta`, so a stylesheet can treat them differently.
 
@@ -174,11 +185,15 @@ styles, so the file stays a single self-contained artifact:
 - **Theme** it light, dark, or system; the default follows your OS preference
   and the choice is remembered across visits.
 - **Copy** any code block, or a whole message, from the button that appears on
-  hover.
+  hover, and hear a quill take it down: the scratch is synthesized on the spot,
+  so it costs the folio no bytes to carry.
 - **Navigate** from the corner dock: jump between user and assistant messages
   (skipping tool and thinking panels), and collapse or expand every tool call at
   once.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
+- **Read by candlelight** after dark, or by the sun in the day: the luminary
+  over the theme toggle flickers or turns its rays, and casts a faint glow
+  across the leaf. It holds still if you prefer less motion.
 
 On wide screens an expanded tool call holding a diff or code block unfurls past
 the reading column so wide content fits without sideways scrolling, while prose
@@ -194,6 +209,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | quire | The gathering of folios belonging to one project |
 | marginalia | A collapsible tool call or result |
 | drollery | A marginal creature drawn in the border |
+| luminary | The candle or sun the folio is read by, and the light it casts |
 | colophon | Generation metadata, shown in the plaque |
 | illumination | The theme layer |
 

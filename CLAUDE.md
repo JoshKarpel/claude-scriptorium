@@ -386,9 +386,15 @@ selections joined into one answer, and a timeout), each with a test.
   it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
   behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
-  the same way the stylesheet is; keep it small. Do **not** reintroduce a "no
-  scripts" rule, it was dropped deliberately; the live invariant below is that
-  *transcript* content is never executed, which is a different thing. `serve`
+  the same way the stylesheet is; keep it small. The copy button's quill
+  scratch answers to that size constraint too, which is why it is a few lines
+  of Web Audio (a word's worth of strokes with the pen lifted between them,
+  each grained noise under its own pressure envelope, trimmed to the band a dry
+  point sounds in) rather than an embedded recording: a sample is the obvious
+  reach and would cost tens of kilobytes in every folio. Do **not**
+  reintroduce a "no scripts" rule, it was dropped deliberately; the live
+  invariant below is that *transcript* content is never executed, which is a
+  different thing. `serve`
   still injects its live-reload snippet only into the *served* response, never
   persisting it to the file.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
@@ -447,6 +453,25 @@ selections joined into one answer, and a timeout), each with a test.
   channels, is a value rather than a name, and no palette token can stand for
   it, so it is set on the element. Don't extend that exception to anything the
   palette *could* name.
+- **The scroll answers to the reader's system before the pun.** The scrollbar
+  thumb is a sheet wound onto two rollers, drawn in layered gradients rather
+  than an SVG data URI the way the drolleries are: a `background-image` can't
+  reach the palette, so a drawn roller would need a second copy for the dark
+  scheme, where gradients resolve `light-dark()` like everything else. Only
+  `::-webkit-scrollbar` can draw it, and that is Blink/WebKit only, so Firefox
+  takes `scrollbar-color` instead, kept behind `@supports not
+  selector(::-webkit-scrollbar)` because setting the standard property makes
+  Blink discard that element's pseudo-element rules outright. Three things are
+  load-bearing and unobvious. Everything sits inside `@media not
+  (forced-colors: active)`: a styled `::-webkit-scrollbar` is not repainted
+  under forced colours, it is left *blank*, so a high-contrast reader loses
+  the bar entirely unless it is handed back to the UA. The thumb's ink edge is
+  what identifies it against the track, since parchment on parchment is
+  1.18:1 against the 3:1 that WCAG 1.4.11 asks; the writing is decorative and
+  the sheet can't carry it. And the bar is never hidden and never narrowed
+  below the platform default (`scrollbar-width: thin` is 10px against Blink's
+  15px), because it is both the position indicator and a drag target. A test
+  guards all three.
 
 Markup carries `data-sidechain` for subagent turns and `data-meta` for
 harness-injected ones so a stylesheet can distinguish them. Meta turns are
@@ -458,13 +483,47 @@ The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
 the panel stream. Reading controls sit on the right (search top, and a
 navigation dock bottom that steps between user/assistant messages, skipping tool
-and thinking panels, jumps to the end, follows new messages like `tail -f`
-(re-pinning the newest message's start on each reload until the reader takes
-control by scrolling or by loading a `#turn-N` deep link, state kept in
-`localStorage`), and folds every marginalia); appearance
+and thinking panels, jumps to the end, and folds every marginalia); appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
-facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
-There is no in-column header or footer.
+facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
+with the luminary standing over it). There is no in-column header or footer.
+
+The luminary (`luminary.svg`, inline in the appearance corner) is the light the
+folio is read by: a guttering candle after dark, the sun with its rays circling
+by day. Both are drawn into one box and every pigment is a `light-dark()` pair
+whose off-scheme half is `transparent`, so the scheme lights one and puts the
+other out with no second set of rules and no folio rendered for one scheme
+alone. Its radiance, a very faint circle reaching across the leaf, is a sibling
+inside the lamp rather than a fixed overlay, so it stays centred on the flame
+wherever the corner puts it; it lifts the parchment by ~14/255 beside the lamp
+and nothing at all at the far corner. Sunlight brightens what it falls on and a
+candle warms it, so the day's wash is a pale warm white where the night's is the
+flame's own amber: that amber over a light page stains rather than lights. All
+of it stills under `prefers-reduced-motion`, which is what that query is for.
+
+The dock's follow control (`tail -f`: re-pin the newest message's start on each
+reload until the reader takes control by scrolling or by loading a `#turn-N`
+deep link) is set only into a **served** folio, which is what `Delivery` on the
+`Scribe` decides. `serve` re-reads the session and re-renders on every load, so
+a served folio gains messages under its reader; a written or published one is a
+snapshot of a session that may have ended a year ago, and following it would
+promise an update that can never come. The control's *presence* is what tells
+the app script this folio can follow, so there is one source of truth rather
+than a flag in each: no control means jumping to the end stays a jump, and no
+follow state is stored.
+
+What the app script remembers is split by what it belongs to. The theme is the
+reader's, and holds across everything they open, so it keeps one key. Which
+marginalia stand open and whether the reader is following the end are facts
+about one *folio*, so they are stored under the session id the markup names
+(`data-folio` on `<body>`, which is the only reason that attribute exists): a
+fold's own key is a turn number and a position within that turn, which names a
+different marginalia in every session, and following a session still being
+written says nothing about a folio finished months ago. An unscoped store is one
+folio's state imposed on every other folio sharing the origin, and every folio a
+reader opens from disk shares the `file://` origin, as does every folio served
+through one viewer. Anything added that is a fact about the folio rather than
+about the reader belongs under that same scope.
 
 The outer margins are illuminated borders. Each is a per-session strip of vine
 sections with drolleries seated among them, composed in `render.rs`
@@ -515,8 +574,9 @@ in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
 for one project), `Colophon` (generation metadata, shown in the plaque),
 `Scribe` (the renderer). Markup classes continue it with `marginalia` (a
 collapsible tool call or result), `drollery` (a marginal creature), `versal`
-(the dropped initial that opens a speaker's paragraph), and `illumination` (the
-theme layer).
+(the dropped initial that opens a speaker's paragraph), `luminary` (the candle
+or sun the folio is read by, and its `radiance` over the leaf), and
+`illumination` (the theme layer).
 
 ## Testing against real data
 

@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use claude_scriptorium::{
     discovery, gist, picker, render,
-    render::{Colophon, Labour, Scribe},
+    render::{Colophon, Delivery, Labour, Scribe},
     serve,
     transcript::Folio,
 };
@@ -209,7 +209,12 @@ fn render(args: RenderArgs) -> Result<()> {
     let output = output_path(args.output, &folio)?;
 
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
+    let scribe = Scribe::new(
+        &highlighter,
+        TimeZone::system(),
+        args.faces.choice(),
+        Delivery::Static,
+    );
     let (html, labour, reached) = inscribe(&scribe, &folio);
 
     fs::write(&output, &html).with_context(|| format!("writing {}", output.display()))?;
@@ -225,7 +230,14 @@ fn render(args: RenderArgs) -> Result<()> {
 fn serve(args: ServeArgs) -> Result<()> {
     let session = resolve_session(args.selection)?;
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
+    // The one folio that can gain a message under its reader: this server
+    // re-reads the session and re-renders on every load.
+    let scribe = Scribe::new(
+        &highlighter,
+        TimeZone::system(),
+        args.faces.choice(),
+        Delivery::Served,
+    );
 
     serve::run(args.port, &session, args.open, || {
         let folio = Folio::read(&session)?;
@@ -249,7 +261,12 @@ fn publish(args: PublishArgs) -> Result<()> {
     let viewer_base = resolve_viewer(&identity, base_override);
 
     let highlighter = highlighter();
-    let scribe = Scribe::new(&highlighter, TimeZone::system(), args.faces.choice());
+    let scribe = Scribe::new(
+        &highlighter,
+        TimeZone::system(),
+        args.faces.choice(),
+        Delivery::Static,
+    );
     let (html, labour, reached) = inscribe(&scribe, &folio);
     report(&html, &labour, &reached);
 

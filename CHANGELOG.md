@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5]
+
+### Added
+
+- A copy button scratches like a quill taking the passage down: a short word of
+  five to eight strokes, the pen lifted between them, each stroke its own
+  length, weight, and tone, so no two words are written the same way. The sound
+  is synthesized in a few lines rather than embedded as a recording, so a folio
+  stays one file that carries every byte it needs. Nothing waits on it: the pen
+  is readied when a copy button is first hovered, and the sound is made after
+  the copy is already underway.
+- A folio is scrolled by a scroll. The scrollbar thumb is a sheet of parchment
+  wound onto two turned rollers, scratched over with lines of writing, and it
+  lengthens and shortens with the document the way a real one does; it lies on
+  its side for a code block that runs off the edge. The bar never narrows below
+  the platform default and is never hidden, since it is both the position
+  indicator and the drag target, and a reader in a high-contrast mode gets
+  their own system's scrollbar instead of this one.
+- A luminary over the theme toggle: a candle whose flame gutters after dark, the
+  sun with its rays circling by day, each casting a faint warm glow across the
+  leaf so the corner reads as the light the page is read by. Both are drawn into
+  every folio and the colour scheme lights one, so a folio still reads either
+  way. Neither moves for a reader who asks for less motion.
+
+### Changed
+
+- The dock's follow control is set only into a folio that `serve` is serving.
+  Only that folio is re-read and re-rendered as the session is written; a folio
+  written to a file or published as a gist is a snapshot, so following it
+  promised an update that could never arrive. Jumping to the end still works
+  everywhere, and is now just a jump there rather than switching following on.
+
+### Fixed
+
+- A marginalia left open in one folio no longer opens panels in another, and
+  following the end of a live session no longer snaps an unrelated folio to its
+  end. Both were kept in one store shared by every folio on an origin, and a
+  fold's key is a turn number and a position within that turn, which names a
+  different marginalia in every session: opening a second folio from disk, or
+  through the same viewer, imposed the first one's state on it. Each folio now
+  remembers its own, under the session its markup names. The theme is still the
+  reader's and still holds across every folio.
+
 ## [0.1.4]
 
 ### Added
