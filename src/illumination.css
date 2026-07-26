@@ -202,6 +202,164 @@ body {
   }
 }
 
+/* --- The scroll: what a folio is scrolled by ------------------------- */
+
+/* The thumb is a scroll. Two turned rollers cap it at fixed size and the
+ * wound sheet stretches between them, so the drag handle lengthens and
+ * shortens with the document the way a real scroll does. It is drawn in
+ * gradients rather than an SVG data URI (the way the drolleries are) for one
+ * reason: a background-image can't reach the palette, so an SVG roller would
+ * need a second copy for the dark scheme and a switch to pick between them,
+ * where gradients resolve light-dark() like everything else.
+ *
+ * Only ::-webkit-scrollbar can draw this, and it is Blink/WebKit only and
+ * non-standard. Firefox gets the tinted native bar below instead. The two
+ * cannot be combined: setting scrollbar-color on an element makes Blink
+ * discard that element's ::-webkit-scrollbar rules outright. */
+:root {
+  /* The rod the sheet winds onto, and the finial knob that caps each of its
+   * ends. A knob is radial and so serves either axis; a rod is shaded across
+   * its length, so it takes one per axis, each lit from the side the leaf's
+   * own light comes from. */
+  --roller-rod: linear-gradient(
+    var(--sienna) 0 40%,
+    color-mix(in srgb, var(--sienna) 74%, var(--ink)) 100%
+  );
+  --roller-rod-upright: linear-gradient(
+    90deg,
+    var(--sienna) 0 40%,
+    color-mix(in srgb, var(--sienna) 74%, var(--ink)) 100%
+  );
+  --roller-knob: radial-gradient(
+    circle closest-side at 50% 38%,
+    var(--gold) 0 45%,
+    var(--sienna) 46% 82%,
+    color-mix(in srgb, var(--sienna) 70%, var(--ink)) 83% 99%,
+    transparent 100%
+  );
+
+  /* The sheet: parchment curved into a cylinder. The ink edge is what makes
+   * the thumb identifiable against the track (WCAG 1.4.11 wants 3:1 for that,
+   * and parchment on parchment is 1.18:1), so it can't be softened to taste
+   * without darkening the sheet to compensate. */
+  --roller-sheet: linear-gradient(
+    90deg,
+    var(--ink-soft) 0 1px,
+    color-mix(in srgb, var(--leaf) 72%, var(--ink)) 1px 2px,
+    var(--leaf) 5px,
+    color-mix(in srgb, var(--leaf) 88%, var(--ink)) 10px,
+    color-mix(in srgb, var(--leaf) 66%, var(--ink)) 13px 14px,
+    var(--ink-soft) 14px 15px,
+    transparent 15px
+  );
+  --roller-sheet-lying: linear-gradient(
+    180deg,
+    var(--ink-soft) 0 1px,
+    color-mix(in srgb, var(--leaf) 72%, var(--ink)) 1px 2px,
+    var(--leaf) 5px,
+    color-mix(in srgb, var(--leaf) 88%, var(--ink)) 10px,
+    color-mix(in srgb, var(--leaf) 66%, var(--ink)) 13px 14px,
+    var(--ink-soft) 14px 15px,
+    transparent 15px
+  );
+
+  /* Scratched writing, which is what makes the sheet read as a scroll rather
+   * than a bar. Faint by intent: the ink edge above is what identifies the
+   * thumb, so this stays decorative.
+   *
+   * A line of writing runs parallel to the rollers, so it crosses the sheet at
+   * a right angle to the scroll's length whichever way the scroll lies. Three
+   * layers of differing length, each phased a line further on, leave the text
+   * ragged over a 12px cycle instead of justified into a block.
+   *
+   * Laying the scroll down turns it to the left, which carries its left
+   * margin to the bottom, so the lines there hang from the bottom edge and
+   * run ragged upward. The shading does not turn with it: light comes from
+   * above the leaf and stays there however the scroll is set down, so the
+   * sheet and rods keep their highlight on the lit side rather than rotating
+   * it round to the underside. */
+  --roller-writing: repeating-linear-gradient(
+    180deg,
+    var(--ink-faint) 0 1px,
+    transparent 1px 12px
+  );
+  --roller-writing-sideways: repeating-linear-gradient(
+    90deg,
+    var(--ink-faint) 0 1px,
+    transparent 1px 12px
+  );
+}
+
+/* Under forced colours the UA repaints the scrollbar and author colours are
+ * ignored, but a styled ::-webkit-scrollbar isn't repainted, it is left
+ * blank: an 18px channel with nothing drawn in it. Yielding the whole thing
+ * back to the UA is the only way it stays visible, which is why the pun lives
+ * inside this query rather than merely having its pigments overridden. */
+@media not (forced-colors: active) {
+  /* Never narrower than the platform default (15px in Blink): the thumb is a
+   * drag target, and `scrollbar-width: thin` would cut it to 10px. */
+  ::-webkit-scrollbar {
+    width: 18px;
+    height: 18px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: var(--page);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    /* Painted back to front: the knobs over the rod, the rod over the sheet,
+     * so the sheet reads as winding onto the rod.
+     *
+     * A rod covers only the 4px band it sits in (2.5px to 6.5px from the
+     * end), so a sheet sized to the whole length runs straight past it and
+     * out of the thumb. Every layer beneath the rollers therefore ends inside
+     * that band instead: the sheet 5px in, and each line of writing 6px in,
+     * which is why the three phased layers take three different lengths to
+     * finish together. */
+    background:
+      var(--roller-knob) left top 1px / 7px 7px no-repeat,
+      var(--roller-knob) right top 1px / 7px 7px no-repeat,
+      var(--roller-rod) center top 2.5px / 100% 4px no-repeat,
+      var(--roller-knob) left bottom 1px / 7px 7px no-repeat,
+      var(--roller-knob) right bottom 1px / 7px 7px no-repeat,
+      var(--roller-rod) center bottom 2.5px / 100% 4px no-repeat,
+      var(--roller-writing) left 4px top 6px / 10px calc(100% - 12px) no-repeat,
+      var(--roller-writing) left 4px top 10px / 6px calc(100% - 16px) no-repeat,
+      var(--roller-writing) left 5px top 14px / 8px calc(100% - 20px) no-repeat,
+      var(--roller-sheet) center center / 15px calc(100% - 10px) no-repeat;
+  }
+
+  /* Laid on its side for a code block that overflows sideways. */
+  ::-webkit-scrollbar-thumb:horizontal {
+    background:
+      var(--roller-knob) left 1px top / 7px 7px no-repeat,
+      var(--roller-knob) left 1px bottom / 7px 7px no-repeat,
+      var(--roller-rod-upright) left 2.5px center / 4px 100% no-repeat,
+      var(--roller-knob) right 1px top / 7px 7px no-repeat,
+      var(--roller-knob) right 1px bottom / 7px 7px no-repeat,
+      var(--roller-rod-upright) right 2.5px center / 4px 100% no-repeat,
+      var(--roller-writing-sideways) left 6px bottom 4px / calc(100% - 12px) 10px
+        no-repeat,
+      var(--roller-writing-sideways) left 10px bottom 4px / calc(100% - 16px) 6px
+        no-repeat,
+      var(--roller-writing-sideways) left 14px bottom 5px / calc(100% - 20px) 8px
+        no-repeat,
+      var(--roller-sheet-lying) center center / calc(100% - 10px) 15px no-repeat;
+  }
+}
+
+/* Firefox has no scrollbar pseudo-elements, so it takes the standard
+ * properties: the same pigments, without the drawing. Blink answers true to
+ * the selector() test and so never sees this, which keeps it from discarding
+ * the rules above. */
+@supports not selector(::-webkit-scrollbar) {
+  :root {
+    scrollbar-color: var(--sienna) var(--page);
+  }
+}
+
 /* --- Search: a fixed widget that steps through matches --------------- */
 
 .search {

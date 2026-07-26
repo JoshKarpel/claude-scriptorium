@@ -150,6 +150,12 @@ vines threaded with marginal **drolleries**: colourful little beasts (snail,
 frog, cat, butterfly, stag, and more) seated among the vine at intervals,
 cycling through the whole bestiary so a long folio keeps turning up new ones.
 
+A folio is scrolled by a scroll: the scrollbar thumb is a written sheet of
+parchment wound onto two turned rollers, which lengthens and shortens with the
+document and lies on its side for a code block that runs off the edge. It is
+never hidden or narrowed, being both the position indicator and a drag target,
+and a reader in a high-contrast mode gets their own system's scrollbar instead.
+
 Turns a subagent produced carry `data-sidechain`, and turns the harness injected
 carry `data-meta`, so a stylesheet can treat them differently.
 

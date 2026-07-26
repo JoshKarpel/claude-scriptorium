@@ -15,6 +15,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays one file that carries every byte it needs. Nothing waits on it: the pen
   is readied when a copy button is first hovered, and the sound is made after
   the copy is already underway.
+- A folio is scrolled by a scroll. The scrollbar thumb is a sheet of parchment
+  wound onto two turned rollers, scratched over with lines of writing, and it
+  lengthens and shortens with the document the way a real one does; it lies on
+  its side for a code block that runs off the edge. The bar never narrows below
+  the platform default and is never hidden, since it is both the position
+  indicator and the drag target, and a reader in a high-contrast mode gets
+  their own system's scrollbar instead of this one.
 - A luminary over the theme toggle: a candle whose flame gutters after dark, the
   sun with its rays circling by day, each casting a faint warm glow across the
   leaf so the corner reads as the light the page is read by. Both are drawn into

@@ -453,6 +453,25 @@ selections joined into one answer, and a timeout), each with a test.
   channels, is a value rather than a name, and no palette token can stand for
   it, so it is set on the element. Don't extend that exception to anything the
   palette *could* name.
+- **The scroll answers to the reader's system before the pun.** The scrollbar
+  thumb is a sheet wound onto two rollers, drawn in layered gradients rather
+  than an SVG data URI the way the drolleries are: a `background-image` can't
+  reach the palette, so a drawn roller would need a second copy for the dark
+  scheme, where gradients resolve `light-dark()` like everything else. Only
+  `::-webkit-scrollbar` can draw it, and that is Blink/WebKit only, so Firefox
+  takes `scrollbar-color` instead, kept behind `@supports not
+  selector(::-webkit-scrollbar)` because setting the standard property makes
+  Blink discard that element's pseudo-element rules outright. Three things are
+  load-bearing and unobvious. Everything sits inside `@media not
+  (forced-colors: active)`: a styled `::-webkit-scrollbar` is not repainted
+  under forced colours, it is left *blank*, so a high-contrast reader loses
+  the bar entirely unless it is handed back to the UA. The thumb's ink edge is
+  what identifies it against the track, since parchment on parchment is
+  1.18:1 against the 3:1 that WCAG 1.4.11 asks; the writing is decorative and
+  the sheet can't carry it. And the bar is never hidden and never narrowed
+  below the platform default (`scrollbar-width: thin` is 10px against Blink's
+  15px), because it is both the position indicator and a drag target. A test
+  guards all three.
 
 Markup carries `data-sidechain` for subagent turns and `data-meta` for
 harness-injected ones so a stylesheet can distinguish them. Meta turns are

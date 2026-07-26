@@ -813,6 +813,39 @@ fn the_stylesheet_is_inlined_not_linked() {
 }
 
 #[test]
+fn the_scroll_thumb_yields_to_the_user_agent_under_forced_colours() {
+    let html = render(&fixture(), &highlighter());
+
+    // A styled ::-webkit-scrollbar is not repainted under forced colours, it
+    // is left blank, so the scroll must sit inside the query that hands the
+    // bar back to the UA. Losing this guard costs a high-contrast reader the
+    // scrollbar entirely, which no visual test would catch.
+    let rules: String = html
+        .split("/*")
+        .map(|c| c.split_once("*/").map_or(c, |(_, r)| r))
+        .collect();
+    let guard = rules
+        .find("@media not (forced-colors: active)")
+        .expect("the scroll is drawn inside a forced-colours guard");
+    assert!(rules.contains("::-webkit-scrollbar-thumb"));
+    assert!(
+        rules
+            .match_indices("::-webkit-scrollbar")
+            .all(|(at, _)| at > guard),
+        "every scrollbar pseudo-element rule sits after the guard opens"
+    );
+
+    // Firefox has no such pseudo-element and takes the standard properties
+    // instead; Blink must not see them, or it discards the drawing above.
+    assert!(rules.contains("@supports not selector(::-webkit-scrollbar)"));
+    assert!(rules.contains("scrollbar-color:"));
+
+    // Nothing may hide the bar or shrink it below the platform default: it is
+    // both the position indicator and the drag target.
+    assert!(!rules.contains("scrollbar-width:"));
+}
+
+#[test]
 fn fonts_are_embedded_not_linked() {
     let html = render(&fixture(), &highlighter());
 
