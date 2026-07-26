@@ -549,32 +549,82 @@ fn the_folio_carries_a_search_widget() {
 }
 
 #[test]
-fn the_header_offers_a_light_dark_system_theme_toggle() {
+fn the_lights_a_folio_is_read_by_are_the_control_that_chooses_them() {
     let html = render(&fixture(), &highlighter());
 
-    assert!(html.contains(r#"class="theme-toggle""#));
+    // No separate toggle: the reader presses the light they want. The system is
+    // offered as a reset rather than as a third light, since it names no light
+    // of its own.
+    assert!(html.contains(r#"<div class="luminaries" role="group""#));
     assert!(html.contains(r#"data-theme-choice="light""#));
-    assert!(html.contains(r#"data-theme-choice="system""#));
     assert!(html.contains(r#"data-theme-choice="dark""#));
+    assert!(html.contains(r#"class="theme-reset" type="button" data-theme-choice="system""#));
 }
 
 #[test]
-fn the_appearance_corner_carries_a_candle_and_a_sun() {
+fn each_light_carries_the_name_its_figure_cannot_say() {
     let html = render(&fixture(), &highlighter());
 
-    // Both are set into every folio, and the scheme decides which is lit: each
-    // pigment is a light-dark() pair whose off-scheme half is transparent, so
-    // no folio is rendered for one scheme alone.
-    assert!(html.contains(r#"class="luminary__candle""#));
+    for (choice, label) in [
+        ("light", "read by daylight"),
+        ("dark", "read by candlelight"),
+        ("system", "follow the system"),
+    ] {
+        let button = html
+            .split(&format!(r#"data-theme-choice="{choice}""#))
+            .nth(1)
+            .and_then(|rest| rest.split("</button>").next())
+            .unwrap_or_else(|| panic!("the {choice} control is in the corner"));
+        assert!(
+            button.contains(&format!(r#"aria-label="{label}""#)),
+            "the {choice} control has no name, and its figure cannot supply one"
+        );
+    }
+}
+
+#[test]
+fn every_folio_carries_both_lights_and_lets_the_scheme_choose() {
+    let html = render(&fixture(), &highlighter());
+
+    // Sun and moon in one figure, a candle lit and smoking in the other, and
+    // each pigment a light-dark() pair whose off-scheme half is transparent: one
+    // set of rules, and no folio rendered for a single scheme.
     assert!(html.contains(r#"class="luminary__sun""#));
+    assert!(html.contains(r#"class="luminary__moon""#));
+    assert!(html.contains(r#"class="luminary__flame""#));
+    assert!(html.contains(r#"class="luminary__smoke""#));
     assert!(html.contains("--flame: light-dark(transparent,"));
+    assert!(html.contains("--smoke: light-dark(#9c9384, transparent)"));
     assert!(html.contains("--sun-disc: light-dark(#c98a1c, transparent)"));
-    // Decoration, so it is kept from assistive tech entirely.
-    assert!(html.contains(r#"<div class="lamp" aria-hidden="true">"#));
-    assert!(html.contains(r#"<svg class="luminary" viewBox="0 0 40 56" aria-hidden="true""#));
-    // The light it casts over the leaf sits inside the lamp, so it stays
-    // centred on the flame rather than on a corner guessed in the stylesheet.
-    assert!(html.contains(r#"<span class="lamp__radiance"></span>"#));
+    assert!(html.contains("--moon: light-dark(transparent, #cfc6ac)"));
+    // The figures are decoration inside a named control, so they say nothing of
+    // their own to assistive tech.
+    assert!(
+        html.contains(r#"<svg class="luminary__figure" viewBox="0 0 40 56" aria-hidden="true""#)
+    );
+    // The light each throws sits inside the figure that throws it, so the glow
+    // comes from whichever is burning rather than from a corner the stylesheet
+    // guessed at.
+    assert!(html.contains(r#"<span class="luminary__radiance luminary__radiance--day"></span>"#));
+    assert!(html.contains(r#"<span class="luminary__radiance luminary__radiance--night"></span>"#));
+}
+
+#[test]
+fn the_reset_is_offered_only_once_a_light_has_been_chosen() {
+    let html = render(&fixture(), &highlighter());
+
+    // Keyed off the attribute the choice writes on the document, so a folio read
+    // by whatever the system asks for carries no control saying so, and the
+    // script needs to know nothing about it.
+    assert!(html.contains(
+        r#".theme-reset {
+  display: none;"#
+    ));
+    assert!(html.contains(
+        r#":root[data-theme] .theme-reset {
+  display: grid;
+}"#
+    ));
 }
 
 #[test]

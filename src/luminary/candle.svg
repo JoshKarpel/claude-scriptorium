@@ -1,0 +1,13 @@
+<!-- Night, and the control that asks for it. The candle stands whichever scheme
+     is in force; what changes is whether it is lit, so the flame and the wisp
+     that replaces it are both drawn here and the pigments put one of them out.
+     -->
+<svg class="luminary__figure" viewBox="0 0 40 56" aria-hidden="true" focusable="false">
+  <path class="luminary__wax" d="M14 30h12v20a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
+  <path class="luminary__drip" d="M15.4 31c1.6 0 1.9 5 .3 5s-1.6-5-.3-5z" />
+  <path class="luminary__wick" d="M20 27v3" />
+  <circle class="luminary__halo" cx="20" cy="20" r="9" />
+  <path class="luminary__flame" d="M20 8c4 6 6 10 6 14a6 6 0 0 1-12 0c0-4 2-8 6-14z" />
+  <path class="luminary__ember" d="M20 16c2 3.2 3 5.2 3 7a3 3 0 0 1-6 0c0-1.8 1-3.8 3-7z" />
+  <path class="luminary__smoke" d="M20 26c-2.6-2.6 1.4-4.6-.6-7.2s1.8-4.6.2-7" />
+</svg>

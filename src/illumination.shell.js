@@ -78,8 +78,12 @@
 
   applyTheme(readTheme());
 
+  // The lights are the control: pressing one asks to read by it, and the reset
+  // beside them hands the choice back to the system. Which light is *drawn* as
+  // burning is the stylesheet's, off the scheme in force; all this does is say
+  // which scheme that is, and record which button asked for it.
   const wireThemeToggle = () => {
-    const toggle = document.querySelector(".theme-toggle");
+    const toggle = document.querySelector(".luminaries");
     if (!toggle) return;
     const buttons = toggle.querySelectorAll("[data-theme-choice]");
     const sync = (theme) => {
@@ -648,7 +652,15 @@
     // (a fold opening, the web fonts landing). The URL therefore keeps naming
     // the turn the reader is actually on, so a reload resumes at the end and a
     // link copied out of a followed folio names what was on the screen.
-    const scrollToEnd = (behavior) => {
+    // Every landing the dock makes is instant, the leaps to either end
+    // included: a folio is megabytes tall, so a glide from one end to the other
+    // is an animation to sit through rather than a sense of where you went, and
+    // `serve` can re-render under a scroll still in flight and lose it with
+    // nothing recording where it was headed. (Stepping between search hits
+    // still glides, deliberately: those are short hops within a page the reader
+    // is already looking at, where the movement is what shows the next match is
+    // near.)
+    const scrollToEnd = () => {
       const target = lastMessage();
       if (!target) return;
       name(target);
@@ -658,14 +670,14 @@
           localStorage.setItem(perFolio(TAIL), pinned);
         } catch {}
       }
-      target.scrollIntoView({ behavior, block: "start" });
+      target.scrollIntoView({ behavior: "auto", block: "start" });
     };
 
-    const scrollToTop = (behavior) => {
+    const scrollToTop = () => {
       const target = firstMessage();
       if (!target) return;
       name(target);
-      target.scrollIntoView({ behavior, block: "start" });
+      target.scrollIntoView({ behavior: "auto", block: "start" });
     };
 
     // While following, the folio decides where a reload lands, so the browser
@@ -681,7 +693,7 @@
 
     // Turning it on pins the end (`scrollToEnd` records where); turning it off
     // forgets, so the absence of a pin is the absence of the mode.
-    const setTail = (on, behavior) => {
+    const setTail = (on) => {
       tailing = canFollow && on;
       if (!tailing) {
         pinned = null;
@@ -691,7 +703,7 @@
       }
       holdScroll();
       paintTail();
-      if (on) scrollToEnd(behavior);
+      if (on) scrollToEnd();
     };
 
     // A programmatic scrollIntoView never emits wheel/touch/keydown, so those
@@ -756,19 +768,19 @@
     // reader can turn it on at any point after.
     if (canFollow) {
       new ResizeObserver(() => {
-        if (tailing) scrollToEnd("auto");
+        if (tailing) scrollToEnd();
       }).observe(container);
     }
     if (tailing) {
-      scrollToEnd("auto");
+      scrollToEnd();
       // Again on the next frame, and again once every resource is in: a folio
       // is megabytes of markup and its layout is still settling long after this
       // script runs, and each settling moves the end.
       requestAnimationFrame(() => {
-        if (tailing) scrollToEnd("auto");
+        if (tailing) scrollToEnd();
       });
       window.addEventListener("load", () => {
-        if (tailing) scrollToEnd("auto");
+        if (tailing) scrollToEnd();
       });
     } else if (deepLink) {
       requestAnimationFrame(() => {
@@ -787,9 +799,9 @@
       // session would snap straight back to the end.
       else if (nav === "top") {
         releaseTail();
-        scrollToTop("smooth");
-      } else if (nav === "end") setTail(true, "smooth");
-      else if (tail === "toggle") setTail(!tailing, "smooth");
+        scrollToTop();
+      } else if (nav === "end") setTail(true);
+      else if (tail === "toggle") setTail(!tailing);
       else if (foldTo === "expand") fold(true);
       else if (foldTo === "collapse") fold(false);
     });

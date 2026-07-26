@@ -740,66 +740,98 @@ mark.search__hit.is-current {
  * A floor under it, since a map of a hundred panels in three lines is no map.
  *
  * It is deliberately not cut like the cards above it. Those are leaves of the
- * folio's own chrome; this is the book itself, shut and seen from the fore-edge,
- * so it takes boards of tooled leather with the painted edges of its leaves
- * between them. The boards stand a little proud at head and tail, as a binding's
- * squares do, which is why the padding is not even. */
+ * folio's own chrome; this is the book itself, shut and seen from the fore-edge.
+ * The proportion is the whole of it: a session is a *great* many leaves and the
+ * binding around them is a few thousandths of that, so the leather is two or
+ * three pixels and everything else is paper. A thick spine with cords tooled
+ * across it was tried and read as a picture frame, which is what any binding
+ * drawn wide enough to see detail in will do at this scale. */
 .minimap {
-  --leather: color-mix(in srgb, var(--sienna) 40%, #1b1007);
-  --leather-lit: color-mix(in srgb, var(--sienna) 72%, #2b1a0b);
+  --leather: color-mix(in srgb, var(--sienna) 38%, #1b1007);
+  --leather-lit: color-mix(in srgb, var(--sienna) 66%, #2b1a0b);
   --leather-dark: #150c05;
+  /* One recession, shared by both faces that recede. The reader stands above
+   * the front board and off to the spine side, so what is farther away is drawn
+   * up and to the left: `--away-x` left, `--away-y` up. The board's depth on
+   * screen and the spine's width on screen are the same vector seen twice, which
+   * is what makes the two faces agree instead of each being eyeballed. */
+  --away-x: 15px;
+  --away-y: 0.55rem;
+  /* The back board shows only its thickness at this angle. */
+  --backboard: 3px;
+  position: relative;
   flex: 1 1 auto;
   min-height: 5rem;
-  display: flex;
-  /* The binding wraps the leaves rather than framing them, so the padding is
-   * not even: the boards stand proud at head and tail (a binding's squares),
-   * and the spine, which is the whole reason this reads as a book at all, takes
-   * the near side. The far side is the fore-edge, where the leaves simply end. */
-  padding: 0.55rem 0.28rem 0.55rem 1.15rem;
-  /* Not cut as a card: no leaf, no border, no radius of the rail's. The
-   * silhouette is the volume, and a rounded rectangle drawn round it would only
-   * say "panel" again. The shadow is the book's own, cast on the leaf. */
-  background:
-    /* The lettering-piece, in the second compartment where a binder puts it:
-     * too small to letter, so it is the patch of colour a reader reads as one. */
-    linear-gradient(
-        to bottom,
-        color-mix(in srgb, var(--gold) 45%, transparent) 0 1px,
-        var(--rubric) 1px calc(100% - 1px),
-        color-mix(in srgb, var(--gold) 30%, transparent) calc(100% - 1px)
-      )
-      0.28rem 26% / 0.6rem 7% no-repeat,
-    /* The cords: five raised bands across the spine, each lit along its top and
-     * shadowed under its lower edge, tiled so a spine of any height carries the
-     * same five. What a reader recognises a bound book by before anything else. */
-    linear-gradient(
-        to bottom,
-        transparent 0 44%,
-        color-mix(in srgb, var(--gold) 38%, transparent) 44% 47%,
-        var(--leather-lit) 47% 62%,
-        color-mix(in srgb, var(--leather-dark) 80%, transparent) 62% 70%,
-        transparent 70%
-      )
-      left top / 1.15rem 20% repeat-y,
-    /* The leather itself: the spine turns away into shadow at its outer edge,
-     * catches the light along its curve, and darkens again into the joint where
-     * the boards are hinged onto it. */
-    linear-gradient(
-      to right,
-      var(--leather-dark) 0,
-      var(--leather) 0.16rem,
-      var(--leather-lit) 0.6rem,
-      var(--leather) 1rem,
-      color-mix(in srgb, var(--leather-dark) 70%, var(--leather)) 1.15rem,
-      var(--leather) 1.5rem,
-      var(--leather-lit) 60%,
-      var(--leather) 88%,
-      var(--leather-dark) 100%
-    );
+  padding: 0;
   border: 0;
-  border-radius: 0.32rem 0.1rem 0.1rem 0.32rem;
+  border-radius: 0;
+  /* The back board's edge: it starts where the leaves do, since the spine's own
+   * face carries the rest of it. */
+  background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--leather-lit) 70%, var(--leather)) 0 1px,
+      var(--leather) 1px 2px,
+      var(--leather-dark) 2px
+    )
+    var(--away-x) 100% / calc(100% - var(--away-x)) var(--backboard) no-repeat;
   box-shadow: none;
-  filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.34));
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.32));
+}
+
+/* The front board, seen from above its own plane: a parallelogram rather than a
+ * trapezoid, since a plane leaning away from a viewer who is off to one side
+ * shears rather than tapers. Its near edge is the top of the leaves; its far
+ * edge is that same edge carried up and left by the recession. */
+.minimap::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--away-y);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--away-x)) 0,
+    100% 100%,
+    var(--away-x) 100%
+  );
+  /* It faces the light, so it is the brightest leather in the composition, and
+   * it falls off toward the reader as the surface turns away. The last two
+   * pixels are not surface at all but the board's own thickness, seen edge-on,
+   * which is what says the leaves below it are underneath rather than beside;
+   * it is the leather's own shadow rather than black, or the board reads as
+   * having a rule drawn along it. */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--leather-lit) 74%, #fff) 0,
+    var(--leather-lit) 40%,
+    var(--leather) calc(100% - 2px),
+    color-mix(in srgb, var(--leather-dark) 55%, var(--leather)) calc(100% - 2px)
+  );
+}
+
+/* The spine, and the reason for the angle: from straight on it is a line, and a
+ * line says nothing. Seen from the side it opens into a face of its own, sheared
+ * by the same recession as the board so the two share a corner rather than
+ * meeting at a seam. It turns away from the light along its width, being the
+ * one curved surface a bound book has. */
+.minimap::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--away-x);
+  clip-path: polygon(
+    0 0,
+    100% var(--away-y),
+    100% 100%,
+    0 calc(100% - var(--away-y))
+  );
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--leather-dark) 55%, var(--leather)) 0,
+    var(--leather) 20%,
+    var(--leather-lit) 55%,
+    var(--leather) 88%,
+    color-mix(in srgb, var(--leather-dark) 35%, var(--leather)) 100%
+  );
 }
 
 /* The bands are positioned against this, in fractions of the document's own
@@ -813,13 +845,17 @@ mark.search__hit.is-current {
  * an image, so the whole thing costs no bytes and resolves `light-dark()` like
  * the rest of the palette. */
 .minimap__track {
-  position: relative;
-  flex: 1;
+  /* The head of the block: the one face square to the reader, and the only one
+   * that may be, since the pointer maths behind the scrub measures against this
+   * box. It fills what the binding leaves: the spine's face to its left, the
+   * board's above, the back board's edge below. Cut flat, because a book's edge
+   * is. */
+  position: absolute;
+  top: var(--away-y);
+  right: 0;
+  bottom: var(--backboard);
+  left: var(--away-x);
   overflow: hidden;
-  /* Squared and set in from the boards on either side, which is what makes the
-   * boards read as boards: a binding's squares overhang the leaves they close
-   * over. Cut flat, because a book's edge is. */
-  margin: 0 0.28rem;
   border-radius: 0;
   background: var(--leaf-sunk);
   cursor: pointer;
@@ -844,9 +880,12 @@ mark.search__hit.is-current {
   );
 }
 
-/* The roundness of the block and its gilding: the edge falls away into shadow at
- * both sides, catches the light down the middle, and takes a gold hairline where
- * the leaf ends. The head and tail darken under the boards that overhang them. */
+/* Where the block meets the binding: the leaves fall into shadow along the
+ * gutter they are sewn into, and under each board where it closes over them.
+ * The cut fore-edge, at the right, takes a gilt hairline. No highlight anywhere:
+ * a pale wash down the middle was meant to round the block and read instead as a
+ * lamp shining out of the rail, which is exactly what painted paper does not do.
+ */
 .minimap__track::after {
   content: "";
   position: absolute;
@@ -856,31 +895,18 @@ mark.search__hit.is-current {
   background:
     linear-gradient(
       to right,
-      color-mix(in srgb, var(--ink) 34%, transparent) 0,
-      transparent 12%,
-      /* The light along the edge: barely a sheen, and less after dark, where a
-       * pale wash over the painted leaves reads as a glow rather than as the
-       * turn of a surface. */
-        light-dark(
-            color-mix(in srgb, var(--page) 14%, transparent),
-            color-mix(in srgb, var(--page) 6%, transparent)
-          )
-          42%,
-      transparent 70%,
-      color-mix(in srgb, var(--ink) 26%, transparent) 100%
+      color-mix(in srgb, var(--leather-dark) 34%, transparent) 0,
+      transparent 14%
     ),
     linear-gradient(
       to bottom,
-      color-mix(in srgb, #150c05 55%, transparent) 0 1px,
-      color-mix(in srgb, #150c05 26%, transparent) 1px 0.3rem,
-      transparent 0.5rem,
-      transparent calc(100% - 0.5rem),
-      color-mix(in srgb, #150c05 26%, transparent) calc(100% - 0.3rem),
-      color-mix(in srgb, #150c05 55%, transparent) 100%
+      color-mix(in srgb, var(--leather-dark) 26%, transparent) 0 1px,
+      color-mix(in srgb, var(--leather-dark) 11%, transparent) 1px 0.25rem,
+      transparent 0.4rem,
+      transparent calc(100% - 0.3rem),
+      color-mix(in srgb, var(--leather-dark) 20%, transparent) 100%
     );
-  box-shadow:
-    inset 1px 0 0 color-mix(in srgb, var(--gold) 55%, transparent),
-    inset -1px 0 0 color-mix(in srgb, var(--gold) 40%, transparent);
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--gold) 45%, transparent);
 }
 
 /* Zoomed, the map is no longer the whole folio but a stretch of it, and a map
@@ -1165,24 +1191,50 @@ mark.search__hit.is-current {
   gap: 0.35rem;
 }
 
-/* --- The luminary: what the folio is read by ------------------------- */
-/* A candle after dark, the sun by day, standing over the control that chooses
- * between them. Both are drawn into the same box (see luminary.svg) and each
- * pigment is a light-dark() pair whose off-scheme half is transparent, so the
- * scheme lights one and puts the other out without a second set of rules. */
-.lamp {
-  position: relative;
+/* --- The luminaries: what the folio is read by, and how it is chosen -- */
+/* A candle and the sun, side by side in the corner, each a control: press the
+ * light you want to read by. Which one is *burning* is the scheme's to say
+ * rather than the press's, so by day the sun is up and the candle stands
+ * smoking, and after dark the moon hangs and the candle is lit. Every pigment
+ * below is a light-dark() pair whose off-scheme half is transparent, which is
+ * what makes that one set of rules instead of two. */
+.luminaries {
   display: flex;
+  align-items: flex-end;
+  gap: 0.1rem;
 }
 
-/* The light the luminary actually throws: one very faint circle reaching across
- * the leaf from the flame, so the corner reads as the page's light source
- * rather than a picture of one. Centred on the flame by sitting inside the lamp
- * rather than being anchored to the viewport, and far larger than the viewport
- * so its falloff is gradual wherever the reader's window ends. Above the leaf,
- * since light falls on a page rather than glowing through it, which is only
- * legible at this alpha: a few percent, over text that must stay crisp. */
-.lamp__radiance {
+.luminary {
+  position: relative;
+  padding: 0.1rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: none;
+  cursor: pointer;
+}
+
+/* The one being read by is the one that is lit, which the scheme already says,
+ * so pressing marks nothing further. What hover and focus do is offer: the
+ * figure lifts toward its own light. */
+.luminary:hover .luminary__figure,
+.luminary:focus-visible .luminary__figure {
+  filter: brightness(1.12);
+}
+
+.luminary:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 1px;
+}
+
+/* The light a luminary actually throws: one very faint circle reaching across
+ * the leaf, so the corner reads as the page's light source rather than a picture
+ * of one. It sits inside the figure that throws it rather than being anchored to
+ * the viewport, so the glow comes from whichever of the two is burning, and it
+ * is far larger than the viewport so its falloff is gradual wherever the
+ * reader's window ends. Above the leaf, since light falls on a page rather than
+ * glowing through it, which is only legible at this alpha: a few percent, over
+ * text that must stay crisp. */
+.luminary__radiance {
   position: absolute;
   left: 50%;
   top: 45%;
@@ -1190,17 +1242,30 @@ mark.search__hit.is-current {
   height: 200vmax;
   transform: translate(-50%, -50%);
   pointer-events: none;
-  /* Sunlight brightens what it falls on; a candle warms it. So the day's wash
-   * is a pale warm white, which lifts the parchment, where the night's is the
-   * amber of the flame itself: an amber this strong over a light page would
-   * darken it into a stain rather than lighting it. */
+  animation: warming 7.3s ease-in-out infinite;
+}
+
+/* Sunlight brightens what it falls on; a candle warms it. So the day's wash is a
+ * pale warm white, which lifts the parchment, where the night's is the amber of
+ * the flame itself: an amber this strong over a light page would darken it into
+ * a stain rather than lighting it. Each is transparent in the scheme its own
+ * light is out in, so only one is ever cast. */
+.luminary__radiance--day {
   background: radial-gradient(
     closest-side circle,
-    light-dark(rgba(255, 241, 201, 0.5), rgba(246, 198, 90, 0.11)) 0%,
-    light-dark(rgba(255, 241, 201, 0.2), rgba(246, 198, 90, 0.045)) 26%,
+    light-dark(rgba(255, 241, 201, 0.5), transparent) 0%,
+    light-dark(rgba(255, 241, 201, 0.2), transparent) 26%,
     transparent 62%
   );
-  animation: warming 7.3s ease-in-out infinite;
+}
+
+.luminary__radiance--night {
+  background: radial-gradient(
+    closest-side circle,
+    light-dark(transparent, rgba(246, 198, 90, 0.11)) 0%,
+    light-dark(transparent, rgba(246, 198, 90, 0.045)) 26%,
+    transparent 62%
+  );
 }
 
 /* The cast light swells with the flame that throws it, but far slower and far
@@ -1215,20 +1280,27 @@ mark.search__hit.is-current {
   }
 }
 
-.luminary {
-  width: 2.4rem;
-  height: 3.4rem;
+.luminary__figure {
+  display: block;
+  width: 1.9rem;
+  height: 2.7rem;
   overflow: visible;
 
-  --wax: light-dark(transparent, #e4d8bb);
-  --wax-shade: light-dark(transparent, #c0b18d);
-  --wick: light-dark(transparent, #4a4034);
+  /* The candle stands in either scheme, so its wax is drawn in both; only the
+   * flame it carries is the night's. The smoke is the day's, being what a
+   * candle that has just been put out does. */
+  --wax: light-dark(#c8b68d, #e4d8bb);
+  --wax-shade: light-dark(#ab9971, #c0b18d);
+  --wick: light-dark(#6d6151, #4a4034);
   --flame: light-dark(transparent, #f0b93f);
   --ember: light-dark(transparent, #fff1c8);
   --glow: light-dark(transparent, #f6c65a);
+  --smoke: light-dark(#9c9384, transparent);
   --sun-disc: light-dark(#c98a1c, transparent);
   --sun-ray: light-dark(#d2a03a, transparent);
   --sun-glow: light-dark(#e8bb54, transparent);
+  --moon: light-dark(transparent, #cfc6ac);
+  --star: light-dark(transparent, #e8dfc4);
 }
 
 .luminary__wax {
@@ -1278,6 +1350,44 @@ mark.search__hit.is-current {
   stroke: var(--sun-ray);
   stroke-width: 2.4;
   stroke-linecap: round;
+}
+
+.luminary__moon {
+  fill: var(--moon);
+}
+
+.luminary__star {
+  fill: var(--star);
+}
+
+/* What a candle does when it is not lit: one thread of smoke off the wick,
+ * drifting. Drawn in every folio and coloured only by day, when the flame it
+ * replaces is transparent. */
+.luminary__smoke {
+  fill: none;
+  stroke: var(--smoke);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  opacity: 0.55;
+  transform-box: view-box;
+  transform-origin: 20px 27px;
+  animation: drifting 6.1s ease-in-out infinite;
+}
+
+@keyframes drifting {
+  0%,
+  100% {
+    transform: translateX(0) scaleY(1);
+    opacity: 0.5;
+  }
+  35% {
+    transform: translateX(0.7px) scaleY(1.07);
+    opacity: 0.62;
+  }
+  70% {
+    transform: translateX(-0.5px) scaleY(0.95);
+    opacity: 0.42;
+  }
 }
 
 /* A flame is never still: it leans, gutters, and flares, so the timing is
@@ -1351,15 +1461,19 @@ mark.search__hit.is-current {
 
 /* The sun's rays circle it, slowly enough to read as turning rather than
  * spinning, over a corona that swells behind them. */
+/* Both turn about the disc's own centre. An origin left over from where the sun
+ * used to sit sends the rays round an orbit instead of round themselves, which
+ * reads as the whole sun wandering. Keep these in step with `cx`/`cy` in
+ * `luminary/sun.svg`. */
 .luminary__rays {
   transform-box: view-box;
-  transform-origin: 20px 28px;
+  transform-origin: 20px 32px;
   animation: circling 32s linear infinite;
 }
 
 .luminary__corona {
   transform-box: view-box;
-  transform-origin: 20px 28px;
+  transform-origin: 20px 32px;
   animation: breathing 6.5s ease-in-out infinite;
 }
 
@@ -1377,42 +1491,49 @@ mark.search__hit.is-current {
   .luminary__halo,
   .luminary__corona,
   .luminary__rays,
-  .lamp__radiance {
+  .luminary__smoke,
+  .luminary__radiance {
     animation: none;
   }
 }
 
-/* A segmented light / dark / system control, wired by the app script. */
-.theme-toggle {
-  display: inline-flex;
-  background: var(--leaf);
+/* Hand the choice back to the reader's system. It is shown only once a light has
+ * been chosen, which the choice itself records on the document, so a folio being
+ * read by whatever the system asks for carries no control saying so. Quiet
+ * beside the two lights, since it undoes rather than chooses. */
+.theme-reset {
+  display: none;
+  place-items: center;
+  align-self: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-left: 0.15rem;
+  padding: 0;
   border: 1px solid var(--rule);
-  border-radius: 999px;
-  overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
-  font-family: var(--mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
-.theme-toggle button {
-  padding: 0.28rem 0.75rem;
-  border: none;
-  background: transparent;
+  border-radius: 50%;
+  background: var(--leaf);
   color: var(--ink-faint);
-  font: inherit;
-  letter-spacing: inherit;
   cursor: pointer;
 }
 
-.theme-toggle button + button {
-  border-left: 1px solid var(--rule);
+:root[data-theme] .theme-reset {
+  display: grid;
 }
 
-.theme-toggle button[aria-pressed="true"] {
-  background: var(--leaf-sunk);
-  color: var(--rubric);
+.theme-reset:hover,
+.theme-reset:focus-visible {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--rule));
+}
+
+.theme-reset__mark {
+  width: 0.72rem;
+  height: 0.72rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .turn__meta {

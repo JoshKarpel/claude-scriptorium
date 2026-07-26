@@ -1,0 +1,19 @@
+<!-- Day, and the control that asks for it. The sun and the moon are drawn into
+     one box and each pigment is a light-dark() pair whose off-scheme half is
+     transparent, so the scheme raises one and sets the other with no second set
+     of rules and no folio rendered for a single scheme. -->
+<svg class="luminary__figure" viewBox="0 0 40 56" aria-hidden="true" focusable="false">
+  <g class="luminary__sun">
+    <circle class="luminary__corona" cx="20" cy="32" r="11" />
+    <g class="luminary__rays">
+      <path d="M33 32h4M29.2 41.2l2.8 2.8M20 45v4M10.8 41.2l-2.8 2.8M7 32H3M10.8 22.8l-2.8-2.8M20 19v-4M29.2 22.8l2.8-2.8" />
+    </g>
+    <circle class="luminary__disc" cx="20" cy="32" r="8" />
+  </g>
+  <g class="luminary__night">
+    <path class="luminary__moon" d="M20 23a9 9 0 1 0 0 18 11 11 0 0 1 0-18z" />
+    <circle class="luminary__star" cx="31" cy="23" r="1.1" />
+    <circle class="luminary__star" cx="9.5" cy="27" r="0.85" />
+    <circle class="luminary__star" cx="27" cy="43" r="0.8" />
+  </g>
+</svg>

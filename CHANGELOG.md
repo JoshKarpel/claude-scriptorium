@@ -15,15 +15,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   messages come apart far enough to pick one out without moving from where you
   are reading. It answers to the key like everything else in the rail, fading
   the kinds you have set aside. It is drawn as the book itself rather than as
-  another card: a volume bound in tooled leather, raised cords and a lettering
-  piece down its spine, boards standing proud at head and tail, and the painted
-  edges of its leaves between them.
+  another card: the volume shut and lying spine to the left, seen from just
+  above its front board, so the board recedes to a shallow trapezoid at the top,
+  the back board's edge shows at the foot, and the painted edges of a great many
+  leaves fill the space between.
 - A folio now remembers more of how you left it, each under the session it
   belongs to: which kinds the key leaves in play, and how the minimap was
   framed, alongside the folds and the follow mode it already kept.
 - The line a tool search's answer opens on names the tools it found. It came
   back blank, since a search answers with references rather than with text.
-
+- The light a folio is read by is drawn in the corner, and is also the control
+  that chooses it: press the sun to read by day, the candle to read after dark.
+  Whichever light is in force is the one burning, so by day the sun turns its
+  rays and the candle stands smoking, and after dark the moon hangs among its
+  stars and the flame gutters; each casts a faint warm glow across the leaf, so
+  the corner reads as where the page's light comes from. A small reset appears
+  once a light has been chosen, and hands the choice back to the reader's own
+  system. Both lights are drawn into every folio and the scheme lights one, so a
+  folio still reads either way, and neither moves for a reader who asks for less
+  motion.
 - What the harness writes into a session is now on the page rather than hidden
   or dropped: a hook's output, a `CLAUDE.md` or rule file pulled into context,
   the instructions a skill or custom slash command carries, the slash command
@@ -47,11 +57,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the platform default and is never hidden, since it is both the position
   indicator and the drag target, and a reader in a high-contrast mode gets
   their own system's scrollbar instead of this one.
-- A luminary over the theme toggle: a candle whose flame gutters after dark, the
-  sun with its rays circling by day, each casting a faint warm glow across the
-  leaf so the corner reads as the light the page is read by. Both are drawn into
-  every folio and the colour scheme lights one, so a folio still reads either
-  way. Neither moves for a reader who asks for less motion.
 
 ### Changed
 
@@ -88,10 +93,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model (your words, commands, skills, and hooks) and the warm ones what it
   produced (replies, reasoning, tool calls), where before they sought one
   speaker and skipped everything else.
-- Each step names its turn in the URL, so a reload returns you to where you were
-  reading and the position is a link you can share. Stepping also lands at once
-  instead of gliding: a smooth scroll was an animation to wait out, and one that
-  a live session's re-render could interrupt and lose.
+- Every landing names its turn in the URL, so a reload returns you to where you
+  were reading and the position is a link you can share. Navigation also lands
+  at once instead of gliding, the leaps to either end included: over a folio
+  megabytes tall a smooth scroll is an animation to sit through, and one that a
+  live session's re-render can interrupt and lose.
 - The reading controls stand together in one column down the right, led by the
   key, with the search and the navigation dock under it. They were scattered to
   opposite corners, which hid that they are one mechanism.

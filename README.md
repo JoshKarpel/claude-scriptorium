@@ -241,8 +241,13 @@ styles, so the file stays a single self-contained artifact:
 - **Search** the session from the fixed box: matches are highlighted, and
   `‹ ›` or Enter steps through them, opening any collapsed fold that holds a
   hit. It looks only at the kinds the key leaves in play.
-- **Theme** it light, dark, or system; the default follows your OS preference
-  and the choice is remembered across visits.
+- **Press the light you want to read by**, in the corner: the sun for day, the
+  candle for after dark. There is no toggle, because the lights are the control.
+  Whichever is burning is the one in force, so by day the sun is up and the
+  candle stands smoking, and after dark the moon hangs among its stars and the
+  candle is lit. A small reset appears once you have chosen, to hand the choice
+  back to your system; until then the folio follows your OS preference. The
+  choice is remembered across visits.
 - **Copy** any code block, a whole message, or a fold's prose (a skill's
   instructions, a rule, a plan, a subagent's prompt), from the button that appears on
   hover, and hear a quill take it down: the scratch is synthesized on the spot,
@@ -254,16 +259,16 @@ styles, so the file stays a single self-contained artifact:
   URL, so it is a link you can share and a place a reload returns you to.
   Collapse or expand every fold at once from the same dock.
 - **Scrub the minimap** at the foot of the rail, drawn as the bound volume
-  itself: the whole session seen from the fore-edge, a band per message in that
-  message's own pigment, with your place on the leaf drawn over it. Drag along it
-  to travel, and turn the wheel over it to zoom the map alone, so a long
-  session's messages come apart far enough to pick one out without moving from
-  where you are reading. It honours the key as well, fading what you have set
-  aside.
+  itself: the session shut and seen from above its front board, a band per
+  message in that message's own pigment among the leaves, with your place on the
+  leaf drawn over it. Drag along it to travel, and turn the wheel over it to zoom
+  the map alone, so a long session's messages come apart far enough to pick one
+  out without moving from where you are reading. It honours the key as well,
+  fading what you have set aside.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
-- **Read by candlelight** after dark, or by the sun in the day: the luminary
-  over the theme toggle flickers or turns its rays, and casts a faint glow
-  across the leaf. It holds still if you prefer less motion.
+
+Whichever light is burning flickers or turns its rays and casts a faint glow
+across the leaf, and holds still if you prefer less motion.
 
 On wide screens an expanded tool call holding a diff or code block unfurls past
 the reading column so wide content fits without sideways scrolling, while prose
@@ -282,7 +287,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | key | Which kinds of panel are in play, and what each edge's pigment means |
 | rail | The column of cards the key leads: search, dock, and minimap |
 | drollery | A marginal creature drawn in the border |
-| luminary | The candle or sun the folio is read by, and the light it casts |
+| luminary | A light the folio is read by, and the control that chooses it |
 | colophon | Generation metadata, shown in the plaque |
 | illumination | The theme layer |
 

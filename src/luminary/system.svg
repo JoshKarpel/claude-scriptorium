@@ -1,0 +1,8 @@
+<!-- Hand the choice back to the reader's own system: a turn of the ring, which
+     is what a reset looks like everywhere else. It only appears once a light has
+     been chosen, so it never asks a question the reader has not already
+     answered. -->
+<svg class="theme-reset__mark" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+  <path d="M13.1 8.6A5.2 5.2 0 1 1 11.8 4.4" />
+  <path d="M13.4 1.9v2.9h-2.9" />
+</svg>

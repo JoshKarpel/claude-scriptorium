@@ -152,6 +152,13 @@ pub struct Labour {
 const TOOK_MARK: &str = "<!--folio:took-->";
 const SIZE_MARK: &str = "<!--folio:size-->";
 
+/// The lights a folio can be read by, which are also the controls that choose
+/// between them, and the turn of the ring that hands the choice back to the
+/// reader's system. Inline SVG, so they take the folio's own pigments.
+const SUN: &str = include_str!("luminary/sun.svg");
+const CANDLE: &str = include_str!("luminary/candle.svg");
+const SYSTEM: &str = include_str!("luminary/system.svg");
+
 /// Fills a finished folio's own cost into its plaque.
 ///
 /// The numbers displace the placeholders they replace, so the size a folio
@@ -484,26 +491,43 @@ impl<'a> Scribe<'a> {
                             }
                         }
                     }
-                    // Presentation controls, opposite the navigation dock:
-                    // light / dark / system, wired by the app script and
-                    // defaulting to the reader's system preference.
+                    // Presentation controls, opposite the navigation dock: the
+                    // lights the folio can be read by, which are also the
+                    // controls that choose between them. There is no separate
+                    // toggle to label, because the reader presses the light they
+                    // want: the sun for day, the candle for after dark.
+                    //
+                    // Which of them is *lit* is the scheme's to say, not the
+                    // press's: by day the sun burns and the candle stands
+                    // smoking, after dark the moon hangs and the candle is lit.
+                    // That is one set of `light-dark()` pigments (see the
+                    // stylesheet), so a folio still reads either way with no
+                    // second set of rules and nothing rendered for one scheme
+                    // alone. What the press changes is which scheme is in force.
+                    //
+                    // Each carries its own radiance, the light it throws across
+                    // the leaf, so the glow comes from whichever is burning.
+                    // Drawn rather than lettered, so each needs the name it used
+                    // to spell out: a figure says nothing to a reader who cannot
+                    // see it.
                     div .controls {
-                        // The light the folio is read by, standing over the
-                        // control that chooses it: a candle after dark, the sun
-                        // by day. Purely decorative, and inline rather than a
-                        // background image so it can take the folio's own
-                        // pigments and be animated. The radiance is the light it
-                        // casts over the leaf, and is a sibling rather than a
-                        // fixed overlay of its own so it stays centred on the
-                        // flame wherever the corner puts it.
-                        div .lamp aria-hidden="true" {
-                            span .lamp__radiance {}
-                            (PreEscaped(include_str!("luminary.svg")))
-                        }
-                        div .theme-toggle role="group" aria-label="colour theme" {
-                            button type="button" data-theme-choice="light" { "light" }
-                            button type="button" data-theme-choice="system" aria-pressed="true" { "system" }
-                            button type="button" data-theme-choice="dark" { "dark" }
+                        div .luminaries role="group" aria-label="colour theme" {
+                            button .luminary type="button" data-theme-choice="light"
+                                aria-label="read by daylight" title="read by daylight" {
+                                span .luminary__radiance .luminary__radiance--day {}
+                                (PreEscaped(SUN))
+                            }
+                            button .luminary type="button" data-theme-choice="dark"
+                                aria-label="read by candlelight" title="read by candlelight" {
+                                span .luminary__radiance .luminary__radiance--night {}
+                                (PreEscaped(CANDLE))
+                            }
+                            // Only of use once a light has been chosen, so the
+                            // stylesheet shows it only then, keyed off the
+                            // `data-theme` the choice sets on the document.
+                            button .theme-reset type="button" data-theme-choice="system"
+                                aria-pressed="true" aria-label="follow the system"
+                                title="follow the system" { (PreEscaped(SYSTEM)) }
                         }
                     }
                     main .folio {

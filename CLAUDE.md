@@ -761,9 +761,8 @@ cards led by the **key**, with the search, the navigation dock, and the minimap
 stacked under it. They are in one column because they are one mechanism, the key
 governing the three below it, and standing them together is what says so;
 appearance sits on the left (a metadata plaque in the top corner revealing the
-title, facts, and colophon on hover or focus; and the light/dark/system toggle
-bottom, with the luminary standing over it). There is no in-column header or
-footer.
+title, facts, and colophon on hover or focus; and the luminaries bottom). There
+is no in-column header or footer.
 
 **The key is a control in its own right, not the search's.** It is a chip per
 `PanelKind::EVERY`, each carrying its own kind's pigment so it doubles as the
@@ -798,14 +797,35 @@ already steps to and the panel's own number already links to, so a stop per pane
 in the tab order would bury both.
 
 It is also the one card in the rail that is **not cut as a card**: no leaf, no
-border, no shared radius. It is drawn as the volume itself, seen from the
-fore-edge with its spine toward the reading column: tooled leather with five
-raised cords and a lettering piece, boards standing proud at head and tail (a
-binding's squares, which is why its padding is uneven), and the painted edges of
-the leaves between them, ruled with a hairline every other pixel. All of it is
-gradients rather than an image, so it costs no bytes and resolves `light-dark()`
-like the rest of the palette. The silhouette is what carries the metaphor, so
-don't put it back in a rounded rectangle.
+border, no shared radius. It is drawn as the volume itself, shut, lying with its
+spine to the left, seen from above the front board and off to the spine side.
+
+**That viewpoint is one vector, and every face is cut from it.** `--away-x` and
+`--away-y` are how far up and to the left a thing goes as it recedes, so the
+front board's depth on screen and the spine's width on screen are the same
+recession seen twice: both faces are parallelograms sheared by it (`clip-path`
+on `.minimap::before` and `::after`), and they share a corner instead of meeting
+at a seam. Change the angle by changing those two values, not by redrawing a
+polygon. The head of the block, `.minimap__track`, is the one face square to the
+reader and **must stay an axis-aligned rectangle**: the scrub measures the
+pointer against its box, so shearing it would put the bands where the pointer
+isn't. The back board shows only its thickness at the foot.
+
+A trapezoid tapering both ways was tried first, which is the projection for a
+reader standing square in front, and it leaves the spine a line: a line says
+nothing, and the corner where it met the tapering board read as a notch.
+
+**The proportion is the whole of it.** A session is a great many leaves and the
+binding around them is a few thousandths of that, so the leather is a handful of
+pixels and everything else is paper, ruled with a hairline every other pixel. A
+wide spine with cords tooled across it was tried and read as a picture frame,
+which is what any binding drawn wide enough to show detail will do at this
+scale; a pale wash meant to round the block read as a lamp shining out of the
+rail, so the only light in it is on the board that faces upward, and the only
+other modelling is the shadow the binding casts on the leaves. All of it is
+gradients and a clip-path rather than an image, so it costs no bytes and
+resolves `light-dark()` like the rest of the palette. The silhouette is what
+carries the perspective, so don't put it back in a rectangle.
 
 A band takes its kind's pigment from the same declaration the key's chips do
 (`--kind-hue`), since both stand for a panel rather than being one; a kind that
@@ -842,18 +862,36 @@ and then stayed on that panel through every step after. The deep-link handler
 restores such a hash on load, so a landing gets reload-correctness by joining
 that path rather than adding one.
 
-The luminary (`luminary.svg`, inline in the appearance corner) is the light the
-folio is read by: a guttering candle after dark, the sun with its rays circling
-by day. Both are drawn into one box and every pigment is a `light-dark()` pair
-whose off-scheme half is `transparent`, so the scheme lights one and puts the
-other out with no second set of rules and no folio rendered for one scheme
-alone. Its radiance, a very faint circle reaching across the leaf, is a sibling
-inside the lamp rather than a fixed overlay, so it stays centred on the flame
-wherever the corner puts it; it lifts the parchment by ~14/255 beside the lamp
-and nothing at all at the far corner. Sunlight brightens what it falls on and a
+**The luminaries are the light the folio is read by and the control that
+chooses it**, which is one thing rather than two: a sun and a candle in the
+appearance corner (`src/luminary/*.svg`, inline so they take the palette), and
+the reader presses the one they want to read by. There is no toggle, no labels,
+and no third figure for "system", because the system names no light: it is
+offered instead as a small **reset** beside them, shown only once a light has
+been chosen and keyed purely off the `data-theme` that choice writes on the
+document, so the script knows nothing about it.
+
+**Which light is burning is the scheme's to say, not the press's.** By day the
+sun is up and the candle stands smoking; after dark the moon hangs among its
+stars and the candle is lit. That is one set of `light-dark()` pigment pairs,
+each with `transparent` on its off-scheme half, so the scheme raises one and
+sets the other with no second set of rules and no folio rendered for a single
+scheme, and a folio read under `system` shows the right scene without being told
+which it is.
+
+A figure's radiance, the very faint circle reaching across the leaf, sits inside
+the figure that throws it rather than being a fixed overlay, so the glow comes
+from whichever is burning; it lifts the parchment by ~14/255 beside the lamp and
+nothing at all at the far corner. Sunlight brightens what it falls on and a
 candle warms it, so the day's wash is a pale warm white where the night's is the
-flame's own amber: that amber over a light page stains rather than lights. All
-of it stills under `prefers-reduced-motion`, which is what that query is for.
+flame's own amber: that amber over a light page stains rather than lights. All of
+it stills under `prefers-reduced-motion`, which is what that query is for.
+
+The animated parts turn about points named in the *stylesheet* while the shapes
+they turn are in the *SVG*, so those two must be kept in step: the rays and the
+corona spin about the disc's `cx`/`cy`, and an origin left over from where the
+sun used to sit sends them round an orbit rather than round themselves, which
+reads as the whole sun wandering off its own centre.
 
 The dock's follow control (`tail -f`: re-pin the newest message's start on each
 reload until the reader takes control by scrolling or by loading a `#turn-N`
@@ -944,9 +982,9 @@ a later hand annotates a manuscript). Markup classes continue it with
 `marginalia` (a collapsible tool call or result), `drollery` (a marginal
 creature), `versal` (the dropped initial that opens a speaker's paragraph),
 `key` (which kinds of panel are in play, and what each edge's pigment means),
-`rail` (the column of cards the key leads), `luminary` (the candle or sun the
-folio is read by, and its `radiance` over the leaf), and `illumination` (the
-theme layer).
+`rail` (the column of cards the key leads), `luminary` (a light the folio is
+read by, which is also the control that chooses it, and its `radiance` over the
+leaf), and `illumination` (the theme layer).
 
 ## Testing against real data
 
