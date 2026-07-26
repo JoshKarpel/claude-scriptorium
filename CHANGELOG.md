@@ -16,6 +16,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is readied when a copy button is first hovered, and the sound is made after
   the copy is already underway.
 
+### Changed
+
+- The dock's follow control is set only into a folio that `serve` is serving.
+  Only that folio is re-read and re-rendered as the session is written; a folio
+  written to a file or published as a gist is a snapshot, so following it
+  promised an update that could never arrive. Jumping to the end still works
+  everywhere, and is now just a jump there rather than switching following on.
+
 ### Fixed
 
 - A marginalia left open in one folio no longer opens panels in another, and

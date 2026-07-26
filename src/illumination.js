@@ -479,7 +479,13 @@
 
     // --- Follow (tail -f): keep the newest message's start pinned across the
     // reloads a live session drives, until the reader scrolls away.
+    //
+    // Only a served folio can gain a message, so only a served folio carries
+    // the toggle, and its presence is what says following is possible here. A
+    // written one is a snapshot of a session that may have ended long ago:
+    // there is nothing to follow, so jumping to its end is just a jump.
     const tailButton = dock.querySelector('[data-tail="toggle"]');
+    const canFollow = Boolean(tailButton);
 
     const visible = () =>
       Array.from(container.querySelectorAll(".turn")).filter(
@@ -494,6 +500,7 @@
     };
 
     const readTail = () => {
+      if (!canFollow) return false;
       try {
         return localStorage.getItem(perFolio(TAIL)) === "1";
       } catch {
@@ -518,10 +525,12 @@
     };
 
     const setTail = (on, behavior) => {
-      tailing = on;
-      try {
-        localStorage.setItem(perFolio(TAIL), on ? "1" : "0");
-      } catch {}
+      tailing = canFollow && on;
+      if (canFollow) {
+        try {
+          localStorage.setItem(perFolio(TAIL), on ? "1" : "0");
+        } catch {}
+      }
       paintTail();
       if (on) scrollToEnd(behavior);
     };

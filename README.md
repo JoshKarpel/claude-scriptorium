@@ -53,6 +53,11 @@ Locally serve a session over HTTP with live reload, for watching a session
 claude-scriptorium serve <session-id>.jsonl
 ```
 
+A served folio re-renders as the session is written, so its dock carries a
+follow control that keeps the newest message pinned, like `tail -f`. A written
+or published folio is a snapshot and never gains a message, so it offers no
+such control.
+
 ### Sharing a folio
 
 Publish a folio to a GitHub gist via the [`gh`](https://cli.github.com/) CLI,

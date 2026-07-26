@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use claude_scriptorium::{
     render,
-    render::{Colophon, Fonts, Labour, Scribe},
+    render::{Colophon, Delivery, Fonts, Labour, Scribe},
     transcript::{Content, Folio, Role},
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
@@ -19,7 +19,7 @@ fn highlighter() -> SyntectAdapter {
 }
 
 fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
-    set(folio, highlighter, Fonts::Fitted).0
+    set(folio, highlighter, Fonts::Fitted, Delivery::Static).0
 }
 
 /// Sets a folio, handing back both the markup and the characters that drove it
@@ -28,8 +28,9 @@ fn set(
     folio: &Folio,
     highlighter: &SyntectAdapter,
     fonts: Fonts,
+    delivery: Delivery,
 ) -> (String, BTreeMap<char, usize>) {
-    let scribe = Scribe::new(highlighter, TimeZone::UTC, fonts);
+    let scribe = Scribe::new(highlighter, TimeZone::UTC, fonts, delivery);
     let colophon = Colophon {
         generated: "2026-03-12T09:15:00Z".parse::<Timestamp>().unwrap(),
         tool: "claude-scriptorium",
@@ -545,6 +546,23 @@ fn the_header_offers_a_light_dark_system_theme_toggle() {
 }
 
 #[test]
+fn only_a_served_folio_offers_to_follow_the_session() {
+    let highlighter = highlighter();
+    let (statik, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);
+    let (served, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Served);
+
+    // The button itself, not `data-tail`: the app script carries that as a
+    // selector, so a looser match finds the folio's own JS in either folio.
+    const TAIL: &str = r#"<button class="dock__btn dock__btn--tail""#;
+    // Only `serve` re-reads the session, so only a served folio can gain a
+    // message to follow. Both still jump to the end, which is just a jump.
+    assert!(!statik.contains(TAIL));
+    assert!(served.contains(TAIL));
+    assert!(statik.contains(r#"data-nav="end""#));
+    assert!(served.contains(r#"data-nav="end""#));
+}
+
+#[test]
 fn the_body_names_the_session_so_stored_state_is_scoped_to_this_folio() {
     let html = render(&fixture(), &highlighter());
 
@@ -846,7 +864,7 @@ fn embedded_font_bytes(html: &str) -> usize {
 
 #[test]
 fn a_folio_inside_the_cut_faces_carries_only_them() {
-    let (html, reached) = set(&fixture(), &highlighter(), Fonts::Fitted);
+    let (html, reached) = set(&fixture(), &highlighter(), Fonts::Fitted, Delivery::Static);
 
     assert!(reached.is_empty(), "nothing in the fixture is dropped");
     assert!(
@@ -859,8 +877,8 @@ fn a_folio_inside_the_cut_faces_carries_only_them() {
 #[test]
 fn asking_for_the_whole_faces_embeds_them_whatever_the_folio_sets() {
     let highlighter = highlighter();
-    let (cut, _) = set(&fixture(), &highlighter, Fonts::Fitted);
-    let (whole, reached) = set(&fixture(), &highlighter, Fonts::Whole);
+    let (cut, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);
+    let (whole, reached) = set(&fixture(), &highlighter, Fonts::Whole, Delivery::Static);
 
     assert!(reached.is_empty(), "the folio itself still needs nothing");
     assert!(embedded_font_bytes(&whole) > embedded_font_bytes(&cut) * 3);
@@ -873,8 +891,8 @@ fn beyond_cut() -> Folio {
 #[test]
 fn a_character_the_cut_faces_dropped_pulls_in_the_whole_ones() {
     let highlighter = highlighter();
-    let (html, reached) = set(&beyond_cut(), &highlighter, Fonts::Fitted);
-    let (whole, _) = set(&beyond_cut(), &highlighter, Fonts::Whole);
+    let (html, reached) = set(&beyond_cut(), &highlighter, Fonts::Fitted, Delivery::Static);
+    let (whole, _) = set(&beyond_cut(), &highlighter, Fonts::Whole, Delivery::Static);
 
     // Junicode carries Cyrillic upstream, and the cut faces drop it, so setting
     // it in the cut faces would render worse than before they were cut.
@@ -888,7 +906,12 @@ fn a_character_the_cut_faces_dropped_pulls_in_the_whole_ones() {
 
 #[test]
 fn a_character_no_face_ever_carried_is_not_a_reason_to_grow() {
-    let (_, reached) = set(&beyond_cut(), &highlighter(), Fonts::Fitted);
+    let (_, reached) = set(
+        &beyond_cut(),
+        &highlighter(),
+        Fonts::Fitted,
+        Delivery::Static,
+    );
 
     // The fixture also sets CJK and an emoji. No embedded face has ever carried
     // either, so both fall back to the reader's own fonts exactly as they did

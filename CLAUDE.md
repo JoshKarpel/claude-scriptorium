@@ -464,13 +464,21 @@ The reading column is pure transcript; the folio's chrome floats in the four
 corners, all `position: fixed` and living in the shell of the markup rather than
 the panel stream. Reading controls sit on the right (search top, and a
 navigation dock bottom that steps between user/assistant messages, skipping tool
-and thinking panels, jumps to the end, follows new messages like `tail -f`
-(re-pinning the newest message's start on each reload until the reader takes
-control by scrolling or by loading a `#turn-N` deep link, state kept in
-`localStorage`), and folds every marginalia); appearance
+and thinking panels, jumps to the end, and folds every marginalia); appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
 facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
 There is no in-column header or footer.
+
+The dock's follow control (`tail -f`: re-pin the newest message's start on each
+reload until the reader takes control by scrolling or by loading a `#turn-N`
+deep link) is set only into a **served** folio, which is what `Delivery` on the
+`Scribe` decides. `serve` re-reads the session and re-renders on every load, so
+a served folio gains messages under its reader; a written or published one is a
+snapshot of a session that may have ended a year ago, and following it would
+promise an update that can never come. The control's *presence* is what tells
+the app script this folio can follow, so there is one source of truth rather
+than a flag in each: no control means jumping to the end stays a jump, and no
+follow state is stored.
 
 What the app script remembers is split by what it belongs to. The theme is the
 reader's, and holds across everything they open, so it keeps one key. Which
