@@ -8,6 +8,7 @@ use comrak::{
 };
 use jiff::{Timestamp, Zoned, tz::TimeZone};
 use maud::{DOCTYPE, Markup, PreEscaped, html};
+use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{
@@ -145,6 +146,13 @@ impl<'a> Scribe<'a> {
     pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> Markup {
         let title = format!("folio {}", folio.session_id());
         let panels = folio.panels();
+        // A panel's cost is dominated by highlighting its tool bodies, where a
+        // syntax's regexes compile the first time that language is met, so the
+        // panels are set concurrently and several languages compile at once
+        // rather than each waiting on the last. Collected in order, so the
+        // folio reads as the session ran.
+        let rendered_panels: Vec<Markup> =
+            panels.par_iter().map(|panel| self.panel(panel)).collect();
         let left_border = margin_strip(border_seed(folio.session_id(), "left"));
         let right_border = margin_strip(border_seed(folio.session_id(), "right"));
         html! {
@@ -267,8 +275,8 @@ impl<'a> Scribe<'a> {
                         }
                     }
                     main .folio {
-                        @for panel in &panels {
-                            (self.panel(panel))
+                        @for panel in &rendered_panels {
+                            (panel)
                         }
                     }
                 }

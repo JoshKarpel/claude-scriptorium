@@ -16,6 +16,9 @@ just render <session>  # write a session to HTML (CLI `render` subcommand)
 just serve <session>   # live-reload dev server, rebuilds on source change
 just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
 just bench             # hyperfine over the release binary rendering the fixtures
+just bench-huge        # the same, over generated sessions of megabytes
+just setup-profiling   # perf and the kernel settings just profile needs (once, needs sudo)
+just profile <session> # sample a render and print where the time went
 just fix               # pre-commit across the staged tree
 ```
 
@@ -32,6 +35,52 @@ over the fixtures, so a run measures the whole artifact a reader waits on
 that claims to make rendering faster; take a reading before and after, since a
 folio's own plaque reports a single run and says nothing about variance.
 
+`just bench-huge` is the same measurement at length, over sessions of 5 and 20
+MB that `scripts/synthetic_session.py` deals out from the committed fixtures'
+own turns (`just fixtures` writes them under `target/fixtures`, and they are
+generated rather than committed because they are millions of bytes of repeated
+fixture). The two readings are not interchangeable, so take both. A short
+session is dominated by compiling a language's highlighting regexes the first
+time it is met; a long one has amortized that away and is dominated by the
+per-byte work that follows, with thousands of panels to set rather than dozens.
+A change can move one and leave the other alone.
+
+`just bench` says a change is slower; `just profile` says what it is spending
+the time on. It samples a render and prints a text report (self time by crate
+and by symbol, time on the stack, and the hottest stacks) rather than opening a
+UI, so the reading is something an agent can act on directly; the same recording
+opens in the Firefox Profiler with `samply load target/profile/profile.json`
+when a human wants the timeline and flamegraph. Both are measurements of the
+whole binary, so read them together: a stack that is 40% of a profile is only
+worth attacking if `just bench` says the render is slow enough to care.
+`just setup-profiling` installs perf and writes the two kernel settings sampling
+needs, once per machine.
+
+It records the `profiling` cargo profile (release, plus the debug info a
+profiler needs to name a frame, which is why it isn't just `release`) and runs
+the render several times into one recording, since a single render is over in a
+couple of hundred milliseconds and a hundred samples say nothing. The recorder
+is `perf`, with the binary built under `-Cforce-frame-pointers=yes` so perf can
+walk the frame-pointer chain in the kernel:
+[samply](https://github.com/mstange/samply)'s own sampler unwinds a fixed 32 KB
+copy of each sample's stack, and a render's stacks are deep enough in recursive
+regex compilation that four fifths of them lost every frame above the window,
+which quietly turned the inclusive figures into undercounts. The report leads
+with the share of stacks that reached a common root, so that failure is visible
+rather than inferred. samply still reads the `perf.data` (`samply import`), so
+the report and the UI are unchanged.
+
+`scripts/profile_report.py` folds that recording: it resolves the binary's own
+addresses with `addr2line`, so frames inlined into an outer symbol are recovered
+rather than charged to it (without that, an optimized render reads as little but
+`main`), and names shared-library frames from the dynamic symbol table with
+`nm`, sizes included, because a stripped system library has no debug info and
+addr2line then answers with the nearest preceding exported symbol rather than
+admitting it doesn't know: that is how a memmove variant came back as
+`_dl_mcount_wrapper` and took 8% of a render with it. An address inside an
+unexported function stays an address, and the caller above it in the stack
+table is what says which one it is.
+
 `just format` runs `cargo +nightly fmt`, not stable. `rustfmt.toml` sets
 unstable options (`imports_granularity`, `group_imports`,
 `reorder_impl_items`), which stable rustfmt ignores with a warning rather
@@ -40,6 +89,13 @@ than an error, so formatting silently diverges from CI if you run stable.
 `rust-toolchain.toml` pins 1.96.0, but a `RUSTUP_TOOLCHAIN` environment
 variable (mise sets one) overrides the file. The pin therefore takes effect in
 CI and often not locally.
+
+`mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
+`just`, `samply`, `uv`), so `mise install` is enough to run any of them. It
+deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
+is what resolves the `+nightly` that `just format` needs. `fswatch`, which
+`just serve` and `just watch` need, has no mise package and stays a system
+dependency.
 
 When a change is user-visible (a new subcommand or flag, changed output, a bug
 fix), add an entry to `CHANGELOG.md` under the current unreleased version,
@@ -77,6 +133,18 @@ testable without mocks. Keep it that way when adding features: a renderer that
 reads the clock or touches the filesystem breaks the test suite's ability to
 assert on exact output. Interactive I/O (the picker, browser-opening) lives in
 the shell and its modules, never in the renderer.
+
+That purity is also what makes a render parallel: `Scribe::folio` sets the
+panels with rayon before writing the document around them, collected in order so
+the folio reads the same. It is worth having because of where a render's time
+goes. Highlighting is around nine tenths of it, and nearly all of that is a
+syntax's regexes compiling the first time its language is met (syntect compiles
+them lazily, through a `once_cell::sync` cell, so the whole session shares one
+compile per pattern and a thread that wants a pattern another is already
+compiling waits for it rather than repeating it). Sequentially, meeting a new
+language stops everything; in parallel, the languages compile alongside each
+other. A `Scribe` that read the clock or held mutable state would take that away
+as surely as it would break the tests.
 
 A folio states what its own render cost, in the plaque's colophon. Neither
 figure can be known while the markup is being written, so `Scribe::folio` leaves

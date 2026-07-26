@@ -6,7 +6,11 @@ set ignore-comments
 pre-commit-args := ""
 cargo-test-args := ""
 watch-paths := "src Cargo.toml justfile"
-bench-fixtures := "session,playground"
+bench-fixtures := "tests/fixtures/session.jsonl,tests/fixtures/playground.jsonl"
+bench-warmup := "3"
+huge-megabytes := "5 20"
+profile-rate := "2000"
+profile-iterations := "10"
 
 fonts-dir := "src/fonts"
 junicode-ref := "v2.226"
@@ -76,10 +80,104 @@ bench *args:
     trap 'rm -rf "$out"' EXIT
     # Timed through the binary rather than in-process, so a run measures the
     # whole artifact a reader waits on: parse, render, and write.
-    hyperfine --warmup 3 --parameter-list fixture {{ bench-fixtures }} {{ args }} \
-      "target/release/claude-scriptorium render tests/fixtures/{fixture}.jsonl -o $out/"
+    hyperfine --warmup {{ bench-warmup }} --parameter-list fixture {{ bench-fixtures }} {{ args }} \
+      "target/release/claude-scriptorium render {fixture} -o $out/"
 
 alias b := bench
+
+# The committed fixtures are short, where a session that runs for megabytes
+# spends its time differently: a language's regexes compile once, so length
+# amortizes what dominates a small render. These are written rather than
+# committed, being millions of bytes of dealt-out fixture turns.
+
+[doc("Write the large generated benchmark sessions under target/fixtures")]
+[group("rust")]
+fixtures:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for megabytes in {{ huge-megabytes }}; do
+      uv run scripts/synthetic_session.py --megabytes "$megabytes" \
+        --output "target/fixtures/huge-${megabytes}mb.jsonl"
+    done
+
+[doc("Benchmark rendering the large generated sessions, e.g. `just bench-huge --runs 3`")]
+[group("rust")]
+bench-huge *args: fixtures
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sessions=""
+    for megabytes in {{ huge-megabytes }}; do
+      sessions+="${sessions:+,}target/fixtures/huge-${megabytes}mb.jsonl"
+    done
+    just bench-fixtures="$sessions" bench-warmup=1 bench --runs 5 {{ args }}
+
+# perf and two kernel settings, written under /etc/sysctl.d so they survive a
+# reboot (and, under WSL, a shutdown of the VM). `perf_event_paranoid` decides
+# whether an unprivileged user may sample a process it owns at all;
+# `perf_event_max_stack` is how many frames the kernel walks per sample, and its
+# default of 127 truncates a render's deeply recursive regex compilation.
+
+[doc("Install perf and the kernel settings `just profile` needs (needs sudo)")]
+[group("rust")]
+[linux]
+setup-profiling:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! ls /usr/lib/linux-tools/*/perf >/dev/null 2>&1 && ! command -v perf >/dev/null 2>&1; then
+      command -v apt-get >/dev/null 2>&1 \
+        || { echo "install perf with your distribution's package manager, then rerun" >&2; exit 1; }
+      sudo apt-get install -y linux-tools-generic
+    fi
+    printf '%s\n' 'kernel.perf_event_paranoid = 1' 'kernel.perf_event_max_stack = 1024' \
+      | sudo tee /etc/sysctl.d/99-perf-event.conf > /dev/null
+    sudo sysctl --system > /dev/null
+    sysctl kernel.perf_event_paranoid kernel.perf_event_max_stack
+
+# Sampled through the `profiling` build (release code plus the debug info a
+# profiler needs to name a frame), over several iterations, since one render is
+# over in a couple of hundred milliseconds and a hundred samples say nothing.
+#
+# Recorded by perf rather than samply's own sampler, and built with frame
+# pointers for it to walk: samply unwinds a fixed 32 KB copy of each sample's
+# stack and loses every frame above that, which here is four fifths of them, so
+# a stack would root in the middle of regex compilation and the inclusive
+# figures would undercount. perf walks the frame-pointer chain in the kernel
+# with no such window. samply still reads the recording, for the report and for
+# `samply load`.
+
+[doc("Profile rendering a session and print a report, e.g. `just profile tests/fixtures/session.jsonl`")]
+[group("rust")]
+profile *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tool in samply uv; do
+      command -v "$tool" >/dev/null 2>&1 || { echo "just profile needs $tool (see mise.toml)" >&2; exit 1; }
+    done
+    # Ubuntu's /usr/bin/perf is a wrapper that refuses to run when it has no
+    # build matching the running kernel, which is every WSL kernel; the
+    # versioned binary it declines to exec works fine.
+    perf="$(command -v perf || true)"
+    if [[ -z "$perf" ]] || ! "$perf" --version > /dev/null 2>&1; then
+      perf="$(ls /usr/lib/linux-tools/*/perf 2> /dev/null | head -1)"
+    fi
+    [[ -x "${perf:-}" ]] || { echo "just profile needs perf: run just setup-profiling" >&2; exit 1; }
+    session="{{ args }}"
+    session="${session:-tests/fixtures/playground.jsonl}"
+    RUSTFLAGS="-Cforce-frame-pointers=yes" cargo build --profile profiling -q
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    mkdir -p target/profile
+    render="target/profiling/claude-scriptorium render $session -o $(printf %q "$out")/ > /dev/null"
+    "$perf" record --call-graph fp --freq {{ profile-rate }} --output target/profile/perf.data \
+      -- bash -c "for _ in \$(seq {{ profile-iterations }}); do $render; done"
+    samply import target/profile/perf.data --save-only --no-open \
+      -o target/profile/profile.json > /dev/null
+    uv run scripts/profile_report.py target/profile/profile.json \
+      --binary target/profiling/claude-scriptorium --label "render $session" \
+      | tee target/profile/report.txt
+    echo >&2
+    echo "report: target/profile/report.txt" >&2
+    echo "flamegraph and timeline: samply load target/profile/profile.json" >&2
 
 [doc("Serve a session with live reload, rebuilding and restarting on source changes")]
 [group("rust")]

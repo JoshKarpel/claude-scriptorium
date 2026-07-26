@@ -17,6 +17,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A render no longer base64s the embedded fonts. They are constants, so they are
   encoded into their `@font-face` block at compile time, and every render starts
   from the finished block.
+- Panels are set in parallel. Almost all of a render is syntax highlighting, and
+  almost all of that is a syntax's regexes compiling the first time its language
+  is met, so compiling one language no longer holds up meeting the next: a
+  session with code in a dozen languages renders about three times faster, one
+  with a single language about as much again, and a session with no code blocks
+  is unchanged. The folio itself is byte for byte what it was.
 
 ## [0.1.3]
 

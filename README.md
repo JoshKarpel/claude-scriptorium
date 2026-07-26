@@ -212,14 +212,24 @@ just setup   # installs nightly rustfmt and the pre-commit hook
 ```
 
 ```bash
-just check   # format, lint, and test
+just check      # format, lint, and test
 just test
 just render <session>
-just bench   # time rendering the fixtures, with hyperfine
+just bench      # time rendering the fixtures, with hyperfine
+just bench-huge # the same, over generated sessions of megabytes
+just profile    # sample a render and report where the time went, with perf and samply
 ```
+
+Profiling needs perf and two kernel settings; `just setup-profiling` installs
+them (once per machine, with sudo).
 
 Formatting runs under nightly rustfmt, since `rustfmt.toml` uses unstable
 options. Committing runs the same formatting and linting through pre-commit.
+
+`mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
+`just`, `samply`, `uv`), so [mise](https://mise.jdx.dev) users get all of them
+with `mise install`. The Rust toolchain comes from `rust-toolchain.toml`
+instead, since rustup is what resolves the nightly rustfmt.
 
 ## Fonts
 
