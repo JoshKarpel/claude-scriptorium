@@ -546,6 +546,25 @@ fn the_header_offers_a_light_dark_system_theme_toggle() {
 }
 
 #[test]
+fn the_appearance_corner_carries_a_candle_and_a_sun() {
+    let html = render(&fixture(), &highlighter());
+
+    // Both are set into every folio, and the scheme decides which is lit: each
+    // pigment is a light-dark() pair whose off-scheme half is transparent, so
+    // no folio is rendered for one scheme alone.
+    assert!(html.contains(r#"class="luminary__candle""#));
+    assert!(html.contains(r#"class="luminary__sun""#));
+    assert!(html.contains("--flame: light-dark(transparent,"));
+    assert!(html.contains("--sun-disc: light-dark(#c98a1c, transparent)"));
+    // Decoration, so it is kept from assistive tech entirely.
+    assert!(html.contains(r#"<div class="lamp" aria-hidden="true">"#));
+    assert!(html.contains(r#"<svg class="luminary" viewBox="0 0 40 56" aria-hidden="true""#));
+    // The light it casts over the leaf sits inside the lamp, so it stays
+    // centred on the flame rather than on a corner guessed in the stylesheet.
+    assert!(html.contains(r#"<span class="lamp__radiance"></span>"#));
+}
+
+#[test]
 fn only_a_served_folio_offers_to_follow_the_session() {
     let highlighter = highlighter();
     let (statik, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);

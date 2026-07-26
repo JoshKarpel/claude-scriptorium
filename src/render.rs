@@ -400,6 +400,18 @@ impl<'a> Scribe<'a> {
                     // light / dark / system, wired by the app script and
                     // defaulting to the reader's system preference.
                     div .controls {
+                        // The light the folio is read by, standing over the
+                        // control that chooses it: a candle after dark, the sun
+                        // by day. Purely decorative, and inline rather than a
+                        // background image so it can take the folio's own
+                        // pigments and be animated. The radiance is the light it
+                        // casts over the leaf, and is a sibling rather than a
+                        // fixed overlay of its own so it stays centred on the
+                        // flame wherever the corner puts it.
+                        div .lamp aria-hidden="true" {
+                            span .lamp__radiance {}
+                            (PreEscaped(include_str!("luminary.svg")))
+                        }
                         div .theme-toggle role="group" aria-label="colour theme" {
                             button type="button" data-theme-choice="light" { "light" }
                             button type="button" data-theme-choice="system" aria-pressed="true" { "system" }

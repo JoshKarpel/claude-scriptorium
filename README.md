@@ -185,6 +185,9 @@ styles, so the file stays a single self-contained artifact:
   (skipping tool and thinking panels), and collapse or expand every tool call at
   once.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
+- **Read by candlelight** after dark, or by the sun in the day: the luminary
+  over the theme toggle flickers or turns its rays, and casts a faint glow
+  across the leaf. It holds still if you prefer less motion.
 
 On wide screens an expanded tool call holding a diff or code block unfurls past
 the reading column so wide content fits without sideways scrolling, while prose
@@ -200,6 +203,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | quire | The gathering of folios belonging to one project |
 | marginalia | A collapsible tool call or result |
 | drollery | A marginal creature drawn in the border |
+| luminary | The candle or sun the folio is read by, and the light it casts |
 | colophon | Generation metadata, shown in the plaque |
 | illumination | The theme layer |
 

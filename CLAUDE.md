@@ -466,8 +466,21 @@ the panel stream. Reading controls sit on the right (search top, and a
 navigation dock bottom that steps between user/assistant messages, skipping tool
 and thinking panels, jumps to the end, and folds every marginalia); appearance
 sits on the left (a metadata plaque in the top corner revealing the title,
-facts, and colophon on hover or focus; and the light/dark/system toggle bottom).
-There is no in-column header or footer.
+facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
+with the luminary standing over it). There is no in-column header or footer.
+
+The luminary (`luminary.svg`, inline in the appearance corner) is the light the
+folio is read by: a guttering candle after dark, the sun with its rays circling
+by day. Both are drawn into one box and every pigment is a `light-dark()` pair
+whose off-scheme half is `transparent`, so the scheme lights one and puts the
+other out with no second set of rules and no folio rendered for one scheme
+alone. Its radiance, a very faint circle reaching across the leaf, is a sibling
+inside the lamp rather than a fixed overlay, so it stays centred on the flame
+wherever the corner puts it; it lifts the parchment by ~14/255 beside the lamp
+and nothing at all at the far corner. Sunlight brightens what it falls on and a
+candle warms it, so the day's wash is a pale warm white where the night's is the
+flame's own amber: that amber over a light page stains rather than lights. All
+of it stills under `prefers-reduced-motion`, which is what that query is for.
 
 The dock's follow control (`tail -f`: re-pin the newest message's start on each
 reload until the reader takes control by scrolling or by loading a `#turn-N`
@@ -542,8 +555,9 @@ in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
 for one project), `Colophon` (generation metadata, shown in the plaque),
 `Scribe` (the renderer). Markup classes continue it with `marginalia` (a
 collapsible tool call or result), `drollery` (a marginal creature), `versal`
-(the dropped initial that opens a speaker's paragraph), and `illumination` (the
-theme layer).
+(the dropped initial that opens a speaker's paragraph), `luminary` (the candle
+or sun the folio is read by, and its `radiance` over the leaf), and
+`illumination` (the theme layer).
 
 ## Testing against real data
 

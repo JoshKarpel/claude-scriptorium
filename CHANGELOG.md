@@ -15,6 +15,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays one file that carries every byte it needs. Nothing waits on it: the pen
   is readied when a copy button is first hovered, and the sound is made after
   the copy is already underway.
+- A luminary over the theme toggle: a candle whose flame gutters after dark, the
+  sun with its rays circling by day, each casting a faint warm glow across the
+  leaf so the corner reads as the light the page is read by. Both are drawn into
+  every folio and the colour scheme lights one, so a folio still reads either
+  way. Neither moves for a reader who asks for less motion.
 
 ### Changed
 
