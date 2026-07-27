@@ -168,8 +168,8 @@ document and lies on its side for a code block that runs off the edge. It is
 never hidden or narrowed, being both the position indicator and a drag target,
 and a reader in a high-contrast mode gets their own system's scrollbar instead.
 
-Turns a subagent produced carry `data-sidechain`, so a stylesheet can treat
-them differently.
+Turns a subagent produced are marked as such, and take Tyrian purple across
+every kind at once, so a sidechain reads as one whoever was speaking in it.
 
 Transcript content is escaped, never executed: a session that discusses
 `<script>` renders it as text.
@@ -242,11 +242,11 @@ a built-in whose input doesn't match the shape its view expects.
 A folio is interactive, driven by one small script inlined alongside the
 styles, so the file stays a single self-contained artifact:
 
-- **Set the key** in the corner: a chip per kind of panel, carrying that kind's
-  own pigment, so it says what every edge in the margin means as well as which
-  kinds you want. What reached the model runs down one column and what it
-  produced down the other. Everything else answers to it, so you say once what
-  you're reading through.
+- **Set the key** at the head of the rail down the right: a chip per kind of
+  panel, carrying that kind's own pigment, so it says what every edge in the
+  margin means as well as which kinds you want. What reached the model runs down
+  one column and what it produced down the other. Everything under it answers to
+  it, so you say once what you're reading through.
 - **Search** the session from the fixed box: matches are highlighted, and
   `‹ ›` or Enter steps through them, opening any collapsed fold that holds a
   hit. It looks only at the kinds the key leaves in play.
@@ -258,9 +258,9 @@ styles, so the file stays a single self-contained artifact:
   back to your system; until then the folio follows your OS preference. The
   choice is remembered across visits.
 - **Copy** any code block, a whole message, or a fold's prose (a skill's
-  instructions, a rule, a plan, a subagent's prompt), from the button that appears on
-  hover, and hear a quill take it down: the scratch is synthesized on the spot,
-  so it costs the folio no bytes to carry.
+  instructions, a rule, a plan, a subagent's prompt), from the button standing
+  muted in its corner, and hear a quill take it down: the scratch is synthesized
+  on the spot, so it costs the folio no bytes to carry.
 - **Navigate** from the corner dock: step along either side of the exchange, the
   cool arrows seeking what reached the model and the warm ones what it produced,
   or the middle pair taking both. The arrows honour the key too, so narrowing it

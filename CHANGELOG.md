@@ -23,15 +23,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   messages come apart far enough to pick one out without moving from where you
   are reading. It answers to the key like everything else in the rail, fading
   the kinds you have set aside. It is drawn as the book itself rather than as
-  another card: the volume shut and lying spine to the left, seen from just
-  above its front board, so the board recedes to a shallow trapezoid at the top,
-  the back board's edge shows at the foot, and the painted edges of a great many
-  leaves fill the space between.
+  another card: the volume shut and lying spine to the left, seen from above its
+  front board and off to the spine side, so the board and the spine each open
+  into a face of their own, the back board's edge shows at the foot, and the
+  painted edges of a great many leaves fill the space between.
 - A folio now remembers more of how you left it, each under the session it
   belongs to: which kinds the key leaves in play, and how the minimap was
   framed, alongside the folds and the follow mode it already kept.
-- The line a tool search's answer opens on names the tools it found. It came
-  back blank, since a search answers with references rather than with text.
 - The light a folio is read by is drawn in the corner, and is also the control
   that chooses it: press the sun to read by day, the candle to read after dark.
   Whichever light is in force is the one burning, so by day the sun turns its
@@ -41,7 +39,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once a light has been chosen, and hands the choice back to the reader's own
   system. Both lights are drawn into every folio and the scheme lights one, so a
   folio still reads either way, and neither moves for a reader who asks for less
-  motion.
+  motion. This replaces the light/dark/system toggle that stood under them:
+  there is nothing left to label, because the lights are the control.
 - What the harness writes into a session is now on the page rather than hidden
   or dropped: a hook's output, a `CLAUDE.md` or rule file pulled into context,
   the instructions a skill or custom slash command carries, the slash command
@@ -51,6 +50,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   annotates the conversation rather than crowding it. A reader can now see why
   the assistant did what it did, and not just what it did. Searching the notes
   is its own scope, and they are never navigation targets.
+
+  One event is one panel however many lines the harness spent on it, so a hook
+  states what it decided on its summary line and what it injected in its fold,
+  and a slash command carries what it printed. A skill reads the same whether a
+  command loaded it or the assistant reached for it unbidden, including the
+  built-ins (`/review`, `/init`, `/security-review`) that have no directory to be
+  known by. A command that works the harness rather than the conversation
+  (`/copy`, `/config`, `/resume`, and the like) is left out, along with what it
+  printed: the transcript records every slash command alike, and being told that
+  the last reply went to the clipboard tells a reader nothing. The ones that
+  change the conversation stay, `/compact` and `/model` among them.
 - A copy button scratches like a quill taking the passage down: a short word of
   five to eight strokes, the pen lifted between them, each stroke its own
   length, weight, and tone, so no two words are written the same way. The sound
@@ -68,14 +78,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Every kind of panel now carries its own pigment, so a reader scrolling can
-  tell them apart without reading the label: a tool call takes the one cool hue
-  nothing else holds, reasoning takes the assistant's own drawn back toward the
-  ink, and the harness's notes take malachite for a hook, ochre for a skill or
-  command, and rubricated vermilion for a plan boundary. A rule pulled into
-  context and a passing note stay in faint ink, since colouring every kind would
-  leave nothing quiet. Tool and thinking labels were previously muted to a flat
-  grey, which left them the plainest things on the page.
+- Every kind of panel carries its own pigment, and they all run on one axis:
+  **warm is what the model produced, cool is what reached it from outside.** A
+  reader scrolling therefore learns which side of the exchange they are passing
+  before reading a label. The assistant speaks in its own orange, reasons in that
+  orange drawn back toward the ink, and reaches for a tool in ochre; you speak in
+  lapis, type a command in that lapis drawn back toward the ink, and your skills,
+  rules, and hooks arrive in teal and malachite. A plan boundary is rubricated
+  instead, marking a division in the text rather than anything said in it, and
+  the catch-all note stays in faint ink so the rest can be loud. Tool and
+  thinking labels were previously muted to a flat grey, which left them the
+  plainest things on the page.
+- The dock steps along that same axis: the cool arrows seek what reached the
+  model (your words, commands, skills, and hooks) and the warm ones what it
+  produced (replies, reasoning, tool calls), where before they sought one
+  speaker and skipped everything else.
+- The folio has a **key**: a chip per kind of panel, in its own card above the
+  search rather than inside it, set as a column per side of the exchange and
+  carrying each kind's own pigment, so it says what every edge in the margin
+  means as well as which kinds are wanted. The search, the navigation arrows, and
+  the minimap all answer to it, so narrowing it to skills searches skills, steps
+  through skills, and fades the rest of the map alike: one place to say what you
+  are reading through, rather than one per control that reads.
+- The reading controls stand together in one column down the right, led by that
+  key, with the search, the navigation dock, and the minimap under it. They were
+  scattered to opposite corners, which hid that they are one mechanism.
 - A tool result is shown against the call it answers. Calls issued together are
   recorded one line each, so they became several panels and every result piled
   onto the last of them while its siblings showed none: a batch of five searches
@@ -86,61 +113,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the tool and its subject, so the line shows the first thing the tool actually
   said instead: what a command printed, a file's opening line, the option that
   was chosen. Only a failure is still named, being the exception worth marking.
-- A slash command and what it printed are one panel. The harness records the
-  output as a line of its own, which stood as a second panel whose whole summary
-  was the word "output"; the two are now joined on the line the harness itself
-  names as the parent. A command that only works the harness takes its output
-  with it when it goes.
-- The folio's colours run on one axis: **warm is what the model produced, cool
-  is what reached it from outside.** So a tool call takes the ochre its own name
-  is set in rather than a cool hue, a skill takes the teal it vacates, and a
-  reader scrolling learns which side of the exchange they are passing before
-  reading a label. A plan boundary stays rubricated and the ambient kinds stay
-  in faint ink, deliberately off the axis.
-- The dock steps along that same axis: the cool arrows seek what reached the
-  model (your words, commands, skills, and hooks) and the warm ones what it
-  produced (replies, reasoning, tool calls), where before they sought one
-  speaker and skipped everything else.
 - Every landing names its turn in the URL, so a reload returns you to where you
   were reading and the position is a link you can share. Navigation also lands
   at once instead of gliding, the leaps to either end included: over a folio
   megabytes tall a smooth scroll is an animation to sit through, and one that a
   live session's re-render can interrupt and lose.
-- The reading controls stand together in one column down the right, led by the
-  key, with the search and the navigation dock under it. They were scattered to
-  opposite corners, which hid that they are one mechanism.
-- The folio has a **key**: a chip per kind of panel, in its own card above the
-  search rather than inside it, set as a column per side of the exchange and
-  carrying each kind's own pigment, so it says what every edge in the margin
-  means as well as which kinds are wanted. The search and the navigation arrows
-  both answer to it, so narrowing it to skills searches skills and steps through
-  skills alike: one place to say what you are reading through, rather than one
-  per control that reads.
-- A gloss's edge is solid rather than dotted. The dots said "nobody's speech"
-  back when the notes shared a few pigments between them; now each kind has its
-  own, they were a second mark for something already said.
-- A hook keeps the line breaks it printed. Its injected context was set as
-  ordinary markdown, which folds a single newline into a space, so a hook
-  reporting on a working tree came out as one unreadable run of filenames. It
-  sits between the two readings and is now set as such: read as markdown, so
-  headings and lists survive, but keeping its own breaks.
-- A rule takes a cool pigment of its own rather than the neutral ink, since it
-  is a file you wrote: the skill's teal, drawn back toward the ink because
-  rules arrive a dozen at a time where a skill arrives singly.
 - Output that redrew itself reads as the terminal left it. A spinner or a
   progress bar emits a frame per carriage return, overwriting its line each
   time; the folio set every frame instead, running dozens of them together into
   one line with no breaks, which is the shape a build log most often takes.
-- A built-in skill reads as a skill. One with a directory on disk names it, and
-  that name is how a skill was recognised; a built-in (`/review`, `/init`,
-  `/security-review`) has no directory, so its instructions were set as an
-  anonymous passing note. The slash command in front of them now names them, so
-  a skill looks the same whether a command loaded it or the assistant reached
-  for it unbidden.
-- A slash command takes the reader's own pigment rather than the skill's. The
-  harness wrote it into the session, but the user typed it: it is the only note
-  in a folio that anyone actually spoke, and sharing a skill's ochre said
-  otherwise just where a command stands in front of the skill it loaded.
 - A fold whose body is prose carries a copy button, so a skill's instructions, a
   rule pulled into context, a plan, or a subagent's prompt can be lifted out
   whole. Only code and output blocks had one.
@@ -153,17 +134,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it showed worst inside a fold, where the body is the box.
 - The folio is set a little larger, and its head and foot sit closer to the
   first and last panel than its illuminated margins do to the text.
-- One firing of a hook is one panel, however many lines it wrote. A hook that
-  answers in the control protocol records what it decided and what it injected
-  separately, which stood as two panels each saying half of it; they are now
-  gathered the way a tool result is gathered into the call it answers, with the
-  decision on the summary line and the injected context in the fold.
-- A slash command that works the harness rather than the conversation (`/copy`,
-  `/config`, `/resume`, and the like) is no longer set. The transcript records
-  every slash command alike, whether it injected a whole skill or only redrew
-  the screen, and being told that the last reply went to the clipboard tells a
-  reader nothing. The ones that change the conversation stay, `/compact` and
-  `/model` among them.
 - The dock's follow control is set only into a folio that `serve` is serving.
   Only that folio is re-read and re-rendered as the session is written; a folio
   written to a file or published as a gist is a snapshot, so following it
@@ -182,7 +152,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The gilt wash marking where you landed appeared only when you arrived by a
   link, and then stayed on that message through every step afterward. Every way
   of arriving at a message now marks it, and only it.
-- The labels in the key sat visibly high in their pills.
 - The cut faces carry the angle brackets and arrows that sessions turned out to
   write (`⟨these⟩`, `⬆`), so a folio using one no longer falls back to embedding
   the whole faces and quadrupling in size. The two blocks cost well under a
@@ -191,6 +160,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrapping its name, arguments, and output in XML-ish tags, and a folio set those
   tags as literal text in the middle of the conversation; the caveat standing in
   front of it was set as a paragraph of the user telling itself not to answer.
+- A folio rendered on Windows is the same file as one rendered anywhere else.
+  The stylesheet and the app script are inlined verbatim from the source tree, so
+  a checkout that rewrote their line endings carried those endings into every
+  folio it wrote.
 - A marginalia left open in one folio no longer opens panels in another, and
   following the end of a live session no longer snaps an unrelated folio to its
   end. Both were kept in one store shared by every folio on an origin, and a

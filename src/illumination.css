@@ -1961,7 +1961,6 @@ mark.search__hit.is-current {
 .tool--findings,
 .tool--prompts,
 .tool--references,
-.tool--links,
 .tool--facts {
   font-family: var(--mono);
   font-size: 0.8rem;

@@ -337,9 +337,9 @@ border colour, so the label names the content instead, `tool` or `thinking` when
 that's all the panel carries, a gloss's own kind when it is one, otherwise the
 speaker. The kind reaches the markup as `data-kind`, and the stylesheet keys
 both the border pigment and the label colour off it, so **a new kind needs a
-pigment as well as a label** or it silently inherits its neighbour's. The dock
-steps only between `data-kind="user"` and `data-kind="assistant"`, so no new
-kind may ever collide with those either.
+pigment as well as a label** or it silently inherits its neighbour's. What the
+dock steps to is a separate question, answered by the kind's `side` rather than
+by its name: see the palette below.
 
 A speech panel's leading paragraph opens with a rubricated versal (a dropped
 blackletter initial). `Scribe::panel` finds the first visible-text block of a
@@ -642,6 +642,13 @@ tell each other apart. Keep it that way when adding a kind.
   under it, and paying for that net in every folio is the trade this cut exists
   to avoid. Beware measuring against a session that reached a character *because
   you were demonstrating the fallback in it*, which is evidence of nothing.
+- **The same folio on every platform.** The stylesheet, the app script, and the
+  border SVGs are `include_str!`'d verbatim, so the line endings in the working
+  tree are the line endings in the artifact. `.gitattributes` therefore pins
+  every text file to LF on checkout (`* text=auto eol=lf`), or a Windows clone
+  would render a folio nobody else does, and the tests that assert on multi-line
+  stretches of the stylesheet would fail there and only there. The vendored fonts
+  are excluded, staying byte-for-byte as upstream ships them.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.

@@ -1,3 +1,9 @@
+# A folio inlines the stylesheet and the app script verbatim, via `include_str!`,
+# so the line endings in the working tree are the line endings in the artifact. A
+# checkout that turned them into CRLF would render a different folio on Windows
+# than everywhere else, so every text file is normalized to LF on the way out.
+* text=auto eol=lf
+
 # Vendored fonts and their license texts (see `just fonts`): store byte-for-byte
 # as upstream ships them, with no line-ending normalization.
 src/fonts/** -text
