@@ -734,6 +734,36 @@ fn a_versal_marks_only_the_opening_paragraph_of_a_panel() {
 }
 
 #[test]
+fn the_caveat_opens_the_reading_column() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"<main class="folio"><aside class="caveat">"#));
+    assert!(html.contains("Caveat lector."));
+}
+
+#[test]
+fn the_caveat_is_nothing_the_folio_can_navigate() {
+    let html = render(&fixture(), &highlighter());
+
+    // The dock, the minimap, the key, and the search all key on `.turn`, and
+    // the folio's own voice is not one of the session's panels: carrying that
+    // class (or the kind and side the rest of the chrome reads off it) would
+    // put this crate's own note into the count of what the session said.
+    let opened = html
+        .find(r#"<aside class="caveat">"#)
+        .expect("the caveat is set");
+    let closed = html[opened..].find("</aside>").expect("the caveat closes");
+    let caveat = &html[opened..opened + closed];
+
+    // Against the markup rather than the prose: the note has the word "turns"
+    // in it, so only the attributes the script reads can be asserted on.
+    assert!(!caveat.contains(r#"class="turn"#));
+    assert!(!caveat.contains("data-turn"));
+    assert!(!caveat.contains("data-kind"));
+    assert!(!caveat.contains("data-side"));
+}
+
+#[test]
 fn each_panel_is_numbered_by_its_leading_turn() {
     let html = render(&fixture(), &highlighter());
 

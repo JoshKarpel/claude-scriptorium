@@ -1070,6 +1070,27 @@ mark.search__hit.is-current {
   color: var(--ink-faint);
 }
 
+/* --- Caveat: the folio's own note to its reader ---------------------- */
+/* The only text in the reading column that isn't the session's, so it is drawn
+ * as unlike a panel as the leaf allows: flanked by rules rather than boxed, no
+ * pigmented left edge, no number, no versal, and set below the reading size in
+ * the soft ink. The difference has to be legible before a word of it is read. */
+
+.caveat {
+  margin: 0 0 2.2rem;
+  padding: 0.9rem 0;
+  border-block: 1px solid var(--rule);
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.caveat__lead {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--rubric);
+}
+
 /* --- Turns ----------------------------------------------------------- */
 
 .turn {

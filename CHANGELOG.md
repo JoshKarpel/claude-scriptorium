@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A folio opens with a **caveat** saying what a session file cannot show: the
+  system prompt, the tool descriptions, and the `CLAUDE.md` and rule files
+  loaded when a session starts are sent with every request but never recorded,
+  so the transcript is the conversation and not the whole of what shaped it. It
+  is the folio's own voice rather than anyone's turn, so it is drawn as a
+  rule-flanked note rather than a panel, and nothing that reads panels counts it
+  as one: the dock won't step to it, the minimap draws no band for it, the key
+  can't set it aside, and the search never returns it as a hit.
 - A minimap at the foot of the reading rail: the whole session seen edge-on, a
   band per message in that message's own pigment and sized to the share of the
   folio it takes, with your place on the leaf drawn over it. Drag along it to

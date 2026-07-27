@@ -146,8 +146,17 @@ Assistant and user turns, in order, with:
   own pigments, rather than showing the escapes
 - Pasted images inlined as data URLs
 
-The reading column is pure transcript. The folio's title, facts, and a
-**colophon** (what wrote it, when, and what the render cost) live in a plaque
+A folio opens with a **caveat**, the one piece of the reading column this tool
+wrote rather than set from the session. A session file isn't everything the
+model was told: the system prompt, the tool descriptions, and the `CLAUDE.md`
+and rule files loaded when a session starts are sent with every request but
+never recorded, so no folio can show them. The caveat is not a panel, and
+nothing that reads panels counts it as one: the dock won't step to it, the
+minimap draws no band for it, the key can't set it aside, and the search never
+returns it as a hit.
+
+The rest of the reading column is pure transcript. The folio's title, facts, and
+a **colophon** (what wrote it, when, and what the render cost) live in a plaque
 you open from the corner, and the parchment leaf is bordered with illuminated
 vines threaded with marginal **drolleries**: colourful little beasts (snail,
 frog, cat, butterfly, stag, and more) seated among the vine at intervals,
@@ -282,6 +291,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | --- | --- |
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
+| caveat | The folio's own note to its reader, at the head of the column |
 | marginalia | A collapsible tool call or result |
 | gloss | A note the harness wrote into the session, set as its own panel |
 | key | Which kinds of panel are in play, and what each edge's pigment means |

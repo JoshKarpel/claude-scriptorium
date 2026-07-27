@@ -531,6 +531,26 @@ impl<'a> Scribe<'a> {
                         }
                     }
                     main .folio {
+                        // The only text in the reading column this crate wrote
+                        // rather than set from the session: a session file is
+                        // not everything the model was told, and a reader who
+                        // takes it for one misreads it.
+                        //
+                        // It carries no `.turn` class, which is what every
+                        // part of the app script keys on, so the dock never
+                        // steps to it, the minimap draws no band for it, the
+                        // key cannot set it aside, and the search never counts
+                        // it as a hit. It is the folio's own voice, not one of
+                        // the session's panels.
+                        aside .caveat {
+                            span .caveat__lead { "Caveat lector." }
+                            " A session file is not everything the model was told. The system "
+                            "prompt, the tool descriptions, and the " code { "CLAUDE.md" } " and "
+                            "rule files loaded when a session starts are sent with every request "
+                            "but never recorded, so they can't appear here. What the harness "
+                            em { "did" } " write down (hook output, a skill's instructions, a file "
+                            "pulled into context mid-session) is here."
+                        }
                         @for panel in &rendered_panels {
                             (panel)
                         }

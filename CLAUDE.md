@@ -754,12 +754,29 @@ the reading measure and there would otherwise be nothing behind the text out
 there. Those rules must sit *after* `.marginalia` in the stylesheet, or they
 lose to it at equal specificity.
 
-The reading column is pure transcript; the folio's chrome floats in the four
-corners, all `position: fixed` and living in the shell of the markup rather than
-the panel stream. Reading controls sit on the right, as a **rail**: one column of
-cards led by the **key**, with the search, the navigation dock, and the minimap
-stacked under it. They are in one column because they are one mechanism, the key
-governing the three below it, and standing them together is what says so;
+**The caveat is the folio's own voice, and the only text in the reading column
+this crate wrote.** It stands ahead of the first panel and says what a session
+file cannot show: the system prompt, the tool descriptions, and the instruction
+files loaded when a session starts are sent with every request but never
+recorded. No session in the corpus carries a system prompt or a tool schema;
+what the harness writes *mid*-session **is** recorded and is set as a gloss,
+which is why the caveat points at those rather than claiming nothing is shown.
+Check any change to its wording against the corpus the same way.
+
+It carries **no `.turn` class**, and that is the load-bearing part rather than
+its styling. Every part of the app script keys on `.turn`: the dock's steps, the
+minimap's bands, what the key sets aside, and what the search counts as a hit.
+Giving the folio's own note that class would enter this crate's writing into the
+count of what the session said. A test holds it. Anything else added to the
+column that isn't the transcript's goes the same way.
+
+The rest of the reading column is pure transcript; the folio's chrome floats in
+the four corners, all `position: fixed` and living in the shell of the markup
+rather than the panel stream. Reading controls sit on the right, as a **rail**:
+one column of cards led by the **key**, with the search, the navigation dock,
+and the minimap stacked under it. They are in one column because they are one
+mechanism, the key governing the three below it, and standing them together is
+what says so;
 appearance sits on the left (a metadata plaque in the top corner revealing the
 title, facts, and colophon on hover or focus; and the luminaries bottom). There
 is no in-column header or footer.
@@ -979,6 +996,7 @@ in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
 for one project), `Colophon` (generation metadata, shown in the plaque),
 `Scribe` (the renderer), `Gloss` (a note the harness entered into a session, as
 a later hand annotates a manuscript). Markup classes continue it with
+`caveat` (the folio's own note to its reader, at the head of the column),
 `marginalia` (a collapsible tool call or result), `drollery` (a marginal
 creature), `versal` (the dropped initial that opens a speaker's paragraph),
 `key` (which kinds of panel are in play, and what each edge's pigment means),
