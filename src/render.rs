@@ -12,8 +12,9 @@ use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{
-    tools,
-    transcript::{Block, Folio, ImageSource, Known, Panel, PanelKind, Usage},
+    gloss,
+    tools::{self, Setting},
+    transcript::{Block, Folio, GlossPanel, ImageSource, Known, Panel, PanelKind, Speech, Usage},
 };
 
 /// Copyright notices for the embedded fonts, emitted into every folio. The SIL
@@ -151,6 +152,13 @@ pub struct Labour {
 const TOOK_MARK: &str = "<!--folio:took-->";
 const SIZE_MARK: &str = "<!--folio:size-->";
 
+/// The lights a folio can be read by, which are also the controls that choose
+/// between them, and the turn of the ring that hands the choice back to the
+/// reader's system. Inline SVG, so they take the folio's own pigments.
+const SUN: &str = include_str!("luminary/sun.svg");
+const CANDLE: &str = include_str!("luminary/candle.svg");
+const SYSTEM: &str = include_str!("luminary/system.svg");
+
 /// Fills a finished folio's own cost into its plaque.
 ///
 /// The numbers displace the placeholders they replace, so the size a folio
@@ -190,6 +198,8 @@ pub fn size(bytes: usize) -> String {
 /// reader.
 pub struct Scribe<'a> {
     options: Options<'a>,
+    /// The same options with hard breaks, for text a program printed.
+    printed: Options<'a>,
     plugins: Plugins<'a>,
     timezone: TimeZone,
     fonts: Fonts,
@@ -211,11 +221,17 @@ impl<'a> Scribe<'a> {
         options.extension.footnotes = true;
         options.render.github_pre_lang = true;
 
+        // The same reading, with the source's own line breaks kept. See
+        // `markdown_printed`.
+        let mut printed = options.clone();
+        printed.render.hardbreaks = true;
+
         let mut plugins = Plugins::default();
         plugins.render.codefence_syntax_highlighter = Some(highlighter);
 
         Self {
             options,
+            printed,
             plugins,
             timezone,
             fonts,
@@ -227,6 +243,25 @@ impl<'a> Scribe<'a> {
         PreEscaped(markdown_to_html_with_plugins(
             source,
             &self.options,
+            &self.plugins,
+        ))
+    }
+
+    /// Markdown for text a *program* printed rather than composed: a hook's
+    /// output is the case, and it is genuinely between the two readings.
+    ///
+    /// Markdown folds a single newline into a space, which is right for prose
+    /// someone wrapped by hand and wrong for a list of things a script emitted
+    /// one to a line: `M  CLAUDE.md\nM  src/gloss.rs` came out as one run of
+    /// filenames. Keeping the breaks costs a hand-wrapped paragraph its reflow,
+    /// so it goes slightly ragged, and that is much the smaller loss. Setting
+    /// such output as preformatted text instead is worse than either: it wraps
+    /// twice, once where the source wrapped and again at the box, *and* throws
+    /// away the headings and lists these mostly carry.
+    pub(crate) fn markdown_printed(&self, source: &str) -> Markup {
+        PreEscaped(markdown_to_html_with_plugins(
+            source,
+            &self.printed,
             &self.plugins,
         ))
     }
@@ -288,11 +323,19 @@ impl<'a> Scribe<'a> {
                         (PreEscaped(faces))
                         (PreEscaped(include_str!("illumination.css")))
                     }
-                    // The folio's own behaviour: theme, search, copy, and the
-                    // navigation dock. It sits in <head> so the stored theme
-                    // applies before the body paints, avoiding a flash of the
-                    // wrong scheme.
-                    script { (PreEscaped(include_str!("illumination.js"))) }
+                    // The folio's own behaviour: theme, search, copy, the
+                    // navigation dock, and the minimap. It sits in <head> so the
+                    // stored theme applies before the body paints, avoiding a
+                    // flash of the wrong scheme, which is also why it stays a
+                    // classic script rather than a module (a module is deferred,
+                    // and would paint first). The core is inlined ahead of the
+                    // shell, in the same script, so the shell closes over it:
+                    // two files because one is pure and testable without a
+                    // browser, one script because a folio is one file.
+                    script {
+                        (PreEscaped(include_str!("illumination.core.js")))
+                        (PreEscaped(include_str!("illumination.shell.js")))
+                    }
                 }
                 // The session the folio was set from, so the app script can key
                 // what it remembers about this folio to this folio: a fold's
@@ -318,7 +361,7 @@ impl<'a> Scribe<'a> {
                                 dt { "source" } dd { code { (source) } }
                                 dt { "turns" } dd { (panels.len()) }
                                 @if let Some(first) = panels.first() {
-                                    dt { "opened" } dd { (self.stamp(first.timestamp)) }
+                                    dt { "opened" } dd { (self.stamp(first.timestamp())) }
                                 }
                                 // The session's flux: how big the conversation
                                 // ever got, against all the output. The input
@@ -344,38 +387,61 @@ impl<'a> Scribe<'a> {
                             }
                         }
                     }
-                    // A fixed search widget: highlights matches and steps
-                    // through them, wired by the app script.
-                    div .search role="search" {
-                        div .search__bar {
+                    // The reading rail: the key, and stacked under it the search,
+                    // the dock, and the minimap, all of which answer to it.
+                    // Standing them in one column is what says they are tied
+                    // together, without a word of explanation.
+                    div .rail {
+                        // The folio's key leads the rail, because everything
+                        // under it answers to it: which kinds are in play, and,
+                        // since each chip carries its own kind's pigment, what
+                        // every edge in the margin means. It is a control rather
+                        // than a legend alone, and the *only* one of its sort:
+                        // the search and the dock both read it, so a reader says
+                        // once what they are looking through rather than once per
+                        // panel that looks. A column per side of the exchange, in
+                        // the order `PanelKind::EVERY` declares, so no list of
+                        // kinds is restated in the markup.
+                        div .key role="group" aria-label="kinds of message to show" {
+                            @for kind in PanelKind::EVERY {
+                                button .key__chip type="button"
+                                    data-scope=(kind.label()) data-side=(kind.side().label())
+                                    aria-pressed="true" { (kind.label()) }
+                            }
+                        }
+                        // Highlights matches and steps through them, wired by
+                        // the app script. Looks only at what the key leaves in.
+                        // Two rows: the field takes a whole one, and the count
+                        // and step arrows share the next. Sharing a single row
+                        // left the field a fraction of the rail's width, which
+                        // was both the reason the rail had to be wide and the
+                        // reason the placeholder was cut off in it.
+                        div .search role="search" {
                             input .search__input type="search" placeholder="search folio" aria-label="search folio";
-                            span .search__count aria-live="polite" {}
-                            button .search__nav type="button" data-search-nav="prev" aria-label="previous match" { "‹" }
-                            button .search__nav type="button" data-search-nav="next" aria-label="next match" { "›" }
+                            div .search__bar {
+                                span .search__count aria-live="polite" {}
+                                button .search__nav type="button" data-search-nav="prev" aria-label="previous match" { "‹" }
+                                button .search__nav type="button" data-search-nav="next" aria-label="next match" { "›" }
+                            }
                         }
-                        // Restrict the search to chosen kinds of message, so a
-                        // query need not wade through tool output or reasoning.
-                        div .search__scopes role="group" aria-label="search in" {
-                            button .search__scope.search__scope--user type="button" data-scope="user" aria-pressed="true" { "user" }
-                            button .search__scope.search__scope--assistant type="button" data-scope="assistant" aria-pressed="true" { "assistant" }
-                            button .search__scope type="button" data-scope="tool" aria-pressed="true" { "tool" }
-                            button .search__scope type="button" data-scope="thinking" aria-pressed="true" { "thinking" }
-                        }
-                    }
-                    // A fixed dock: jump between messages, leap to either end
+                    // A dock: jump between messages, leap to either end
                     // and follow new ones (tail -f), and fold every tool call open
                     // or shut. Wired by the app script. The nav grid is three
-                    // columns of up/down arrows: the middle steps between all
-                    // messages, flanked by a user (blue) and an assistant
-                    // (orange) column that seek only that speaker.
+                    // columns of up/down arrows: the middle steps between every
+                    // message, flanked by a column per side of the exchange, so
+                    // the cool arrows seek what reached the model (the reader's
+                    // own words, their commands, skills, and hooks) and the warm
+                    // ones seek what it produced (its replies, reasoning, and
+                    // tool calls). The dock therefore steps along the same axis
+                    // the palette is pitched on and the search box is grouped by.
                     nav .dock aria-label="folio navigation" {
                         div .dock__nav {
-                            button .dock__btn .dock__btn--user type="button" data-nav="prev" data-role="user" aria-label="previous user message" title="previous user message" { "▲" }
+                            button .dock__btn .dock__btn--entered type="button" data-nav="prev" data-side="entered" aria-label="previous message that reached the model" title="previous message that reached the model" { "▲" }
                             button .dock__btn type="button" data-nav="prev" aria-label="previous message" title="previous message" { "▲" }
-                            button .dock__btn .dock__btn--assistant type="button" data-nav="prev" data-role="assistant" aria-label="previous assistant message" title="previous assistant message" { "▲" }
-                            button .dock__btn .dock__btn--user type="button" data-nav="next" data-role="user" aria-label="next user message" title="next user message" { "▼" }
+                            button .dock__btn .dock__btn--model type="button" data-nav="prev" data-side="model" aria-label="previous message the model produced" title="previous message the model produced" { "▲" }
+                            button .dock__btn .dock__btn--entered type="button" data-nav="next" data-side="entered" aria-label="next message that reached the model" title="next message that reached the model" { "▼" }
                             button .dock__btn type="button" data-nav="next" aria-label="next message" title="next message" { "▼" }
-                            button .dock__btn .dock__btn--assistant type="button" data-nav="next" data-role="assistant" aria-label="next assistant message" title="next assistant message" { "▼" }
+                            button .dock__btn .dock__btn--model type="button" data-nav="next" data-side="model" aria-label="next message the model produced" title="next message the model produced" { "▼" }
                         }
                         // Jump to the first or last message, and, where the
                         // session can still grow, a follow toggle that re-pins
@@ -395,30 +461,96 @@ impl<'a> Scribe<'a> {
                             button .dock__btn .dock__btn--fold type="button" data-fold="expand" aria-label="expand all" title="expand all" { span .dock__chevron { "⌃" } span .dock__chevron { "⌄" } }
                             button .dock__btn .dock__btn--fold type="button" data-fold="collapse" aria-label="collapse all" title="collapse all" { span .dock__chevron { "⌄" } span .dock__chevron { "⌃" } }
                         }
-                    }
-                    // Presentation controls, opposite the navigation dock:
-                    // light / dark / system, wired by the app script and
-                    // defaulting to the reader's system preference.
-                    div .controls {
-                        // The light the folio is read by, standing over the
-                        // control that chooses it: a candle after dark, the sun
-                        // by day. Purely decorative, and inline rather than a
-                        // background image so it can take the folio's own
-                        // pigments and be animated. The radiance is the light it
-                        // casts over the leaf, and is a sibling rather than a
-                        // fixed overlay of its own so it stays centred on the
-                        // flame wherever the corner puts it.
-                        div .lamp aria-hidden="true" {
-                            span .lamp__radiance {}
-                            (PreEscaped(include_str!("luminary.svg")))
                         }
-                        div .theme-toggle role="group" aria-label="colour theme" {
-                            button type="button" data-theme-choice="light" { "light" }
-                            button type="button" data-theme-choice="system" aria-pressed="true" { "system" }
-                            button type="button" data-theme-choice="dark" { "dark" }
+                        // The folio seen edge-on, under the controls that steer
+                        // it: a band per panel in that panel's own pigment,
+                        // sized to the share of the document the panel takes,
+                        // with the reader's own view of the leaf drawn over
+                        // them. A drag along it scrubs the folio, landing on
+                        // whichever panel the key leaves in play, so it steps
+                        // through the same kinds the dock above it does, and the
+                        // wheel zooms the map alone, so a stretch of a
+                        // thousand-panel folio can be opened up and picked
+                        // through without leaving the place being read.
+                        //
+                        // The bands are recovered from the panels themselves
+                        // rather than written out here, since what a band states
+                        // is the share of the document its panel takes, which
+                        // only the browser knows and which changes every time a
+                        // fold opens. The empty track is what tells the app
+                        // script to draw them, exactly as the follow button's
+                        // presence tells it a folio can be followed.
+                        //
+                        // Hidden from assistive tech: every band is a second way
+                        // to a panel the dock already steps to and the panel's
+                        // own number already links to, and a stop per panel in
+                        // the tab order would bury both.
+                        div .minimap aria-hidden="true" {
+                            div .minimap__track title="drag to scrub, scroll to zoom" {
+                                div .minimap__view {}
+                            }
+                        }
+                    }
+                    // Presentation controls, opposite the navigation dock: the
+                    // lights the folio can be read by, which are also the
+                    // controls that choose between them. There is no separate
+                    // toggle to label, because the reader presses the light they
+                    // want: the sun for day, the candle for after dark.
+                    //
+                    // Which of them is *lit* is the scheme's to say, not the
+                    // press's: by day the sun burns and the candle stands
+                    // smoking, after dark the moon hangs and the candle is lit.
+                    // That is one set of `light-dark()` pigments (see the
+                    // stylesheet), so a folio still reads either way with no
+                    // second set of rules and nothing rendered for one scheme
+                    // alone. What the press changes is which scheme is in force.
+                    //
+                    // Each carries its own radiance, the light it throws across
+                    // the leaf, so the glow comes from whichever is burning.
+                    // Drawn rather than lettered, so each needs the name it used
+                    // to spell out: a figure says nothing to a reader who cannot
+                    // see it.
+                    div .controls {
+                        div .luminaries role="group" aria-label="colour theme" {
+                            button .luminary type="button" data-theme-choice="light"
+                                aria-label="read by daylight" title="read by daylight" {
+                                span .luminary__radiance .luminary__radiance--day {}
+                                (PreEscaped(SUN))
+                            }
+                            button .luminary type="button" data-theme-choice="dark"
+                                aria-label="read by candlelight" title="read by candlelight" {
+                                span .luminary__radiance .luminary__radiance--night {}
+                                (PreEscaped(CANDLE))
+                            }
+                            // Only of use once a light has been chosen, so the
+                            // stylesheet shows it only then, keyed off the
+                            // `data-theme` the choice sets on the document.
+                            button .theme-reset type="button" data-theme-choice="system"
+                                aria-pressed="true" aria-label="follow the system"
+                                title="follow the system" { (PreEscaped(SYSTEM)) }
                         }
                     }
                     main .folio {
+                        // The only text in the reading column this crate wrote
+                        // rather than set from the session: a session file is
+                        // not everything the model was told, and a reader who
+                        // takes it for one misreads it.
+                        //
+                        // It carries no `.turn` class, which is what every
+                        // part of the app script keys on, so the dock never
+                        // steps to it, the minimap draws no band for it, the
+                        // key cannot set it aside, and the search never counts
+                        // it as a hit. It is the folio's own voice, not one of
+                        // the session's panels.
+                        aside .caveat {
+                            span .caveat__lead { "Caveat lector." }
+                            " A session file is not everything the model was told. The system "
+                            "prompt, the tool descriptions, and the " code { "CLAUDE.md" } " and "
+                            "rule files loaded when a session starts are sent with every request "
+                            "but never recorded, so they can't appear here. What the harness "
+                            em { "did" } " write down (hook output, a skill's instructions, a file "
+                            "pulled into context mid-session) is here."
+                        }
                         @for panel in &rendered_panels {
                             (panel)
                         }
@@ -436,6 +568,13 @@ impl<'a> Scribe<'a> {
     }
 
     fn panel(&self, panel: &Panel) -> Markup {
+        match panel {
+            Panel::Speech(speech) => self.speech(speech),
+            Panel::Gloss(gloss) => self.gloss(gloss),
+        }
+    }
+
+    fn speech(&self, panel: &Speech) -> Markup {
         let kind = panel.kind();
         // A speaker's leading paragraph opens with a rubricated versal (a
         // dropped blackletter initial the stylesheet draws): tag the block that
@@ -447,8 +586,9 @@ impl<'a> Scribe<'a> {
         html! {
             article id={ "turn-" (panel.turn_number) }
                 class={ "turn turn--" (panel.role.as_str()) } data-kind=(kind.label())
+                data-side=(kind.side().label())
                 data-turn=(panel.turn_number)
-                data-sidechain[panel.is_sidechain] data-meta[panel.is_meta] {
+                data-sidechain[panel.is_sidechain] {
                 header .turn__meta {
                     span .turn__role { (kind.label()) }
                     @if let Some(model) = &panel.model {
@@ -474,6 +614,35 @@ impl<'a> Scribe<'a> {
         }
     }
 
+    /// A note the harness wrote into the session: a panel of its own, since it
+    /// happened at a point in the conversation rather than inside anyone's
+    /// turn, but with no speaker, no model, and no cost of its own to state.
+    /// What it says is folded away behind its summary line, the way a tool
+    /// call's subject is: it is context a reader reaches for, not prose they
+    /// read through.
+    fn gloss(&self, panel: &GlossPanel) -> Markup {
+        let kind = PanelKind::Gloss(panel.gloss.kind);
+        html! {
+            article id={ "turn-" (panel.turn_number) }
+                class="turn turn--gloss" data-kind=(kind.label())
+                data-side=(kind.side().label())
+                data-turn=(panel.turn_number)
+                data-sidechain[panel.is_sidechain] {
+                header .turn__meta {
+                    span .turn__role { (kind.label()) }
+                    time .turn__time datetime=(panel.timestamp.to_string()) { (self.stamp(panel.timestamp)) }
+                    a .turn__index href={ "#turn-" (panel.turn_number) } { "#" (panel.turn_number) }
+                }
+                (marginalia(
+                    "marginalia--gloss",
+                    None,
+                    gloss::setting(self, &panel.gloss),
+                    Outcome::Fine,
+                ))
+            }
+        }
+    }
+
     pub(crate) fn block(&self, block: &Block, versal: bool) -> Markup {
         let known = match block {
             Block::Known(known) => known,
@@ -495,17 +664,27 @@ impl<'a> Scribe<'a> {
                 }
             },
             Known::ToolUse { name, input, .. } => self.tool_call(name, input),
+            // A result sits in the panel holding the call it answers, so the box
+            // above it already names the tool and its subject and the line has
+            // no need to say either again. What it shows instead is the first
+            // thing that came back, which is the one thing the call cannot show.
             Known::ToolResult {
                 content,
                 is_error,
                 answers,
                 ..
-            } => html! {
-                details .marginalia.marginalia--result data-error[*is_error] {
-                    summary .marginalia__head { @if *is_error { "error" } @else { "result" } }
-                    (tools::result(self, answers.as_ref(), content, *is_error))
-                }
-            },
+            } => marginalia(
+                "marginalia--result",
+                None,
+                Setting::new()
+                    .maybe_gist(tools::hint(answers.as_ref(), content, *is_error))
+                    .body(tools::result(self, answers.as_ref(), content, *is_error)),
+                if *is_error {
+                    Outcome::Failed
+                } else {
+                    Outcome::Fine
+                },
+            ),
             Known::Image { source } => image(source),
         }
     }
@@ -515,32 +694,12 @@ impl<'a> Scribe<'a> {
     /// file, a query) has no subject left to hold, so it is set as one flat line
     /// with nothing to open.
     fn tool_call(&self, name: &str, input: &Value) -> Markup {
-        let setting = tools::call(self, name, input);
-        let head = html! {
-            span .marginalia__tool { (name) }
-            @if let Some(gist) = &setting.gist {
-                @match &setting.href {
-                    Some(href) => a .marginalia__gist href=(href) { (gist) },
-                    None => span .marginalia__gist { (gist) },
-                }
-            }
-            @for note in &setting.notes {
-                span .marginalia__note { (note) }
-            }
-        };
-        match &setting.body {
-            Some(body) => html! {
-                details .marginalia.marginalia--use {
-                    summary .marginalia__head { (head) }
-                    (body)
-                }
-            },
-            None => html! {
-                div .marginalia.marginalia--use.marginalia--flat {
-                    div .marginalia__head { (head) }
-                }
-            },
-        }
+        marginalia(
+            "marginalia--use",
+            Some(name),
+            tools::call(self, name, input),
+            Outcome::Fine,
+        )
     }
 
     /// A fenced code block run through the markdown path so it picks up syntax
@@ -553,6 +712,76 @@ impl<'a> Scribe<'a> {
         let code = code.trim_end();
         let fence = "`".repeat(longest_backtick_run(code).max(2) + 1);
         self.markdown(&format!("{fence}{lang}\n{code}\n{fence}"))
+    }
+}
+
+/// Whether a fold reports a failure, which the stylesheet marks and the summary
+/// line names.
+///
+/// Success is deliberately unmarked. A result sits in the panel holding the call
+/// it answers, so the box below the call is already what says it answered, and a
+/// word saying so on every one of them is the noise a reader reads past. A
+/// failure is the exception, so it is the one that gets named; marking only the
+/// exception is what makes the mark worth anything.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Fine,
+    Failed,
+}
+
+impl Outcome {
+    fn word(self) -> Option<&'static str> {
+        match self {
+            Outcome::Fine => None,
+            Outcome::Failed => Some("error"),
+        }
+    }
+
+    fn failed(self) -> bool {
+        self == Outcome::Failed
+    }
+}
+
+/// A summary line and the fold under it: the shape a tool call and a harness
+/// note share. The line carries the labelling (what is being shown, a gist of
+/// its subject, and any qualifier), and the fold carries the subject itself. A
+/// setting whose line already states the whole of it has nothing left to hold,
+/// so it is set as one flat line with nothing to open.
+///
+/// The subject belongs in the setting's *gist* and never in a note: the gist is
+/// the one part of the line that can shrink, and a note holding a path drives
+/// the line out of the fold entirely.
+fn marginalia(variant: &str, label: Option<&str>, setting: Setting, outcome: Outcome) -> Markup {
+    let head = html! {
+        @if let Some(word) = outcome.word() {
+            span .marginalia__outcome { (word) }
+        }
+        @if let Some(label) = label {
+            span .marginalia__tool { (label) }
+        }
+        @if let Some(gist) = &setting.gist {
+            @match &setting.href {
+                Some(href) => a .marginalia__gist href=(href) { (gist) },
+                None => span .marginalia__gist { (gist) },
+            }
+        }
+        @for note in &setting.notes {
+            span .marginalia__note { (note) }
+        }
+    };
+    let failed = outcome.failed();
+    match &setting.body {
+        Some(body) => html! {
+            details class={ "marginalia " (variant) } data-error[failed] {
+                summary .marginalia__head { (head) }
+                (body)
+            }
+        },
+        None => html! {
+            div class={ "marginalia " (variant) " marginalia--flat" } data-error[failed] {
+                div .marginalia__head { (head) }
+            }
+        },
     }
 }
 

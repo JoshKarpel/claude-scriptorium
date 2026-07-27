@@ -5,6 +5,7 @@ set ignore-comments
 
 pre-commit-args := ""
 cargo-test-args := ""
+node-test-args := ""
 watch-paths := "src Cargo.toml justfile"
 bench-fixtures := "tests/fixtures/session.jsonl,tests/fixtures/playground.jsonl"
 bench-warmup := "3"
@@ -26,7 +27,8 @@ list:
 setup:
     rustup toolchain install nightly --component rustfmt
     uvx pre-commit install
-    uvx --from playwright playwright install chromium
+    npm ci
+    npx playwright install chromium
 
 [doc("Run tests")]
 [group("rust")]
@@ -34,6 +36,19 @@ test *args:
     cargo test --all-features {{ cargo-test-args }} {{ args }}
 
 alias t := test
+
+# The folio's own script is two files: a pure core, exercised here without a
+# browser, and the shell that wires it to the document, exercised in one below.
+
+[doc("Test the folio's script without a browser")]
+[group("js")]
+test-js *args:
+    node --test {{ node-test-args }} "tests/js/*.test.mjs" {{ args }}
+
+[doc("Drive a rendered folio in a headless browser")]
+[group("js")]
+test-browser *args:
+    node --test {{ node-test-args }} "tests/browser/*.test.mjs" {{ args }}
 
 # rustfmt.toml uses unstable options, which only nightly rustfmt honours.
 
@@ -192,7 +207,7 @@ serve *args:
     trap 'kill "${pid:-}" 2>/dev/null || true' EXIT
     while true; do
       pid=""
-      if cargo build -q --release; then
+      if cargo build --release; then
         "$bin" serve {{ args }} &
         pid=$!
       else
@@ -293,7 +308,7 @@ alias f := fix
 
 [doc("Run all checks (formatting, linting, testing)")]
 [group("checks")]
-check: fix test
+check: fix test test-js test-browser
 
 alias c := check
 

@@ -8,10 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 recipes.
 
 ```bash
-just setup             # nightly rustfmt, pre-commit hook, Playwright Chromium (after cloning)
-just check             # format, lint, then test
+just setup             # nightly rustfmt, pre-commit hook, JS toolchain, Chromium (after cloning)
+just check             # format, lint, then every test suite
 just test              # cargo test --all-features
 just test <name>       # single test, e.g. just test markdown_becomes_html
+just test-js           # the folio's own script, without a browser
+just test-browser      # a rendered folio, driven in a headless Chromium
 just render <session>  # write a session to HTML (CLI `render` subcommand)
 just serve <session>   # live-reload dev server, rebuilds on source change
 just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
@@ -91,11 +93,16 @@ variable (mise sets one) overrides the file. The pin therefore takes effect in
 CI and often not locally.
 
 `mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
-`just`, `samply`, `uv`), so `mise install` is enough to run any of them. It
-deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
+`just`, `node`, `samply`, `uv`), so `mise install` is enough to run any of them.
+It deliberately leaves the Rust toolchain to `rust-toolchain.toml`, since rustup
 is what resolves the `+nightly` that `just format` needs. `fswatch`, which
 `just serve` and `just watch` need, has no mise package and stays a system
 dependency.
+
+`package.json` is the test toolchain and nothing else: Playwright, pinned and
+locked, for the browser suite. **No JS dependency ever reaches a folio** — the
+inlined script is this repo's own two files and depends on nothing — so anything
+added here belongs under `devDependencies` and stays out of `src/`.
 
 When a change is user-visible (a new subcommand or flag, changed output, a bug
 fix), add an entry to `CHANGELOG.md` under the current unreleased version,
@@ -110,8 +117,9 @@ module each:
   project directory is named after its path with everything outside
   `[A-Za-z0-9_]` flattened to a dash. `CLAUDE_CONFIG_DIR` relocates the root.
   `all_quires` enumerates every project for the cross-project picker.
-- `transcript`: parses JSONL lines into a `Folio` of raw `Turn`s, then folds
-  those into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
+- `transcript`: parses JSONL lines into a `Folio` of raw `Recorded`s (a `Turn`
+  of the conversation, or a `Gloss` the harness wrote into it), then folds those
+  into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
   separate, deliberately lenient scan of a session's listing metadata (its
   `ai-title` and working directory) that tolerates malformed lines, because a
   picker label is best-effort where a render is strict.
@@ -120,6 +128,21 @@ module each:
 - `render`: `Scribe` turns a folio's panels into `Markup`.
 - `tools`: how each built-in tool's call and result are set, which is the one
   place that knows anything about a specific tool's shape.
+- `gloss`: the counterpart for what the harness writes into a session (hook
+  output, the rule files it pulls in, a skill's instructions, a slash command,
+  the plan-mode boundaries), which is the one place that knows anything about a
+  specific injection's shape.
+
+The folio's own behaviour is split the same way the Rust is, and for the same
+reason: `illumination.core.js` is a functional core (one object, `core`, of
+functions that take values and answer with values, touching neither the DOM nor
+storage nor the clock) and `illumination.shell.js` is the imperative shell around
+it. Both are inlined into one `<script>`, the core first, so the shell closes
+over it. Anything that can be worked out from values belongs in the core, where
+`just test-js` exercises it in a couple of hundred milliseconds without a
+browser; what is left in the shell is wiring, exercised in a real one by `just
+test-browser`. The script stays a *classic* script rather than a module: a module
+is deferred, and the theme has to apply before the body paints.
 
 `src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
 `publish`, and `fetch` subcommands, resolves which session to show, reads the
@@ -228,19 +251,27 @@ tests in `tests/` can import the modules. Adding a module means adding it to
 ### Parsing is where the invariants get established
 
 `Entry` is an internally-tagged enum over the JSONL `type` field. `user` and
-`assistant` become turns; `#[serde(other)]` collapses everything else (hook
-output, mode changes, file-history snapshots, and whatever gets added later)
-into `Bookkeeping` and drops it.
+`assistant` become turns, `attachment` and `system` lines become turns or
+glosses, and `#[serde(other)]` collapses everything else (mode changes,
+file-history snapshots, and whatever gets added later) into `Bookkeeping` and
+drops it. `Folio::read` produces a `Vec<Recorded>`, each either a `Turn` or a
+`Glossed`, in file order, so a harness note keeps its place among the turns it
+stands between.
 
-`attachment` lines are the exception that isn't pure scaffolding: most are
-(task reminders, hook output, memory), but a `queued_command` attachment is a
-message the user typed while the assistant was still working. The harness
-records it here, not as a `user` turn, so dropping all attachments silently
-loses real conversation. `RawAttachment` lifts `queued_command` into a `User`
-turn and drops every other attachment kind. These turns slot into the stream in
-file order, at the point the queued message was dequeued (after the tool
-results complete, before the next assistant turn), so they render as a user
-panel interjecting mid-response.
+An `attachment` line is one of three things. A `queued_command` is a message the
+user typed while the assistant was still working: the harness records it here,
+not as a `user` turn, so it becomes a `User` turn that slots into the stream at
+the point it was dequeued (after the tool results complete, before the next
+assistant turn) and renders as a user panel interjecting mid-response. Most of
+the rest are notes the harness wrote into the session, and become glosses (see
+below). The remainder is scaffolding and is dropped.
+
+**An attachment's body stays raw `Value` rather than a typed enum, and this is
+deliberate.** Serde's `#[serde(other)]` only catches an unknown *tag*: a
+recognised tag whose fields don't match is a hard error, which would abort the
+whole render because a harness version changed one field's type. `gloss.rs`
+reads every body leniently instead, exactly as `tools.rs` reads a tool's input,
+so no shape the harness invents can break a folio.
 
 One API response is written to the transcript a block at a time: several
 `assistant` lines share a `message.id`, and every one of them repeats the whole
@@ -284,9 +315,31 @@ so a call and its result render inside one `Panel` (one bordered article) with
 no intervening `user` heading. The same pass drops `/clear` boundary turns.
 Add new turn-level filtering or grouping here, not in the renderer.
 
-Each panel is labelled by its `kind` (`Panel::kind`): the border colour already
-distinguishes user from assistant, so the label names the content instead,
-`tool` or `thinking` when that's all the panel carries, otherwise the speaker.
+**A result joins the panel holding its call, not whichever panel is newest.**
+Calls issued together are written as one `assistant` line each sharing a
+`message.id`, so they are several panels; taking the last one piles every result
+onto the last call and leaves its siblings showing none. `panels` therefore
+keeps a map from each call's id to the panel it landed in (`homes`) and places
+each result there, falling back to the newest assistant panel for a result whose
+call the session never recorded.
+
+`Panel` is an enum: `Speech` (a speaker's contribution) or `Gloss` (a harness
+note). The same pass also lifts the turns recorded in the user's role that
+aren't the user into glosses, via `gloss::wrapped`, which answers three ways
+rather than two: a note to set, *nothing* (a wrapper with nothing under it), or
+`None` for the user actually speaking. The three-way answer is load-bearing.
+The caveat that stands in front of a slash command is its own turn, and
+collapsing "no note here" into "leave it alone" renders that caveat as the user
+speaking, which is exactly what it isn't.
+
+Each panel is labelled by its `kind` (`Panel::kind`): the speaker already has a
+border colour, so the label names the content instead, `tool` or `thinking` when
+that's all the panel carries, a gloss's own kind when it is one, otherwise the
+speaker. The kind reaches the markup as `data-kind`, and the stylesheet keys
+both the border pigment and the label colour off it, so **a new kind needs a
+pigment as well as a label** or it silently inherits its neighbour's. What the
+dock steps to is a separate question, answered by the kind's `side` rather than
+by its name: see the palette below.
 
 A speech panel's leading paragraph opens with a rubricated versal (a dropped
 blackletter initial). `Scribe::panel` finds the first visible-text block of a
@@ -315,6 +368,29 @@ otherwise be lost at the column's edge. The
 stylesheet keys the body off `details > pre` rather than a class, because a
 highlighted body is comrak's markup and can't carry one.
 
+**The subject goes in the gist and never in a note.** The summary line is a flex
+row and the gist is the only part of it that can shrink (`overflow: hidden` is
+what zeroes a flex item's automatic minimum size); `.marginalia__note` and
+`.marginalia__outcome` are both `flex: none`, so a note holding a path drives the
+line clean out of the fold and squeezes the gist to nothing on the way.
+
+**A result's line previews what came back, and says nothing else.** Every panel
+holds exactly one call and one result (one assistant line carries one call, and
+`panels` puts each result in its own call's panel), so naming the tool or its
+subject again would only repeat the box directly above. The line is therefore the
+*hint*, `tools::hint`, in the gist. Success is unmarked: the box under the call
+is what says the call was answered, and `error` is set only because a failure is
+the exception, which is what makes the mark worth reading.
+
+**A hint must show what the fold shows**, so `hint`'s match shadows `result`'s
+arm for arm, fallbacks included. Where a view sheds something, the hint sheds it
+too (a read's line-number gutter, the tag around a failure); where a view
+recomposes, the hint is drawn from what the fold *leads with* (the first thing
+chosen out of an `AskUserQuestion` sentence, a task's first fact) rather than
+from the markup it arrived in. Taking the raw first line instead puts back onto
+the summary exactly what the view took out, which is how a read's line came to
+open on a bare `1`. Adding an arm to `result` means deciding its arm in `hint`.
+
 ### Setting the tools
 
 `tools.rs` owns every per-tool decision, keyed on the tool's name: `call`
@@ -332,12 +408,25 @@ markdown through `prose`; code is a highlighted code block; a list of small
 structured things (questions and their options, findings, todos) is its own
 markup in the mono face.
 
+That split decides the type, too. A marginalia is pitched below the reading size
+because its summary line is a label and its other bodies are data, but
+`.tool--prose` is set back at `1rem`: a skill's instructions or a plan are the
+same kind of text as the conversation around them and are read rather than
+scanned. It also carries its own copy button, since it has no `pre` for the
+one that every code block gets. And **inline code wraps** (`overflow-wrap:
+break-word` on `:not(pre) > code`), because a fold's body is its box and inline
+code has no scroller of its own: one unbreakable token would otherwise run
+straight out of the fold. Code inside a `pre` is deliberately excluded, since a
+block scrolls and breaking its lines would misreport the source.
+
 A result's setting takes the call it answers. The wire format names the tool
 only on the call, so `Folio::panels` resolves each result's `tool_use_id`
 against the session's calls and stamps it with an `Answered` (the tool's name,
 and the path where the call had one). That field is `#[serde(skip)]`: it is
 never on the wire, and it exists so the renderer walks a stream where every
-result already knows what produced it.
+result already knows what produced it. `tools::hint` keys on that same name to
+decide what its summary line can honestly preview, and `tools::result` uses the
+path to pick the language a read's contents are set in.
 
 Naming a result is also what lets `panels` **drop** the ones that say nothing
 their call doesn't: a write answering that the file was written, a skill
@@ -375,6 +464,112 @@ an `AskUserQuestion` result takes across the corpus (both opening sentences, a
 missing closing one, a quoted option and typed prose, an echoed preview, several
 selections joined into one answer, and a timeout), each with a test.
 
+### Setting the glosses
+
+`gloss.rs` is `tools.rs`'s counterpart for what the harness writes into a
+session, and follows the same rules: it keys on the shape, every reading answers
+`Option`, and an unrecognised shape is simply left unset. A `Gloss` is pure data
+(a kind, a gist, notes, and the `Body`s it has to say, each either `Prose` or
+`Plain`, since one firing of a hook can say more than one thing);
+`gloss::setting` turns it into the same `Setting` a tool call produces, so both
+go through one `render::marginalia` and read as one kind of thing on the page.
+Harvest real transcripts before adding a kind, as with a tool view.
+
+The six kinds name *what wrote the note*, not what it holds: `hook`, `rule`,
+`skill`, `command`, `plan`, and `note` as the catch-all. Keeping the label set
+small is deliberate, because the summary line is where the specific labelling
+belongs, exactly as a tool's name and gist divide the work.
+
+**A skill reads the same however it was loaded.** `gloss::meta` knows one by the
+directory it opens on, but a *built-in* skill (`/review`, `/init`,
+`/security-review`) has none on disk, so its instructions arrive as bare prose
+and would fall through to `note`. The slash command standing directly in front of
+them is what says otherwise, so `Folio::panels` calls `Gloss::ran_by` to relabel
+and name it. This matters because a skill is not a command's payload: across the
+corpus 55 were loaded by a command of the same name and **28 by the model itself
+with no command at all**. Were the command-loaded ones folded away or left as
+notes, the same event would take a different shape purely by who triggered it.
+
+**A command is not a skill, and the two take different pigments.** A command is a
+gloss by where it sits rather than by whose it is: the harness recorded it, but
+the user typed it. So `--command-edge` is the user's own hue drawn back toward
+the ink, exactly as `--thinking-edge` is the assistant's, while a skill takes the
+teal. Both are cool, because neither is the model; see the palette below for why
+that is the deciding question.
+
+One firing of a hook writes several lines (what it decided, what it injected,
+what it printed), and `Folio::panels` gathers them into one panel the same way
+it gathers a tool result into the call it answers: the decision labels the
+summary line and the injected context fills the fold, rather than two panels
+each saying half of it. The key is `Gloss::firing`, and **it is the `toolUseID`
+plus the hook's own command, not the id alone**: the id names the *event*, one
+event runs every hook matching it, and keying on it alone folds four
+`SessionStart` hooks into one panel claiming to be a single hook that ran four
+commands. So `Firing::joins` is not equality: two notes join when the event
+matches and no two *different* commands stand between them, which is what lets
+the lines a hook wrote through the harness (they carry no command of their own)
+join the hook's own line. `Gloss::absorb` then narrows the panel's firing to
+that command, so a *third* hook of the same event can no longer join what is now
+identified, and it stacks the bodies rather than keeping the first: one firing
+that had two things to say says both, in the order it said them.
+
+A slash command's output is gathered the same way: the harness records what a
+command printed as its own `system` line, and `GlossPanel::gathers` joins it to
+the panel holding the command. **`parentUuid` is not a semantic pointer.** It
+chains every line to the one before it, attachments included, so it says "the
+previous line" and not "the line I am about". What makes the join sound is that
+the output is *always* the very next line (138 of 138 across the corpus) and that
+`panels` only ever joins into the panel it just opened; the uuid is what confirms
+the pairing rather than what establishes it. Don't reach for `parentUuid` to tie
+two lines together where adjacency isn't already doing the work.
+
+That adjacency is also why `panels` keeps `unset`: a command the folio leaves
+unset (one that only works the harness, or a `/clear` boundary) is dropped, and
+its output line has to go the same way, or the folio sets what `/copy` printed
+while never mentioning `/copy`.
+
+What a note has to say is what decides whether it is set at all, mirroring the
+`ACKNOWLEDGEMENTS` drop: a note with neither a gist nor a body is dropped rather
+than set as a bare line saying something ran. Four drops are worth knowing:
+
+- A `hook_success` records `content` (what the hook contributed to the session)
+  and `stdout` (what it printed), and for a hook that just prints context they
+  are the same text twice, so only one is set. A hook answering in the **control
+  protocol** prints JSON that contributes nothing itself; what it asked for
+  arrives as the `hook_system_message` and `hook_additional_context` notes beside
+  it, so the protocol JSON is dropped rather than set twice. `stderr` never
+  reaches the model and is always worth setting.
+- A `plan_mode` attachment repeats with `reminderType: "sparse"` while plan mode
+  stays on. Only `"full"` marks the boundary.
+- The image-scaling notice (`[Image: original …  Multiply coordinates …]`) is
+  coordinate advice for the model, and the image itself sits beside it.
+- A slash command that works the harness rather than the conversation
+  (`HARNESS_CONTROLS`: `/copy`, `/config`, `/resume`, and the rest). The
+  transcript records every slash command the same way, whether it injected a
+  whole skill or only redrew the screen, so telling them apart takes a list.
+  Extend it against real transcripts: dropping one that *did* inject something
+  loses the reason a session changed course, and the terse ones are not alike
+  (`/compact` rewrites the context, `/model` changes who answers, and both stay).
+
+Environment inventory (`task_reminder`, `skill_listing`, `deferred_tools_delta`,
+`agent_listing_delta`, `command_permissions`, `date_change`) and the harness's
+own bookkeeping (`system`/`turn_duration`, `system`/`stop_hook_summary`, which
+restates the hook attachments beside it) stay dropped: a reader can't act on any
+of it.
+
+The plan itself needs nothing special. An older `ExitPlanMode` carries the plan
+inline as `input.plan`, which `tools::plan` already sets; a newer one writes it
+to a file with `Write`, so the text is already in the folio as an ordinary write.
+**The renderer must not read the plan file off disk**: `Scribe` is pure, and a
+folio has to render the same for a session that ended a year ago on another
+machine.
+
+`tests/fixtures/glosses.jsonl` holds one line per kind plus the ones that must
+stay unset, the way `playground.jsonl` does for tools. It also carries a speech,
+tool, and thinking panel, so it is the swatch for the panel pigments: every edge
+a folio can draw is in one render, which is the only way to judge whether they
+tell each other apart. Keep it that way when adding a kind.
+
 ### Rendering invariants worth preserving
 
 - **Self-contained and gist-shareable.** Everything the folio needs is inlined:
@@ -385,8 +580,8 @@ selections joined into one answer, and a timeout), each with a test.
   file view. The constraint to respect is therefore **total bundle size** (keep
   it within what a gist and viewer will serve), *not* scripts: the
   viewer `document.write`s the folio and runs its inlined JS. Interactive
-  behaviour (search, copy, collapse, jump) lives in a trusted app script inlined
-  the same way the stylesheet is; keep it small. The copy button's quill
+  behaviour (search, copy, collapse, jump, scrub) lives in a trusted app script
+  inlined the same way the stylesheet is; keep it small. The copy button's quill
   scratch answers to that size constraint too, which is why it is a few lines
   of Web Audio (a word's worth of strokes with the pen lifted between them,
   each grained noise under its own pressure envelope, trimmed to the band a dry
@@ -435,9 +630,25 @@ selections joined into one answer, and a timeout), each with a test.
   that, and hold the stylesheet and app script inside the cut faces too, since
   the scan weighs the transcript rather than this crate's own markup. Widening
   the cut means editing `KEEP` in `scripts/subset_fonts.py` and re-running `just
-  fonts`; it is cheap and safe, since a codepoint a face never had is simply not
-  kept. `KEEP` was chosen by measuring the corpus, not by taste: Greek is in
-  because real sessions use it, Cyrillic is out because none did.
+  fonts`; it is safe, since a codepoint a face never had is simply not kept, but
+  it is only *cheap* for some blocks, so **price a block before adding it** by
+  cutting with and without it and diffing the two faces' bytes. `KEEP` was
+  chosen by measuring the corpus rather than by taste, and the measurement that
+  decides is cost against how often the block is actually written: the two
+  symbol blocks holding `⟨these⟩` and `⬆` cost well under a kilobyte between
+  them and are in, while Latin Extended-B costs 54 KB in *every* folio to spare the rare
+  session that quotes a tool's mangled names, and Cyrillic likewise, so both
+  stay out. Leaving a block out is not a failure: the whole faces are the net
+  under it, and paying for that net in every folio is the trade this cut exists
+  to avoid. Beware measuring against a session that reached a character *because
+  you were demonstrating the fallback in it*, which is evidence of nothing.
+- **The same folio on every platform.** The stylesheet, the app script, and the
+  border SVGs are `include_str!`'d verbatim, so the line endings in the working
+  tree are the line endings in the artifact. `.gitattributes` therefore pins
+  every text file to LF on checkout (`* text=auto eol=lf`), or a Windows clone
+  would render a folio nobody else does, and the tests that assert on multi-line
+  stretches of the stylesheet would fail there and only there. The vendored fonts
+  are excluded, staying byte-for-byte as upstream ships them.
 - **Escaped, never executed.** Transcripts routinely contain `<script>` and
   raw HTML as subject matter. maud escapes interpolations and comrak escapes
   raw HTML by default; `tests/fixtures/injection.jsonl` guards this.
@@ -473,33 +684,238 @@ selections joined into one answer, and a timeout), each with a test.
   15px), because it is both the position indicator and a drag target. A test
   guards all three.
 
-Markup carries `data-sidechain` for subagent turns and `data-meta` for
-harness-injected ones so a stylesheet can distinguish them. Meta turns are
-command caveats, skill scaffolding, and context dumps, not conversation, so the
-stylesheet hides them outright; they carry no reveal control, and the app script
-skips them when searching so a match can't land in a permanently hidden panel.
+### The palette: warm is the model, cool is what reached it
 
-The reading column is pure transcript; the folio's chrome floats in the four
-corners, all `position: fixed` and living in the shell of the markup rather than
-the panel stream. Reading controls sit on the right (search top, and a
-navigation dock bottom that steps between user/assistant messages, skipping tool
-and thinking panels, jumps to the end, and folds every marginalia); appearance
-sits on the left (a metadata plaque in the top corner revealing the title,
-facts, and colophon on hover or focus; and the light/dark/system toggle bottom,
-with the luminary standing over it). There is no in-column header or footer.
+**One axis decides every edge in the folio.** Warm hues are what the model
+produced; cool hues are what reached it from outside. A reader scrolling learns
+which side of the exchange they are passing before reading a single label, and
+**a new kind has its side decided for it rather than chosen by taste**. This is
+the first question to answer when adding one.
 
-The luminary (`luminary.svg`, inline in the appearance corner) is the light the
-folio is read by: a guttering candle after dark, the sun with its rays circling
-by day. Both are drawn into one box and every pigment is a `light-dark()` pair
-whose off-scheme half is `transparent`, so the scheme lights one and puts the
-other out with no second set of rules and no folio rendered for one scheme
-alone. Its radiance, a very faint circle reaching across the leaf, is a sibling
-inside the lamp rather than a fixed overlay, so it stays centred on the flame
-wherever the corner puts it; it lifts the parchment by ~14/255 beside the lamp
-and nothing at all at the far corner. Sunlight brightens what it falls on and a
+| Warm: the model's own | Cool: what reached it |
+|---|---|
+| `assistant` — `--claude` | `user` — `--lapis` |
+| `thinking` — `--claude` toward the ink | `command` — `--lapis` toward the ink |
+| `tool` — `--sienna` | `skill` — the teal |
+| `plan` — `--rubric` | `hook` — `--verdigris` |
+| | `rule` — the teal toward the ink |
+
+A plan boundary is the model's: the mode is the user's to ask for, but entering
+and leaving it is the model reporting on its own working, so it reads beside the
+reasoning rather than beside the asking. It is rubricated rather than given a
+hue of its own, because marking a division in the text is what a scribe ground
+vermilion for. A rule is the user's own writing pulled into the conversation, so
+it is theirs however the harness fetched it.
+
+Three pairs are deliberately the same hue drawn back toward the ink rather than a
+colour of their own, because none of them is a third party: reasoning is the
+assistant's own voice unvoiced, a command is the user's own voice recorded as a
+note, and a rule is a skill at lower volume (both are instruction files the user
+wrote, but rules arrive a dozen at a time at the head of a session where a skill
+arrives singly). `tool` takes the ochre a tool's *name* is already set in, so the
+panel and the names inside it agree.
+
+The cool side is ordered by how far from the reader each came: a command the user
+typed, a skill they wrote (loaded by a command or by the model itself), a hook
+answering on their behalf. Malachite sits furthest from a voice while still
+being cool.
+
+**A side is not a loudness.** Which side a kind is on decides *which way* it is
+pitched; how far it is drawn back toward the ink is a separate call, and the
+quiet kinds are the frequent ones. Deciding the side is compulsory; how loud to
+be is not.
+
+**One kind sits off the axis**, and only one: `note`, the catch-all, which by
+definition has nothing in common to pitch. It stays in faint ink and is the only
+kind the dock steps past. It is not vestigial, either: across a 60-session sample
+it turned up 129 times against `rule`'s 141, almost all of them a file edited
+outside the session while it ran, which is exactly the sort of thing a reader
+needs and nothing else records.
+
+`data-sidechain` is a third, orthogonal axis (whose turn it is, not what kind),
+and takes Tyrian purple across every kind at once.
+
+**The axis is declared once, in code.** `PanelKind::side` answers it and
+`Scribe` writes the answer onto every panel as `data-side`, so the axis is
+*recovered* by everything downstream rather than restated: the dock's flanking
+arrows step along `[data-side]`, the search box groups its chips into a column
+per side, and the stylesheet pitches each kind's pigment to match. `PanelKind::EVERY`
+is the matching single declaration of the kinds themselves, which is what the
+search chips are built from. The match in `side` is exhaustive on purpose, so
+**a new kind will not compile until its side is decided** — and deciding it is
+what then gives the kind its pigment, its chip, and whether the dock stops at it.
+Don't add a list of kinds anywhere else; derive it from these two.
+
+Markup carries `data-sidechain` for subagent turns so a stylesheet can
+distinguish them. **Nothing in a folio is hidden with no way to reveal it.** A
+gloss panel's edge is solid like any other's: it was dotted while the glosses
+shared a few pigments and the edge had to say "nobody's speech" by itself, and
+once every kind had its own hue that was a second mark for something already
+said. The sidechain keeps its dashes, being a different axis. Each kind
+sets the `--gloss-edge` token rather than `border-left-color`, so
+`.turn[data-sidechain]`, which sets the colour outright, still wins and a
+subagent's gloss still reads as a subagent. Its fold sheds its own frame while
+shut so it reads as a line under the panel's header rather than a box inside a
+box; opening it gives the frame back, since a fold holding output unfurls past
+the reading measure and there would otherwise be nothing behind the text out
+there. Those rules must sit *after* `.marginalia` in the stylesheet, or they
+lose to it at equal specificity.
+
+**The caveat is the folio's own voice, and the only text in the reading column
+this crate wrote.** It stands ahead of the first panel and says what a session
+file cannot show: the system prompt, the tool descriptions, and the instruction
+files loaded when a session starts are sent with every request but never
+recorded. No session in the corpus carries a system prompt or a tool schema;
+what the harness writes *mid*-session **is** recorded and is set as a gloss,
+which is why the caveat points at those rather than claiming nothing is shown.
+Check any change to its wording against the corpus the same way.
+
+It carries **no `.turn` class**, and that is the load-bearing part rather than
+its styling. Every part of the app script keys on `.turn`: the dock's steps, the
+minimap's bands, what the key sets aside, and what the search counts as a hit.
+Giving the folio's own note that class would enter this crate's writing into the
+count of what the session said. A test holds it. Anything else added to the
+column that isn't the transcript's goes the same way.
+
+The rest of the reading column is pure transcript; the folio's chrome floats in
+the four corners, all `position: fixed` and living in the shell of the markup
+rather than the panel stream. Reading controls sit on the right, as a **rail**:
+one column of cards led by the **key**, with the search, the navigation dock,
+and the minimap stacked under it. They are in one column because they are one
+mechanism, the key governing the three below it, and standing them together is
+what says so;
+appearance sits on the left (a metadata plaque in the top corner revealing the
+title, facts, and colophon on hover or focus; and the luminaries bottom). There
+is no in-column header or footer.
+
+**The key is a control in its own right, not the search's.** It is a chip per
+`PanelKind::EVERY`, each carrying its own kind's pigment so it doubles as the
+legend for every edge in the margin. The chips are one grid of five rows filled
+*by column*, so `EVERY`'s first half runs down the cool side and its second down
+the warm one, rather than each side being nested in an element of its own. That
+is what lets the halves be five and five with nothing stranded on a row alone,
+which is why `note` sits at the foot of the warm column despite being
+`Side::Aside`. **The order in `EVERY` is a layout, not a classification**: every
+chip carries its own `data-side`, so the dock still steps past `note` and its
+neutral ink still keeps it from reading as the model's. The search, the dock, and
+the minimap all read it (`enabledKinds` in the app script), so a reader says once
+what they are looking through rather than once per control that looks: narrow the
+key to `skill` and the search finds only skills, the arrows step only to them,
+*and* the map fades everything else. That is why it sits in the rail above them
+rather than inside any one of them. The `aside` kinds stay out of the dock
+however the key is set, since the arrows are the two sides and those kinds are on
+neither.
+
+The **minimap** is the folio seen edge-on, at the foot of the rail: a band per
+panel in that panel's own pigment, sized to the share of the document the panel
+takes, with the reader's own view of the leaf drawn over them and a drag along it
+scrubbing the folio. Three things about it are load-bearing. Its bands are
+**recovered from the panels** rather than written into the markup, since what a
+band states is a share of the document, which only the browser knows and which
+changes every time a fold opens; the empty track the renderer emits is what tells
+the app script to draw them. A kind the key takes out of play is **faded, not
+dropped**, because a map missing a stretch of the document misstates where
+everything else in it sits, and a scrub then lands on the nearest band still in
+play. And it is `aria-hidden`: every band is a second way to a panel the dock
+already steps to and the panel's own number already links to, so a stop per panel
+in the tab order would bury both.
+
+It is also the one card in the rail that is **not cut as a card**: no leaf, no
+border, no shared radius. It is drawn as the volume itself, shut, lying with its
+spine to the left, seen from above the front board and off to the spine side.
+
+**That viewpoint is one vector, and every face is cut from it.** `--away-x` and
+`--away-y` are how far up and to the left a thing goes as it recedes, so the
+front board's depth on screen and the spine's width on screen are the same
+recession seen twice: both faces are parallelograms sheared by it (`clip-path`
+on `.minimap::before` and `::after`), and they share a corner instead of meeting
+at a seam. Change the angle by changing those two values, not by redrawing a
+polygon. The head of the block, `.minimap__track`, is the one face square to the
+reader and **must stay an axis-aligned rectangle**: the scrub measures the
+pointer against its box, so shearing it would put the bands where the pointer
+isn't. The back board shows only its thickness at the foot.
+
+A trapezoid tapering both ways was tried first, which is the projection for a
+reader standing square in front, and it leaves the spine a line: a line says
+nothing, and the corner where it met the tapering board read as a notch.
+
+**The proportion is the whole of it.** A session is a great many leaves and the
+binding around them is a few thousandths of that, so the leather is a handful of
+pixels and everything else is paper, ruled with a hairline every other pixel. A
+wide spine with cords tooled across it was tried and read as a picture frame,
+which is what any binding drawn wide enough to show detail will do at this
+scale; a pale wash meant to round the block read as a lamp shining out of the
+rail, so the only light in it is on the board that faces upward, and the only
+other modelling is the shadow the binding casts on the leaves. All of it is
+gradients and a clip-path rather than an image, so it costs no bytes and
+resolves `light-dark()` like the rest of the palette. The silhouette is what
+carries the perspective, so don't put it back in a rectangle.
+
+A band takes its kind's pigment from the same declaration the key's chips do
+(`--kind-hue`), since both stand for a panel rather than being one; a kind that
+reaches one and not the other is a kind that silently shares a neighbour's hue,
+which a test weighs against `PanelKind::EVERY`.
+
+The wheel over the track **zooms the map and nothing else**, held about the
+pointer as a map zooms about a cursor. A folio of a thousand panels draws most of
+them two pixels tall, which is a mark rather than a target; zooming opens a
+stretch up so one can be picked out. What the track shows is a `lens` (an origin
+in the document and a scale), and the zoom is deliberately *independent* of the
+reader's position: looking into one stretch while reading another is the whole
+point, so only the reader's own scrolling brings the lens back to them
+(`core.followed`, applied on scroll and on nothing else). The wheel event is
+stopped at the track, both so the leaf doesn't scroll under the reader and so
+following is not released: looking at the map is not leaving the end of the
+session.
+
+**Every landing writes the turn's permalink**, rather than only scrolling to it:
+`history.replaceState` to `#turn-N`, a mark on the panel, then an instant
+`scrollIntoView`. The dock's steps, the leaps to either end, and the minimap's
+scrub all go through the one `landOn`, so a folio's URL always names where its
+reader is. Each part is load-bearing. The hash is what makes the position survive
+a reload, which matters because `serve` re-renders under the reader and a scroll
+in flight is simply lost when it does, with nothing recording where it was
+headed. The landing is instant because an animation is a thing to wait out when
+the reader means to press the button again. It is `replaceState` rather than
+assigning `location.hash` so that twenty steps don't cost twenty presses of Back;
+`replaceState` performs no scroll of its own, which is why the scroll is
+explicit. And **`:target` does not answer to `replaceState`**, so the gilt "you
+are here" wash is drawn from a `data-landed` mark the script sets as well as from
+`:target`: without it the wash appeared only for a reader who arrived by a link,
+and then stayed on that panel through every step after. The deep-link handler
+restores such a hash on load, so a landing gets reload-correctness by joining
+that path rather than adding one.
+
+**The luminaries are the light the folio is read by and the control that
+chooses it**, which is one thing rather than two: a sun and a candle in the
+appearance corner (`src/luminary/*.svg`, inline so they take the palette), and
+the reader presses the one they want to read by. There is no toggle, no labels,
+and no third figure for "system", because the system names no light: it is
+offered instead as a small **reset** beside them, shown only once a light has
+been chosen and keyed purely off the `data-theme` that choice writes on the
+document, so the script knows nothing about it.
+
+**Which light is burning is the scheme's to say, not the press's.** By day the
+sun is up and the candle stands smoking; after dark the moon hangs among its
+stars and the candle is lit. That is one set of `light-dark()` pigment pairs,
+each with `transparent` on its off-scheme half, so the scheme raises one and
+sets the other with no second set of rules and no folio rendered for a single
+scheme, and a folio read under `system` shows the right scene without being told
+which it is.
+
+A figure's radiance, the very faint circle reaching across the leaf, sits inside
+the figure that throws it rather than being a fixed overlay, so the glow comes
+from whichever is burning; it lifts the parchment by ~14/255 beside the lamp and
+nothing at all at the far corner. Sunlight brightens what it falls on and a
 candle warms it, so the day's wash is a pale warm white where the night's is the
-flame's own amber: that amber over a light page stains rather than lights. All
-of it stills under `prefers-reduced-motion`, which is what that query is for.
+flame's own amber: that amber over a light page stains rather than lights. All of
+it stills under `prefers-reduced-motion`, which is what that query is for.
+
+The animated parts turn about points named in the *stylesheet* while the shapes
+they turn are in the *SVG*, so those two must be kept in step: the rays and the
+corona spin about the disc's `cx`/`cy`, and an origin left over from where the
+sun used to sit sends them round an orbit rather than round themselves, which
+reads as the whole sun wandering off its own centre.
 
 The dock's follow control (`tail -f`: re-pin the newest message's start on each
 reload until the reader takes control by scrolling or by loading a `#turn-N`
@@ -511,6 +927,19 @@ promise an update that can never come. The control's *presence* is what tells
 the app script this folio can follow, so there is one source of truth rather
 than a flag in each: no control means jumping to the end stays a jump, and no
 follow state is stored.
+
+**Following is a mode, and what it stores is the permalink it last wrote**, not a
+flag. Three things follow from that, each of which broke when it was missing.
+The pin is what tells a hash the folio wrote itself apart from one the reader
+arrived with: a live session grows between loads, so by the time a followed folio
+is reloaded the hash it wrote no longer names the end, and reading every hash as
+the reader's released following on the first reload (and on every reload at all,
+once a step of the dock had left a permalink in the URL). While following,
+`history.scrollRestoration` is `manual`, because the browser restores the
+position it recorded before the reload *after* this script has run, quietly
+undoing the snap to the end. And the end is re-pinned whenever the leaf changes
+height under the reader (a `ResizeObserver` on the panels), since the fonts
+landing and a fold opening both move it.
 
 What the app script remembers is split by what it belongs to. The theme is the
 reader's, and holds across everything they open, so it keeps one key. Which
@@ -572,11 +1001,15 @@ reuse it rather than introducing a second convention.
 Types are named after a manuscript scriptorium, and the names are load-bearing
 in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
 for one project), `Colophon` (generation metadata, shown in the plaque),
-`Scribe` (the renderer). Markup classes continue it with `marginalia` (a
-collapsible tool call or result), `drollery` (a marginal creature), `versal`
-(the dropped initial that opens a speaker's paragraph), `luminary` (the candle
-or sun the folio is read by, and its `radiance` over the leaf), and
-`illumination` (the theme layer).
+`Scribe` (the renderer), `Gloss` (a note the harness entered into a session, as
+a later hand annotates a manuscript). Markup classes continue it with
+`caveat` (the folio's own note to its reader, at the head of the column),
+`marginalia` (a collapsible tool call or result), `drollery` (a marginal
+creature), `versal` (the dropped initial that opens a speaker's paragraph),
+`key` (which kinds of panel are in play, and what each edge's pigment means),
+`rail` (the column of cards the key leads), `luminary` (a light the folio is
+read by, which is also the control that chooses it, and its `radiance` over the
+leaf), and `illumination` (the theme layer).
 
 ## Testing against real data
 
@@ -596,26 +1029,32 @@ A shape rare enough to be worth a comment is worth a fixture line.
 ### Visual verification
 
 The stylesheet is the deliverable, so a styling change isn't done until it has
-been looked at, not just asserted on in a string test. `just setup` installs a
-Playwright-managed headless Chromium; render a folio and screenshot it:
+been looked at, not just asserted on in a string test. `just setup` installs the
+test toolchain and a Playwright-managed headless Chromium; render a folio and
+screenshot it:
 
 ```bash
 cargo run -q --release -- render <session.jsonl> -o /tmp/folio.html
-uvx --from playwright python - /tmp/folio.html /tmp/folio.png <<'PY'
-import sys
-from playwright.sync_api import sync_playwright
-html, png = sys.argv[1], sys.argv[2]
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1500, "height": 2600})
-    page.goto(f"file://{html}")
-    page.screenshot(path=png)
-    browser.close()
-PY
+node --input-type=module -e '
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1500, height: 2600 } });
+await page.goto("file:///tmp/folio.html");
+await page.screenshot({ path: "/tmp/folio.png" });
+await browser.close();
+'
 ```
 
 Read the PNG back to check the illumination. For an interactive loop, `just
 serve <session>` reloads the browser as you edit the renderer or CSS.
+
+Behaviour is a different question from appearance, and has its own two suites:
+`just test-js` for the script's core (values in, values out, no browser) and
+`just test-browser` for what it does to a real folio in a real Chromium, both
+run by `just check`. A change to `illumination.*.js` belongs in one of them:
+`tests/browser` renders through the actual CLI and even serves a session it
+grows under the reader, so following, the dock, the minimap, and what a folio
+remembers across a reload are all exercised as a reader meets them.
 
 ### Verifying the gist viewer end to end
 
@@ -639,22 +1078,19 @@ exercise the raw-URL fallback the truncated case takes.
    (`.folio`) rather than `load`, then assert the folio is there and
    screenshot it:
 
-```python
-import functools, threading, sys
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from playwright.sync_api import sync_playwright
+```js
+// node --input-type=module -e '<this>' from the repo root, where `playwright`
+// resolves; `npx serve docs` or any static server will do for the host.
+import { chromium } from "playwright";
 
-gid, docs_dir, png = sys.argv[1], sys.argv[2], sys.argv[3]
-server = ThreadingHTTPServer(
-    ("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=docs_dir)
-)
-threading.Thread(target=server.serve_forever, daemon=True).start()
-with sync_playwright() as p:
-    page = p.chromium.launch().new_page(viewport={"width": 1500, "height": 2000})
-    page.goto(f"http://127.0.0.1:{server.server_address[1]}/?{gid}/session.html")
-    page.wait_for_selector(".folio", timeout=30000)
-    assert page.title() == "folio session" and page.query_selector(".folio")
-    page.screenshot(path=png)
+const [gist, port, png] = ["<id>", "<port>", "/tmp/viewer.png"];
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1500, height: 2000 } });
+await page.goto(`http://127.0.0.1:${port}/?${gist}/session.html`);
+await page.waitForSelector(".folio", { timeout: 30000 });
+console.assert((await page.title()) === "folio session");
+await page.screenshot({ path: png });
+await browser.close();
 ```
 
 3. `gh gist delete <id> --yes`, then read the PNG back to confirm the

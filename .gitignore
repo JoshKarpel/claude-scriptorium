@@ -30,3 +30,6 @@ target
 
 # ...but the viewer page is source: served from Pages and embedded in the binary
 !docs/index.html
+
+# The test-only JS toolchain (package-lock.json is committed)
+node_modules

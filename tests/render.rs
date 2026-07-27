@@ -1,9 +1,11 @@
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use claude_scriptorium::{
+    gloss,
+    gloss::GlossKind,
     render,
     render::{Colophon, Delivery, Fonts, Labour, Scribe},
-    transcript::{Content, Folio, Role},
+    transcript::{Content, Folio, Panel, PanelKind, Role, Side},
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
 use jiff::{Timestamp, tz::TimeZone};
@@ -51,14 +53,14 @@ fn set(
 fn bookkeeping_lines_are_not_turns() {
     let folio = fixture();
 
-    assert_eq!(folio.turns.len(), 5);
+    assert_eq!(folio.turns().count(), 5);
 }
 
 #[test]
 fn turn_roles_come_from_the_entry_tag() {
     let folio = fixture();
 
-    let roles: Vec<Role> = folio.turns.iter().map(|turn| turn.role).collect();
+    let roles: Vec<Role> = folio.turns().map(|turn| turn.role).collect();
     assert_eq!(
         roles,
         [
@@ -75,7 +77,8 @@ fn turn_roles_come_from_the_entry_tag() {
 fn string_content_is_kept_whole() {
     let folio = fixture();
 
-    let Content::Text(text) = &folio.turns[0].content else {
+    let first = folio.turns().next().expect("the fixture opens with a turn");
+    let Content::Text(text) = &first.content else {
         panic!("expected the opening turn to carry plain string content");
     };
     assert_eq!(text, "Explain the **quire** layout, please.");
@@ -85,7 +88,7 @@ fn string_content_is_kept_whole() {
 fn subagent_turns_are_marked() {
     let folio = fixture();
 
-    let sidechains: Vec<bool> = folio.turns.iter().map(|turn| turn.is_sidechain).collect();
+    let sidechains: Vec<bool> = folio.turns().map(|turn| turn.is_sidechain).collect();
     assert_eq!(sidechains, [false, false, false, true, false]);
 }
 
@@ -116,8 +119,7 @@ fn a_response_written_as_several_lines_is_counted_once() {
     // Both lines of msg_quire report the response's usage; only the first
     // keeps it, so the second contributes nothing to the total.
     let counted: Vec<u64> = folio
-        .turns
-        .iter()
+        .turns()
         .filter_map(|turn| turn.usage)
         .map(|usage| usage.output_tokens)
         .collect();
@@ -299,6 +301,17 @@ fn a_web_search_sets_the_links_it_found_as_links() {
     assert!(
         html.contains(r#"<a href="https://openfontlicense.org/">SIL Open Font License 1.1</a>"#)
     );
+}
+
+#[test]
+fn a_tool_searchs_result_previews_the_tools_it_found() {
+    let html = render(&playground(), &highlighter());
+
+    // A search answers with references rather than text, so its summary line
+    // had nothing to preview and came back blank: the one line a reader sees of
+    // the answer must show what the fold below it lists.
+    assert!(html.contains(r#"<span class="marginalia__gist">WebSearch, WebFetch</span>"#));
+    assert!(html.contains(r#"<li class="tool__reference">WebSearch</li>"#));
 }
 
 #[test]
@@ -536,32 +549,82 @@ fn the_folio_carries_a_search_widget() {
 }
 
 #[test]
-fn the_header_offers_a_light_dark_system_theme_toggle() {
+fn the_lights_a_folio_is_read_by_are_the_control_that_chooses_them() {
     let html = render(&fixture(), &highlighter());
 
-    assert!(html.contains(r#"class="theme-toggle""#));
+    // No separate toggle: the reader presses the light they want. The system is
+    // offered as a reset rather than as a third light, since it names no light
+    // of its own.
+    assert!(html.contains(r#"<div class="luminaries" role="group""#));
     assert!(html.contains(r#"data-theme-choice="light""#));
-    assert!(html.contains(r#"data-theme-choice="system""#));
     assert!(html.contains(r#"data-theme-choice="dark""#));
+    assert!(html.contains(r#"class="theme-reset" type="button" data-theme-choice="system""#));
 }
 
 #[test]
-fn the_appearance_corner_carries_a_candle_and_a_sun() {
+fn each_light_carries_the_name_its_figure_cannot_say() {
     let html = render(&fixture(), &highlighter());
 
-    // Both are set into every folio, and the scheme decides which is lit: each
-    // pigment is a light-dark() pair whose off-scheme half is transparent, so
-    // no folio is rendered for one scheme alone.
-    assert!(html.contains(r#"class="luminary__candle""#));
+    for (choice, label) in [
+        ("light", "read by daylight"),
+        ("dark", "read by candlelight"),
+        ("system", "follow the system"),
+    ] {
+        let button = html
+            .split(&format!(r#"data-theme-choice="{choice}""#))
+            .nth(1)
+            .and_then(|rest| rest.split("</button>").next())
+            .unwrap_or_else(|| panic!("the {choice} control is in the corner"));
+        assert!(
+            button.contains(&format!(r#"aria-label="{label}""#)),
+            "the {choice} control has no name, and its figure cannot supply one"
+        );
+    }
+}
+
+#[test]
+fn every_folio_carries_both_lights_and_lets_the_scheme_choose() {
+    let html = render(&fixture(), &highlighter());
+
+    // Sun and moon in one figure, a candle lit and smoking in the other, and
+    // each pigment a light-dark() pair whose off-scheme half is transparent: one
+    // set of rules, and no folio rendered for a single scheme.
     assert!(html.contains(r#"class="luminary__sun""#));
+    assert!(html.contains(r#"class="luminary__moon""#));
+    assert!(html.contains(r#"class="luminary__flame""#));
+    assert!(html.contains(r#"class="luminary__smoke""#));
     assert!(html.contains("--flame: light-dark(transparent,"));
+    assert!(html.contains("--smoke: light-dark(#9c9384, transparent)"));
     assert!(html.contains("--sun-disc: light-dark(#c98a1c, transparent)"));
-    // Decoration, so it is kept from assistive tech entirely.
-    assert!(html.contains(r#"<div class="lamp" aria-hidden="true">"#));
-    assert!(html.contains(r#"<svg class="luminary" viewBox="0 0 40 56" aria-hidden="true""#));
-    // The light it casts over the leaf sits inside the lamp, so it stays
-    // centred on the flame rather than on a corner guessed in the stylesheet.
-    assert!(html.contains(r#"<span class="lamp__radiance"></span>"#));
+    assert!(html.contains("--moon: light-dark(transparent, #cfc6ac)"));
+    // The figures are decoration inside a named control, so they say nothing of
+    // their own to assistive tech.
+    assert!(
+        html.contains(r#"<svg class="luminary__figure" viewBox="0 0 40 56" aria-hidden="true""#)
+    );
+    // The light each throws sits inside the figure that throws it, so the glow
+    // comes from whichever is burning rather than from a corner the stylesheet
+    // guessed at.
+    assert!(html.contains(r#"<span class="luminary__radiance luminary__radiance--day"></span>"#));
+    assert!(html.contains(r#"<span class="luminary__radiance luminary__radiance--night"></span>"#));
+}
+
+#[test]
+fn the_reset_is_offered_only_once_a_light_has_been_chosen() {
+    let html = render(&fixture(), &highlighter());
+
+    // Keyed off the attribute the choice writes on the document, so a folio read
+    // by whatever the system asks for carries no control saying so, and the
+    // script needs to know nothing about it.
+    assert!(html.contains(
+        r#".theme-reset {
+  display: none;"#
+    ));
+    assert!(html.contains(
+        r#":root[data-theme] .theme-reset {
+  display: grid;
+}"#
+    ));
 }
 
 #[test]
@@ -671,6 +734,36 @@ fn a_versal_marks_only_the_opening_paragraph_of_a_panel() {
 }
 
 #[test]
+fn the_caveat_opens_the_reading_column() {
+    let html = render(&fixture(), &highlighter());
+
+    assert!(html.contains(r#"<main class="folio"><aside class="caveat">"#));
+    assert!(html.contains("Caveat lector."));
+}
+
+#[test]
+fn the_caveat_is_nothing_the_folio_can_navigate() {
+    let html = render(&fixture(), &highlighter());
+
+    // The dock, the minimap, the key, and the search all key on `.turn`, and
+    // the folio's own voice is not one of the session's panels: carrying that
+    // class (or the kind and side the rest of the chrome reads off it) would
+    // put this crate's own note into the count of what the session said.
+    let opened = html
+        .find(r#"<aside class="caveat">"#)
+        .expect("the caveat is set");
+    let closed = html[opened..].find("</aside>").expect("the caveat closes");
+    let caveat = &html[opened..opened + closed];
+
+    // Against the markup rather than the prose: the note has the word "turns"
+    // in it, so only the attributes the script reads can be asserted on.
+    assert!(!caveat.contains(r#"class="turn"#));
+    assert!(!caveat.contains("data-turn"));
+    assert!(!caveat.contains("data-kind"));
+    assert!(!caveat.contains("data-side"));
+}
+
+#[test]
 fn each_panel_is_numbered_by_its_leading_turn() {
     let html = render(&fixture(), &highlighter());
 
@@ -694,16 +787,18 @@ fn each_panel_is_a_deep_link_target_its_number_points_to() {
 }
 
 #[test]
-fn meta_turns_are_marked_and_hidden_with_no_reveal_control() {
+fn a_skill_the_harness_injected_is_set_as_a_gloss_rather_than_a_user_turn() {
     let folio = Folio::read(Path::new("tests/fixtures/meta.jsonl")).expect("fixture parses");
 
     let html = render(&folio, &highlighter());
 
-    // Harness notes stay in the folio, marked and hidden by the stylesheet, but
-    // carry no reader-facing control to reveal them.
-    assert!(html.contains("data-meta"));
-    assert!(html.contains("Base directory for this skill"));
-    assert!(!html.contains(r#"id="show-meta""#));
+    // The skill's own name labels the note; the base-directory line that
+    // carried it is scaffolding and doesn't reach the page.
+    assert!(html.contains(r#"class="turn turn--gloss" data-kind="skill""#));
+    assert!(html.contains(r#"<span class="marginalia__gist">review-config</span>"#));
+    assert!(!html.contains("Base directory for this skill"));
+    // Nothing is hidden any more, so nothing is marked as hidden.
+    assert!(!html.contains("data-meta"));
 }
 
 #[test]
@@ -726,8 +821,7 @@ fn a_message_queued_mid_response_becomes_a_user_turn() {
     // a `queued_command` attachment, not a `user` line, so it would vanish if
     // attachments were all dropped as bookkeeping.
     let queued = folio
-        .turns
-        .iter()
+        .turns()
         .find(|turn| {
             turn.role == Role::User
                 && matches!(&turn.content, Content::Text(text) if text.contains("above and below"))
@@ -762,15 +856,47 @@ fn non_queued_attachments_stay_dropped() {
 }
 
 #[test]
-fn search_offers_per_kind_scope_toggles() {
+fn the_key_offers_a_chip_for_every_kind_of_panel() {
     let html = render(&fixture(), &highlighter());
 
-    // The reader can restrict the search to chosen kinds of message; every
-    // scope starts enabled.
-    assert!(html.contains(r#"data-scope="user" aria-pressed="true""#));
-    assert!(html.contains(r#"data-scope="assistant" aria-pressed="true""#));
-    assert!(html.contains(r#"data-scope="tool" aria-pressed="true""#));
-    assert!(html.contains(r#"data-scope="thinking" aria-pressed="true""#));
+    // Built from `PanelKind::EVERY` rather than a list in the markup, so a kind
+    // enters the key by being declared. Weighed against the enum here for the
+    // same reason: a hardcoded list in the test would drift the same way.
+    for kind in PanelKind::EVERY {
+        assert!(
+            html.contains(&format!(
+                r#"data-scope="{}" data-side="{}" aria-pressed="true""#,
+                kind.label(),
+                kind.side().label()
+            )),
+            "{} has no chip in the key, or is not grouped by its side",
+            kind.label()
+        );
+    }
+}
+
+#[test]
+fn the_key_is_its_own_panel_rather_than_the_searchs_control() {
+    let html = render(&fixture(), &highlighter());
+
+    // The key governs the search and the dock alike, so it belongs to neither.
+    // A minimap added to the rail reads the same one. If it were nested back
+    // inside `.search`, the dock's `.key__chip` lookup would still find it, so
+    // this asserts the structure rather than trusting behaviour to catch it.
+    let rail = html
+        .split(r#"<div class="rail">"#)
+        .nth(1)
+        .expect("the rail holds the panels that answer to the key");
+    let search = rail
+        .split(r#"<div class="search""#)
+        .nth(1)
+        .and_then(|rest| rest.split(r#"<div class="key""#).next())
+        .expect("the search sits in the rail");
+    assert!(
+        !search.contains("key__chip"),
+        "the key is nested inside the search panel it is supposed to govern"
+    );
+    assert!(html.contains(r#"<div class="key" role="group""#));
 }
 
 #[test]
@@ -784,15 +910,48 @@ fn panels_carry_their_turn_number_for_stable_fold_memory() {
 }
 
 #[test]
-fn the_dock_offers_role_scoped_message_navigation() {
+fn the_dock_steps_along_the_sides_of_the_exchange() {
     let html = render(&fixture(), &highlighter());
 
-    // The middle column steps between all messages; the flanking columns seek
-    // one speaker, tagged so the app script and stylesheet can scope them.
-    assert!(html.contains(r#"data-nav="prev" data-role="user""#));
-    assert!(html.contains(r#"data-nav="next" data-role="assistant""#));
-    assert!(html.contains(r#"class="dock__btn dock__btn--user""#));
-    assert!(html.contains(r#"class="dock__btn dock__btn--assistant""#));
+    // The middle column steps between every message; the flanking columns seek
+    // one side of the exchange, so the cool arrows find what reached the model
+    // and the warm ones what it produced. They key on `data-side`, which the
+    // renderer derives from `PanelKind::side`, so the dock cannot drift from the
+    // classification the panels carry.
+    assert!(html.contains(r#"data-nav="prev" data-side="entered""#));
+    assert!(html.contains(r#"data-nav="next" data-side="model""#));
+    assert!(html.contains(r#"class="dock__btn dock__btn--entered""#));
+    assert!(html.contains(r#"class="dock__btn dock__btn--model""#));
+}
+
+#[test]
+fn every_panel_carries_the_side_of_the_exchange_it_is_on() {
+    let html = render(&glossed(), &highlighter());
+
+    // `data-side` is the one place the dock and the stylesheet read the
+    // classification from, so every panel must carry it and it must agree with
+    // what the code says. A kind that reaches the page without one is a kind the
+    // dock silently cannot step to.
+    for kind in PanelKind::EVERY {
+        let marked = format!(
+            r#"data-kind="{}" data-side="{}""#,
+            kind.label(),
+            kind.side().label()
+        );
+        let present = html.contains(&format!(r#"data-kind="{}""#, kind.label()));
+        assert!(
+            !present || html.contains(&marked),
+            "{} panels reach the page without the side the code gives them",
+            kind.label()
+        );
+    }
+    // The swatch reaches both sides and the asides, so this is not vacuous.
+    for side in ["entered", "model", "aside"] {
+        assert!(
+            html.contains(&format!(r#"data-side="{side}""#)),
+            "the swatch has no {side} panel to weigh"
+        );
+    }
 }
 
 #[test]
@@ -801,6 +960,56 @@ fn the_dock_leaps_to_either_end_of_the_folio() {
 
     assert!(html.contains(r#"data-nav="top" aria-label="jump to top""#));
     assert!(html.contains(r#"data-nav="end" aria-label="jump to end""#));
+}
+
+#[test]
+fn the_minimap_is_the_last_card_in_the_rail() {
+    let html = render(&fixture(), &highlighter());
+
+    // It answers to the key exactly as the search and the dock do, so it stands
+    // in the same column, under the controls it navigates alongside.
+    let rail = html
+        .split(r#"<div class="rail">"#)
+        .nth(1)
+        .expect("the rail holds the cards that answer to the key");
+    let dock = rail
+        .find("<nav class=\"dock\"")
+        .expect("the dock is in the rail");
+    let minimap = rail
+        .find(r#"<div class="minimap""#)
+        .expect("the minimap is in the rail");
+    assert!(
+        dock < minimap,
+        "the minimap is above the dock it sits under"
+    );
+    // An empty track: a band states the share of the document its panel takes,
+    // which only the browser knows, so the bands are drawn from the panels
+    // themselves rather than written out here.
+    assert!(html.contains(r#"<div class="minimap__view"></div>"#));
+    assert!(html.contains(r#"title="drag to scrub, scroll to zoom""#));
+}
+
+#[test]
+fn every_kind_of_panel_is_pigmented_wherever_it_is_stood_for() {
+    let html = render(&fixture(), &highlighter());
+
+    // A chip in the key and a band in the minimap both stand for panels rather
+    // than being one, and both take the pigment of the kind they answer for.
+    // The two are declared together, so a kind cannot reach one and miss the
+    // other; `note` is the catch-all and deliberately keeps the neutral ink.
+    for kind in PanelKind::EVERY {
+        let label = kind.label();
+        if label == "note" {
+            continue;
+        }
+        assert!(
+            html.contains(&format!(
+                r#".key__chip[data-scope="{label}"],
+.minimap__band[data-kind="{label}"] {{"#
+            )),
+            "{label} has no pigment of its own in the key or the minimap"
+        );
+    }
 }
 
 #[test]
@@ -977,6 +1186,20 @@ fn a_character_no_face_ever_carried_is_not_a_reason_to_grow() {
 }
 
 #[test]
+fn the_symbols_real_sessions_write_stay_inside_the_cut() {
+    // Angle-bracket placeholders (`⟨relative time⟩`) and an up arrow turned up
+    // in the corpus and pushed those folios onto the whole faces, quadrupling
+    // them. Their blocks cost under a kilobyte, so `KEEP` carries them; without
+    // this a re-cut could quietly drop them again.
+    for character in ['⟨', '⟩', '⬆'] {
+        assert!(
+            render::beyond_cut(&character.to_string()).is_empty(),
+            "{character} is written by real sessions and must stay in the cut"
+        );
+    }
+}
+
+#[test]
 fn nothing_below_the_ascii_boundary_is_ever_dropped() {
     // `beyond_cut` skips whole runs of bytes under 0x80 without decoding them,
     // which is only sound while no such codepoint can be dropped.
@@ -992,7 +1215,14 @@ fn the_folios_own_chrome_stays_inside_the_cut_faces() {
     // go quietly missing in every folio.
     for (name, source) in [
         ("illumination.css", include_str!("../src/illumination.css")),
-        ("illumination.js", include_str!("../src/illumination.js")),
+        (
+            "illumination.core.js",
+            include_str!("../src/illumination.core.js"),
+        ),
+        (
+            "illumination.shell.js",
+            include_str!("../src/illumination.shell.js"),
+        ),
     ] {
         let reached = render::beyond_cut(source);
         assert!(
@@ -1001,4 +1231,359 @@ fn the_folios_own_chrome_stays_inside_the_cut_faces() {
              scripts/subset_fonts.py and re-run `just fonts`"
         );
     }
+}
+
+fn glossed() -> Folio {
+    Folio::read(Path::new("tests/fixtures/glosses.jsonl")).expect("fixture parses")
+}
+
+#[test]
+fn what_the_harness_wrote_into_the_session_is_set_as_its_own_panel() {
+    let html = render(&glossed(), &highlighter());
+
+    // A hook, a rule pulled into context, a skill, a slash command, and the
+    // plan-mode boundaries each get a panel labelled by what wrote it.
+    for kind in ["hook", "rule", "skill", "command", "plan"] {
+        assert!(
+            html.contains(&format!(r#"class="turn turn--gloss" data-kind="{kind}""#)),
+            "no {kind} gloss was set"
+        );
+    }
+    assert!(html.contains("No journal yet for branch"));
+    assert!(html.contains("Derive aggressively rather than implementing by hand"));
+    assert!(html.contains("The objective is to"));
+}
+
+#[test]
+fn the_gloss_fixture_carries_every_kind_of_panel_to_compare() {
+    // The fixture is the swatch a styling change is looked at against, so it
+    // has to hold a speech, tool, and thinking panel beside the glosses: the
+    // edges are only worth comparing in one document.
+    let html = render(&glossed(), &highlighter());
+
+    for kind in ["user", "assistant", "tool", "thinking"] {
+        assert!(
+            html.contains(&format!(r#"data-kind="{kind}""#)),
+            "the swatch is missing a {kind} panel to compare the glosses against"
+        );
+    }
+}
+
+#[test]
+fn a_built_in_skill_is_named_by_the_command_that_ran_it() {
+    let html = render(&glossed(), &highlighter());
+
+    // A skill with a directory on disk opens on it, which is how `gloss::meta`
+    // knows one. A built-in has no such directory, so its instructions arrive as
+    // bare prose and would read as a passing note; the command in front of them
+    // is what says otherwise. Both must reach the page as skills, because the
+    // model loads skills with no command at all and those already do.
+    assert!(html.contains(r#"<span class="marginalia__gist">review</span>"#));
+    assert!(html.contains("Gather this target's diff with"));
+    let skills = html
+        .matches(r#"class="turn turn--gloss" data-kind="skill""#)
+        .count();
+    assert_eq!(skills, 2, "a built-in skill is not set as a skill");
+}
+
+#[test]
+fn a_hook_keeps_the_line_breaks_it_printed() {
+    let html = render(&glossed(), &highlighter());
+
+    // A hook's injected context is between the two readings: a program printed
+    // it, so its breaks are its own, but it carries enough markdown that
+    // preformatted text would throw away headings and lists. Set as ordinary
+    // markdown, a list of files folds into one run of filenames, which is the
+    // shape a hook reporting on a working tree always takes.
+    assert!(html.contains("M  rustfmt.toml<br />\nM  src/gloss.rs"));
+    assert!(!html.contains("M  rustfmt.toml\nM  src/gloss.rs</p>"));
+    // Its markdown structure survives, which is what setting it as plain text
+    // would have cost.
+    assert!(html.contains("<p>You made these changes this session:</p>"));
+}
+
+#[test]
+fn output_that_redrew_itself_keeps_only_what_the_terminal_was_left_showing() {
+    let html = render(&glossed(), &highlighter());
+
+    // A spinner emits one frame per carriage return, overwriting the line each
+    // time, so a reader watching saw only the last. Set as they came the frames
+    // have no newlines between them and run together into one line dozens of
+    // frames long, which is the shape a build log most often takes.
+    assert!(html.contains("⠹ Generating mutants"));
+    assert!(!html.contains("⠋ Generating mutants"));
+    assert!(!html.contains("⠙ Generating mutants"));
+    // The lines around it are untouched: only the redrawn one collapses.
+    assert!(html.contains("Checking rustfmt"));
+    assert!(html.contains("Diff in src/main.rs at line 12"));
+}
+
+#[test]
+fn inline_code_breaks_rather_than_running_out_of_the_fold_that_holds_it() {
+    let html = render(&glossed(), &highlighter());
+
+    // A fold's body *is* its box, so an unbreakable token in inline code (a
+    // flag's comma-separated values, a deep path) runs straight out of it.
+    // Inline code has no scroller of its own the way a block does.
+    assert!(html.contains(
+        ".folio :not(pre) > code {\n  padding: 0.1em 0.35em;\n  background: var(--leaf-sunk);"
+    ));
+    let inline = html
+        .split(".folio :not(pre) > code {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("the inline-code rule is in the stylesheet");
+    assert!(
+        inline.contains("overflow-wrap: break-word"),
+        "inline code can overflow whatever holds it"
+    );
+    // A block scrolls instead: breaking its lines would misreport the source.
+    let block = html
+        .split(".folio pre > code {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("the code-block rule is in the stylesheet");
+    assert!(block.contains("overflow-x: auto"));
+    assert!(!block.contains("overflow-wrap"));
+}
+
+#[test]
+fn a_command_takes_the_speakers_pigment_rather_than_the_skills() {
+    let html = render(&glossed(), &highlighter());
+
+    // A command is a gloss by where it sits, not by whose it is: the user typed
+    // it. Sharing the skill's ochre said the opposite, most loudly where a
+    // command stands directly in front of the skill it loaded.
+    assert!(html.contains("--command-edge: color-mix(in srgb, var(--user-edge)"));
+    assert!(html.contains(
+        r#".turn--gloss[data-kind="command"] {
+  --gloss-edge: var(--command-edge);"#
+    ));
+}
+
+#[test]
+fn a_slash_command_is_set_as_a_command_rather_than_its_wrapper() {
+    let html = render(&glossed(), &highlighter());
+
+    assert!(html.contains(r#"<span class="marginalia__gist">/debug-gha</span>"#));
+    assert!(html.contains(r#"<span class="marginalia__note">run 4812</span>"#));
+    // The wrapper tags the harness records the command as never reach the page.
+    assert!(!html.contains("command-name"));
+    assert!(!html.contains("command-args"));
+    // Neither does the caveat standing in front of it, which is a turn of its
+    // own and would otherwise be set as the user speaking.
+    assert!(!html.contains("Caveat: The messages below"));
+    // A command that works the harness rather than the conversation is left
+    // out entirely, along with what it printed.
+    assert!(!html.contains("/copy"));
+    assert!(!html.contains("Copied to clipboard"));
+}
+
+#[test]
+fn one_firing_of_a_hook_is_one_panel_however_many_lines_it_wrote() {
+    let folio = glossed();
+    let html = render(&folio, &highlighter());
+
+    // The Stop hook writes what it decided and what it injected as separate
+    // lines sharing a `toolUseID`. They are one event, so the decision labels
+    // the panel and the injected context fills its fold, rather than standing
+    // as two panels saying half of it each.
+    let stop = folio
+        .panels()
+        .into_iter()
+        .find_map(|panel| match panel {
+            Panel::Gloss(gloss)
+                if gloss.gloss.gist.as_deref()
+                    == Some("[claude-stop-finish] finishing pass triggered") =>
+            {
+                Some(gloss.gloss)
+            }
+            _ => None,
+        })
+        .expect("the hook's decision labels a panel");
+
+    // The lines the hook wrote through the harness carry no command of their
+    // own, so they name only the event; the hook's own line names its command
+    // too, and still belongs to the same firing. Everything each had to say is
+    // in the one fold, in the order it was said.
+    assert_eq!(stop.notes, ["Stop", "added context", "claude-stop"]);
+    // The injected context keeps the line breaks the hook printed; the stderr
+    // beside it is output with no shape of its own.
+    assert!(matches!(
+        stop.body.as_slice(),
+        [gloss::Body::Printed(_), gloss::Body::Plain(_)]
+    ));
+    assert!(html.contains("You made these changes this session"));
+    assert!(html.contains("claude-stop: 2 files staged"));
+}
+
+#[test]
+fn a_results_line_previews_what_came_back_rather_than_repeating_the_call() {
+    let folio = Folio::read(Path::new("tests/fixtures/playground.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // The call sits in the same panel, so naming it again says nothing, and a
+    // word saying the call was answered says no more. A success is therefore the
+    // hint alone; only a failure is named, because only a failure is the
+    // exception. The hint goes in the gist, which is the only part of the line
+    // that can shrink (`.marginalia__note` and `.marginalia__outcome` are
+    // `flex: none`), so a long first line ellipsises rather than running out.
+    assert!(
+        html.contains(r#"<span class="marginalia__gist">running 41 tests</span>"#),
+        "a successful result's line is not its hint alone"
+    );
+    assert!(!html.contains(r#"<span class="marginalia__outcome">result</span>"#));
+    assert!(html.contains(concat!(
+        r#"<span class="marginalia__outcome">error</span>"#,
+        r#"<span class="marginalia__gist">Exit code 127</span>"#
+    )));
+    // Neither the tool nor its path is repeated onto the result's own line.
+    assert!(!html.contains(r#"<span class="marginalia__note">/home/scribe"#));
+}
+
+#[test]
+fn a_reads_hint_sheds_the_line_numbering_the_way_its_fold_does() {
+    let folio = Folio::read(Path::new("tests/fixtures/playground.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // A hint must show what the fold shows. `source` takes the harness's
+    // numbering off the listing, so a hint drawn off the raw text would open
+    // the line on a bare `1` that the fold below it never shows.
+    assert!(html.contains(r#"<span class="marginalia__gist">//! Parsing of Claude Code"#));
+    // Scoped to the gutter's own shape (a number against a tab) rather than to
+    // a leading digit: a `TaskGet` call's gist is the task's id, and a looser
+    // assertion catches that instead of the bug.
+    assert!(!html.contains("<span class=\"marginalia__gist\">1\t"));
+}
+
+#[test]
+fn a_results_hint_is_its_first_line_with_the_terminals_colour_taken_out() {
+    // `playground.jsonl` is the fixture that carries ANSI escapes at all;
+    // `session.jsonl` has none, so asserting this against it proves nothing.
+    let folio = Folio::read(Path::new("tests/fixtures/playground.jsonl")).expect("fixture parses");
+
+    let html = render(&folio, &highlighter());
+
+    // The colour is a fact about the body, which grinds it into `ansi--`
+    // classes. A hint carrying the escapes would set their bytes as text.
+    assert!(html.contains(r#"<span class="marginalia__gist">running 3 tests</span>"#));
+    assert!(
+        !html.contains('\u{1b}'),
+        "an escape reached the folio as a byte rather than a class"
+    );
+}
+
+#[test]
+fn plan_mode_states_both_boundaries_and_whether_a_plan_was_written() {
+    let html = render(&glossed(), &highlighter());
+
+    assert!(html.contains(r#"<span class="marginalia__gist">entered plan mode</span>"#));
+    assert!(html.contains(r#"<span class="marginalia__note">left, plan written</span>"#));
+    // The reminder that plan mode is still on says nothing that has changed.
+    assert_eq!(html.matches(">entered plan mode<").count(), 1);
+}
+
+#[test]
+fn scaffolding_and_duplicated_hook_output_stay_out_of_the_folio() {
+    let folio = glossed();
+    let panels = folio.panels();
+
+    // The tool and skill inventories, the checklist reminder, and the harness's
+    // own timings are not notes a reader can act on. Neither is a hook's
+    // control-protocol JSON, whose payload arrives as the notes beside it.
+    let html = render(&folio, &highlighter());
+    assert!(!html.contains("distil the branch's working memory"));
+    assert!(!html.contains("hookSpecificOutput"));
+    assert!(!html.contains("15086"));
+    // Every panel that is a gloss says something: none is a bare line
+    // reporting that a thing ran.
+    for panel in &panels {
+        if let Panel::Gloss(gloss) = panel {
+            assert!(
+                gloss.gloss.gist.is_some() || !gloss.gloss.body.is_empty(),
+                "a gloss with nothing to say reached the folio: {gloss:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn only_the_kinds_off_the_axis_are_skipped_by_the_navigation_dock() {
+    let html = render(&glossed(), &highlighter());
+
+    // The dock steps along `data-side`, so a note the user themselves put into
+    // the session (a command they typed, a skill they wrote, a hook they
+    // installed) is a stop like any other: it reached the model, and the reader
+    // wants it. What it skips is the kinds deliberately off the axis, which are
+    // context reached for rather than stopped at.
+    for kind in PanelKind::EVERY {
+        let stepped = kind.side() != Side::Aside;
+        let expected = match kind.side() {
+            Side::Entered => "entered",
+            Side::Model => "model",
+            Side::Aside => "aside",
+        };
+        assert_eq!(
+            stepped,
+            expected != "aside",
+            "{} is classified inconsistently",
+            kind.label()
+        );
+    }
+    // A rule is the user's own writing pulled in, so it is theirs; a plan
+    // boundary is the model reporting on its own working, so it is its. Only the
+    // catch-all is genuinely off the axis, and only it is skipped.
+    assert_eq!(PanelKind::Gloss(GlossKind::Rule).side(), Side::Entered);
+    assert_eq!(PanelKind::Gloss(GlossKind::Plan).side(), Side::Model);
+    assert_eq!(PanelKind::Gloss(GlossKind::Note).side(), Side::Aside);
+    // The panels that carry them reach the page marked as such, so the dock's
+    // selector actually finds and misses the right ones.
+    assert!(html.contains(r#"data-kind="plan" data-side="model""#));
+    assert!(html.contains(r#"data-kind="rule" data-side="entered""#));
+    assert!(html.contains(r#"data-kind="hook" data-side="entered""#));
+}
+
+#[test]
+fn hooks_sharing_one_event_stay_their_own_panels() {
+    let folio = glossed();
+
+    // A `toolUseID` names the event, not the hook, and one `SessionStart` runs
+    // every hook matching it. Keying the bundle on the id alone folds them all
+    // into a single panel claiming to be one hook that ran four commands.
+    let commands: Vec<String> = folio
+        .panels()
+        .into_iter()
+        .filter_map(|panel| match panel {
+            Panel::Gloss(gloss) if gloss.gloss.gist.as_deref() == Some("SessionStart:clear") => {
+                Some(gloss.gloss.notes.join(", "))
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(commands, ["claude-branch-journal", "claude-git-status"]);
+}
+
+#[test]
+fn each_result_joins_the_panel_holding_the_call_it_answers() {
+    let folio = glossed();
+
+    // Calls issued together are written as one assistant line each, so they
+    // become several panels. Taking the newest panel for every result piles
+    // them all onto the last call and leaves its siblings showing none.
+    let paired: Vec<(usize, usize)> = folio
+        .panels()
+        .iter()
+        .filter_map(|panel| match panel {
+            Panel::Speech(speech) if speech.kind() == PanelKind::Tool => Some((
+                speech.blocks.iter().filter(|b| b.is_call()).count(),
+                speech.blocks.iter().filter(|b| b.is_result()).count(),
+            )),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(paired, [(1, 1), (1, 1)], "each call keeps its own result");
 }

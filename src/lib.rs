@@ -2,6 +2,7 @@
 
 pub mod discovery;
 pub mod gist;
+pub mod gloss;
 pub mod picker;
 pub mod render;
 pub mod serve;

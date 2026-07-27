@@ -136,15 +136,27 @@ Assistant and user turns, in order, with:
   command as highlighted shell, an edit as a diff, a plan or a subagent prompt
   as the markdown it was composed as, a read's result as the language of the
   file it read, a search's result as the links it found. A call its label
-  already states in full is one flat line; everything else folds. A result that
-  says only that the call was carried out is left out, since the call above it
-  already shows what happened.
+  already states in full is one flat line; everything else folds. Each result
+  sits with the call it answers, and its line previews the first thing that came
+  back rather than naming the call again: what a command printed, a file's
+  opening line, the option that was chosen. A result that says only that the
+  call was carried out is left out, since the call above it already shows what
+  happened.
 - Terminal colour kept: output written with ANSI escapes reads in the folio's
   own pigments, rather than showing the escapes
 - Pasted images inlined as data URLs
 
-The reading column is pure transcript. The folio's title, facts, and a
-**colophon** (what wrote it, when, and what the render cost) live in a plaque
+A folio opens with a **caveat**, the one piece of the reading column this tool
+wrote rather than set from the session. A session file isn't everything the
+model was told: the system prompt, the tool descriptions, and the `CLAUDE.md`
+and rule files loaded when a session starts are sent with every request but
+never recorded, so no folio can show them. The caveat is not a panel, and
+nothing that reads panels counts it as one: the dock won't step to it, the
+minimap draws no band for it, the key can't set it aside, and the search never
+returns it as a hit.
+
+The rest of the reading column is pure transcript. The folio's title, facts, and
+a **colophon** (what wrote it, when, and what the render cost) live in a plaque
 you open from the corner, and the parchment leaf is bordered with illuminated
 vines threaded with marginal **drolleries**: colourful little beasts (snail,
 frog, cat, butterfly, stag, and more) seated among the vine at intervals,
@@ -156,19 +168,72 @@ document and lies on its side for a code block that runs off the edge. It is
 never hidden or narrowed, being both the position indicator and a drag target,
 and a reader in a high-contrast mode gets their own system's scrollbar instead.
 
-Turns a subagent produced carry `data-sidechain`, and turns the harness injected
-carry `data-meta`, so a stylesheet can treat them differently.
+Turns a subagent produced are marked as such, and take Tyrian purple across
+every kind at once, so a sidechain reads as one whoever was speaking in it.
 
 Transcript content is escaped, never executed: a session that discusses
 `<script>` renders it as text.
+
+### Glosses
+
+Much of what shapes a session is written into it by the harness rather than
+typed by anyone, and a reader who can't see it is left guessing why the
+assistant did what it did. So each of those notes gets its own quiet panel, a
+**gloss**, labelled by what wrote it there, with its content folded away behind
+a summary line:
+
+| Gloss | What it holds |
+| --- | --- |
+| `hook` | What a hook printed, injected, or failed with |
+| `rule` | A `CLAUDE.md` or rule file pulled into context |
+| `skill` | The instructions a skill carries, whether a command loaded it or the assistant reached for it |
+| `command` | A slash command, its arguments, and what it printed |
+| `plan` | Entering plan mode, and leaving it with or without a plan |
+| `note` | A file edited outside the session or attached to it, a truncated read, a model swapped mid-conversation |
+
+A command that works the harness rather than the conversation, `/copy` or
+`/config` say, is left out: being told the last reply went to the clipboard
+tells a reader nothing. The ones that change the conversation stay.
+
+A gloss is a panel like any other, so the key names its kind, the search and the
+minimap reach it, and the dock steps to it along whichever side of the exchange
+it came from. Only `note`, the catch-all, stands aside from that walk. Its
+content stays folded behind its summary line either way, so the reading column
+stays the conversation while the context behind it stays a click away.
+
+Every kind of panel carries its own pigment, along one axis: **warm is what the
+model produced, cool is what reached it from outside.** So scrolling tells you
+which side of the exchange you're passing before you read a label. The assistant
+speaks in its own orange, reasons in that orange drawn back toward the ink, and
+reaches for a tool in ochre; you speak in lapis, type a command in that lapis
+drawn back toward the ink, and your skills and hooks arrive in teal and
+malachite. A plan boundary is the exception, rubricated in vermilion because it
+marks a division in the text rather than anything said in it, and the ambient
+kinds stay in faint ink so the rest can stay loud.
+
+### What a folio cannot show
+
+A transcript records the conversation, not the instructions a session opened
+with. The project's `CLAUDE.md`, your global one, and every rule with no path to
+trigger on are assembled into the system prompt, which is never written to the
+session file, so **no folio can show them**: what you see are the rules and
+nested `CLAUDE.md` files the harness pulled in *as it worked*, one gloss each.
+A session can therefore read as though the assistant knew something from
+nowhere, and the standing instructions are where to look.
+
+The same goes for anything else outside the file: a tool's own side effects, the
+state of the repository, and whatever you told Claude in another session.
 
 ### Unrecognized content
 
 Claude Code's transcript format grows new block types over time. An
 unrecognized block renders as formatted JSON rather than aborting the folio,
 because a new block type is a producer adding something optional, not malformed
-input. Lines that carry no conversation at all (attachments, hook output, mode
-changes, file-history snapshots) are skipped.
+input. The same goes for the harness's own notes: one whose shape the folio
+doesn't recognize is left unset rather than breaking the render. Lines that
+carry no conversation and no context (an inventory of the available tools or
+skills, a restatement of the checklist, the harness's own timings, mode changes,
+file-history snapshots) are skipped.
 
 Tools are treated the same way. A tool with no view of its own, such as one an
 MCP server provides, shows the input it was sent as formatted JSON, and so does
@@ -179,21 +244,42 @@ a built-in whose input doesn't match the shape its view expects.
 A folio is interactive, driven by one small script inlined alongside the
 styles, so the file stays a single self-contained artifact:
 
+- **Set the key** at the head of the rail down the right: a chip per kind of
+  panel, carrying that kind's own pigment, so it says what every edge in the
+  margin means as well as which kinds you want. What reached the model runs down
+  one column and what it produced down the other. Everything under it answers to
+  it, so you say once what you're reading through.
 - **Search** the session from the fixed box: matches are highlighted, and
-  `‹ ›` or Enter steps through them, opening any collapsed tool call that holds
-  a hit.
-- **Theme** it light, dark, or system; the default follows your OS preference
-  and the choice is remembered across visits.
-- **Copy** any code block, or a whole message, from the button that appears on
-  hover, and hear a quill take it down: the scratch is synthesized on the spot,
-  so it costs the folio no bytes to carry.
-- **Navigate** from the corner dock: jump between user and assistant messages
-  (skipping tool and thinking panels), and collapse or expand every tool call at
-  once.
+  `‹ ›` or Enter steps through them, opening any collapsed fold that holds a
+  hit. It looks only at the kinds the key leaves in play.
+- **Press the light you want to read by**, in the corner: the sun for day, the
+  candle for after dark. There is no toggle, because the lights are the control.
+  Whichever is burning is the one in force, so by day the sun is up and the
+  candle stands smoking, and after dark the moon hangs among its stars and the
+  candle is lit. A small reset appears once you have chosen, to hand the choice
+  back to your system; until then the folio follows your OS preference. The
+  choice is remembered across visits.
+- **Copy** any code block, a whole message, or a fold's prose (a skill's
+  instructions, a rule, a plan, a subagent's prompt), from the button standing
+  muted in its corner, and hear a quill take it down: the scratch is synthesized
+  on the spot, so it costs the folio no bytes to carry.
+- **Navigate** from the corner dock: step along either side of the exchange, the
+  cool arrows seeking what reached the model and the warm ones what it produced,
+  or the middle pair taking both. The arrows honour the key too, so narrowing it
+  to skills walks you through the skills alone. Each step names the turn in the
+  URL, so it is a link you can share and a place a reload returns you to.
+  Collapse or expand every fold at once from the same dock.
+- **Scrub the minimap** at the foot of the rail, drawn as the bound volume
+  itself: the session shut and seen from above its front board, a band per
+  message in that message's own pigment among the leaves, with your place on the
+  leaf drawn over it. Drag along it to travel, and turn the wheel over it to zoom
+  the map alone, so a long session's messages come apart far enough to pick one
+  out without moving from where you are reading. It honours the key as well,
+  fading what you have set aside.
 - **Open the plaque** in the corner for the folio's title, facts, and colophon.
-- **Read by candlelight** after dark, or by the sun in the day: the luminary
-  over the theme toggle flickers or turns its rays, and casts a faint glow
-  across the leaf. It holds still if you prefer less motion.
+
+Whichever light is burning flickers or turns its rays and casts a faint glow
+across the leaf, and holds still if you prefer less motion.
 
 On wide screens an expanded tool call holding a diff or code block unfurls past
 the reading column so wide content fits without sideways scrolling, while prose
@@ -207,9 +293,13 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | --- | --- |
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
+| caveat | The folio's own note to its reader, at the head of the column |
 | marginalia | A collapsible tool call or result |
+| gloss | A note the harness wrote into the session, set as its own panel |
+| key | Which kinds of panel are in play, and what each edge's pigment means |
+| rail | The column of cards the key leads: search, dock, and minimap |
 | drollery | A marginal creature drawn in the border |
-| luminary | The candle or sun the folio is read by, and the light it casts |
+| luminary | A light the folio is read by, and the control that chooses it |
 | colophon | Generation metadata, shown in the plaque |
 | illumination | The theme layer |
 
@@ -219,17 +309,24 @@ The code names things after the scriptorium that produced manuscripts by hand:
 shows them all. After cloning:
 
 ```bash
-just setup   # installs nightly rustfmt and the pre-commit hook
+just setup   # nightly rustfmt, the pre-commit hook, and the browser tests' toolchain
 ```
 
 ```bash
-just check      # format, lint, and test
+just check        # format, lint, and every test suite
 just test
+just test-js      # the folio's own script, without a browser
+just test-browser # a rendered folio, driven in a headless Chromium
 just render <session>
-just bench      # time rendering the fixtures, with hyperfine
-just bench-huge # the same, over generated sessions of megabytes
-just profile    # sample a render and report where the time went, with perf and samply
+just bench        # time rendering the fixtures, with hyperfine
+just bench-huge   # the same, over generated sessions of megabytes
+just profile      # sample a render and report where the time went, with perf and samply
 ```
+
+The folio ships one inlined script, split into a functional core
+(`src/illumination.core.js`) and the shell that wires it to the document
+(`src/illumination.shell.js`), so the arithmetic behind its controls is tested
+as plain values and only the wiring needs a browser.
 
 Profiling needs perf and two kernel settings; `just setup-profiling` installs
 them (once per machine, with sudo).
@@ -238,9 +335,11 @@ Formatting runs under nightly rustfmt, since `rustfmt.toml` uses unstable
 options. Committing runs the same formatting and linting through pre-commit.
 
 `mise.toml` carries the tools the recipes shell out to (`gh`, `hyperfine`,
-`just`, `samply`, `uv`), so [mise](https://mise.jdx.dev) users get all of them
-with `mise install`. The Rust toolchain comes from `rust-toolchain.toml`
-instead, since rustup is what resolves the nightly rustfmt.
+`just`, `node`, `samply`, `uv`), so [mise](https://mise.jdx.dev) users get all
+of them with `mise install`. The Rust toolchain comes from
+`rust-toolchain.toml` instead, since rustup is what resolves the nightly
+rustfmt. The only JS dependency is [Playwright](https://playwright.dev), used
+by the browser tests; nothing it installs reaches a folio.
 
 ## Fonts
 

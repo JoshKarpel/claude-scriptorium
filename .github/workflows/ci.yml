@@ -72,6 +72,44 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
+  script:
+    name: Test the folio's script
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # The browser suite drives folios rendered by the real CLI, so it needs
+      # the binary as well as the browser.
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1.17.0
+
+      - name: Install Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install just
+        uses: extractions/setup-just@v4.0.0
+
+      - name: Install the test toolchain
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Test the folio's core
+        run: just test-js
+
+      - name: Drive a folio in a browser
+        run: just test-browser
+
   package:
     name: Package
     runs-on: ubuntu-latest

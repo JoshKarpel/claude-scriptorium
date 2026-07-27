@@ -1,6 +1,7 @@
 //! Parsing of Claude Code session JSONL into typed conversation values.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
@@ -11,23 +12,50 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::tools;
+use crate::{
+    gloss::{self, Gloss, GlossKind, Wrapped},
+    tools,
+};
+
+/// One line of a session as the folio keeps it: a turn of the conversation, or
+/// a note the harness wrote into the session around it.
+#[derive(Debug)]
+pub enum Recorded {
+    Turn(Turn),
+    Gloss(Glossed),
+}
+
+/// A harness note where it sits in the session.
+#[derive(Debug)]
+pub struct Glossed {
+    pub timestamp: Timestamp,
+    pub is_sidechain: bool,
+    pub gloss: Gloss,
+    /// The session's own name for this line.
+    pub uuid: Option<String>,
+    /// The line this note was written about, where it names one. A slash
+    /// command's output is a `system` line naming the command's own line as its
+    /// parent, which is the exact key that gathers the two into one panel.
+    pub answers: Option<String>,
+}
 
 /// One rendered session: the unit the tool turns into a single HTML file.
 #[derive(Debug)]
 pub struct Folio {
     pub source: PathBuf,
-    pub turns: Vec<Turn>,
+    /// The session as read, in file order, so a harness note keeps its place
+    /// among the turns it stands between.
+    pub recorded: Vec<Recorded>,
 }
 
 impl Folio {
-    /// Reads a session JSONL file, keeping only the lines that carry
-    /// conversation.
+    /// Reads a session JSONL file, keeping the lines that carry conversation
+    /// and the notes the harness wrote around them.
     pub fn read(source: &Path) -> Result<Self> {
         let text = fs::read_to_string(source)
             .with_context(|| format!("reading session {}", source.display()))?;
 
-        let mut turns = Vec::new();
+        let mut recorded = Vec::new();
         // One API response is written as several lines, one per content block,
         // each repeating the response's usage. Counting every line would
         // multiply what the response cost, so a response is counted once, on
@@ -40,7 +68,7 @@ impl Folio {
             let entry: Entry = serde_json::from_str(line)
                 .with_context(|| format!("{}:{}", source.display(), index + 1))?;
             match entry {
-                Entry::User(turn) => turns.push(turn.into_turn(Role::User)),
+                Entry::User(turn) => recorded.push(Recorded::Turn(turn.into_turn(Role::User))),
                 Entry::Assistant(raw) => {
                     let opens_response = raw
                         .message
@@ -48,19 +76,29 @@ impl Folio {
                         .as_deref()
                         .is_none_or(|id| counted.insert(id.to_owned()));
                     let turn = raw.into_turn(Role::Assistant);
-                    turns.push(Turn {
+                    recorded.push(Recorded::Turn(Turn {
                         usage: turn.usage.filter(|_| opens_response),
                         ..turn
-                    });
+                    }));
                 }
-                Entry::Attachment(attachment) => turns.extend(attachment.into_turn()),
+                Entry::Attachment(attachment) => recorded.extend(attachment.into_recorded()),
+                Entry::System(line) => recorded.extend(glossed_system(&line)),
                 Entry::Bookkeeping => {}
             }
         }
 
         Ok(Self {
             source: source.to_path_buf(),
-            turns,
+            recorded,
+        })
+    }
+
+    /// The conversation alone, for the figures that are about what the model
+    /// was sent and what it wrote.
+    pub fn turns(&self) -> impl Iterator<Item = &Turn> {
+        self.recorded.iter().filter_map(|recorded| match recorded {
+            Recorded::Turn(turn) => Some(turn),
+            Recorded::Gloss(_) => None,
         })
     }
 
@@ -121,8 +159,7 @@ impl Folio {
     /// The output across the session, or `None` when no turn reports usage.
     /// Output totals, since each turn produces its own.
     pub fn output(&self) -> Option<u64> {
-        self.turns
-            .iter()
+        self.turns()
             .filter_map(|turn| turn.usage)
             .map(|usage| usage.output_tokens)
             .reduce(|total, output| total + output)
@@ -133,22 +170,96 @@ impl Folio {
     /// a sum, since every turn is sent the whole conversation and summing that
     /// would count the same text once per turn that saw it.
     pub fn largest_input(&self) -> Option<u64> {
-        self.turns
-            .iter()
+        self.turns()
             .filter_map(|turn| turn.usage)
             .map(|usage| usage.input())
             .max()
     }
 
-    /// Folds the raw turns into the display stream: drops `/clear` boundaries
-    /// and merges each tool-result turn back into the assistant turn it
-    /// answers, so a call and its result render as one panel.
+    /// Folds the raw stream into the display one: drops `/clear` boundaries,
+    /// merges each tool-result turn back into the assistant turn it answers so
+    /// a call and its result render as one panel, and lifts the turns the
+    /// harness wrote for itself out of the conversation and into glosses.
     pub fn panels(&self) -> Vec<Panel> {
         let calls = self.calls();
         let mut panels: Vec<Panel> = Vec::new();
-        for (index, turn) in self.turns.iter().enumerate() {
+        // Where each call ended up, so the result answering it can be put in
+        // the same panel however many panels later it comes back.
+        let mut homes: HashMap<&str, usize> = HashMap::new();
+        // The lines the folio left unset, so a note written *about* one goes the
+        // same way. A slash command that only works the harness is dropped, and
+        // what it printed is recorded as a line of its own: keeping that would
+        // set the output of a command the folio deliberately never mentions.
+        let mut unset: HashSet<&str> = HashSet::new();
+        for (index, recorded) in self.recorded.iter().enumerate() {
+            let turn_number = index + 1;
+            let turn = match recorded {
+                Recorded::Gloss(glossed) => {
+                    if glossed
+                        .answers
+                        .as_deref()
+                        .is_some_and(|parent| unset.contains(parent))
+                    {
+                        continue;
+                    }
+                    // One hook writes several lines (what it decided, what it
+                    // injected, what it printed) and a slash command's output is
+                    // written as a line naming the command's own. Either way the
+                    // note belongs in the panel already open, the way a tool
+                    // result belongs in the panel holding its call.
+                    if let Some(open) = panels
+                        .last_mut()
+                        .and_then(Panel::as_gloss_mut)
+                        .filter(|panel| panel.gathers(glossed))
+                    {
+                        open.gloss.absorb(glossed.gloss.clone());
+                        continue;
+                    }
+                    panels.push(Panel::Gloss(GlossPanel::of(glossed, turn_number)));
+                    continue;
+                }
+                Recorded::Turn(turn) => turn,
+            };
             if turn.is_clear_command() {
+                // A boundary is dropped like any other command the folio leaves
+                // unset, so what it printed goes with it rather than orphaning
+                // into a panel of its own with nothing to say which command it
+                // came from.
+                unset.extend(turn.uuid.as_deref());
                 continue;
+            }
+            match turn.wrapped() {
+                Some(Wrapped::Note(mut gloss)) => {
+                    // A skill names the directory it was loaded from, which is
+                    // how `gloss::meta` knows one. A built-in has no directory
+                    // on disk, so its instructions arrive as bare prose and read
+                    // as a passing note; the command standing directly in front
+                    // of them is what says what they are. Relabelling here is
+                    // what gives a skill one shape however it was loaded, since
+                    // the model reaches for one with no command at all.
+                    if gloss.kind == GlossKind::Note
+                        && let Some(command) = panels
+                            .last()
+                            .and_then(Panel::as_gloss)
+                            .filter(|panel| panel.gloss.kind == GlossKind::Command)
+                            .and_then(|panel| panel.gloss.gist.as_deref())
+                    {
+                        gloss.ran_by(command);
+                    }
+                    panels.push(Panel::Gloss(GlossPanel {
+                        turn_number,
+                        timestamp: turn.timestamp,
+                        is_sidechain: turn.is_sidechain,
+                        gloss,
+                        uuid: turn.uuid.clone(),
+                    }));
+                    continue;
+                }
+                Some(Wrapped::Nothing) => {
+                    unset.extend(turn.uuid.as_deref());
+                    continue;
+                }
+                None => {}
             }
             let blocks = answered(turn.blocks(), &calls);
             // A turn whose every block was dropped has nothing left to show,
@@ -156,13 +267,39 @@ impl Folio {
             if blocks.is_empty() {
                 continue;
             }
-            if turn.is_tool_response()
-                && let Some(assistant) = panels.last_mut().filter(|p| p.role == Role::Assistant)
-            {
-                assistant.blocks.extend(blocks);
+            if turn.is_tool_response() {
+                // Each result joins the panel holding the call it answers, not
+                // whichever panel is newest. Calls issued together are written
+                // as one assistant line each, so they are several panels, and
+                // taking the last one piles every result onto the last call
+                // while its siblings show none.
+                let mut homeless = Vec::new();
+                for block in blocks {
+                    let home = block.answering().and_then(|id| homes.get(id)).copied();
+                    match home
+                        .and_then(|at| panels.get_mut(at))
+                        .and_then(Panel::answering_assistant)
+                    {
+                        Some(speech) => speech.blocks.push(block),
+                        None => homeless.push(block),
+                    }
+                }
+                if homeless.is_empty() {
+                    continue;
+                }
+                // A result whose call this session never recorded still belongs
+                // with the assistant that was speaking.
+                if let Some(speech) = panels.last_mut().and_then(Panel::answering_assistant) {
+                    speech.blocks.extend(homeless);
+                    continue;
+                }
+                panels.push(Panel::Speech(Speech::of(turn, turn_number, homeless)));
                 continue;
             }
-            panels.push(Panel::from_turn(turn, index + 1, blocks));
+            for calling in turn.calling() {
+                homes.insert(calling, panels.len());
+            }
+            panels.push(Panel::Speech(Speech::of(turn, turn_number, blocks)));
         }
         panels
     }
@@ -171,8 +308,7 @@ impl Folio {
     /// only on the call: a result carries just the id it answers, so a result
     /// can only be set the way its call is once the two are matched up.
     fn calls(&self) -> HashMap<&str, Answered> {
-        self.turns
-            .iter()
+        self.turns()
             .flat_map(|turn| match &turn.content {
                 Content::Text(_) => [].iter(),
                 Content::Blocks(blocks) => blocks.iter(),
@@ -308,6 +444,11 @@ pub struct Turn {
     pub is_sidechain: bool,
     /// True for turns the harness injected rather than the user typing them.
     pub is_meta: bool,
+    /// The session's own name for this line, which is what a note written about
+    /// it names as its parent. A slash command's output is recorded as its own
+    /// `system` line pointing back here, so this is what lets the two be set as
+    /// one panel.
+    pub uuid: Option<String>,
 }
 
 /// What one turn cost: what the model read, split by where it came from, and
@@ -356,6 +497,32 @@ impl Turn {
             if text.contains("<command-name>/clear</command-name>"))
     }
 
+    /// What this turn really is, for the turns in the user's role that are not
+    /// the user: a note the harness wrote for itself (a skill's instructions),
+    /// a slash command the user ran, or a wrapper standing in front of one.
+    /// All three are recorded in the user's role because that is where they
+    /// enter the conversation, and none of them is the user speaking.
+    fn wrapped(&self) -> Option<Wrapped> {
+        if self.role != Role::User {
+            return None;
+        }
+        let said = self.content.spoken()?;
+        gloss::wrapped(&said, self.is_meta)
+    }
+
+    /// The ids of the calls this turn issues, so a result coming back later can
+    /// be put in the panel that holds its call.
+    fn calling(&self) -> impl Iterator<Item = &str> {
+        match &self.content {
+            Content::Text(_) => [].iter(),
+            Content::Blocks(blocks) => blocks.iter(),
+        }
+        .filter_map(|block| match block {
+            Block::Known(Known::ToolUse { id: Some(id), .. }) => Some(id.as_str()),
+            _ => None,
+        })
+    }
+
     /// The content as a uniform block list, lifting a plain string into a
     /// single text block so every panel is a sequence of blocks.
     fn blocks(&self) -> Vec<Block> {
@@ -366,12 +533,74 @@ impl Turn {
     }
 }
 
-/// One speaker's contribution as displayed. Folding the wire-level turns into
-/// panels is where harness scaffolding is filtered and tool results are
-/// reunited with the assistant that called them, so the renderer walks an
-/// already-clean stream and never re-derives any of it.
+/// One article of the folio: a speaker's contribution, or a note the harness
+/// wrote into the session. Folding the wire-level stream into panels is where
+/// scaffolding is filtered, tool results are reunited with the assistant that
+/// called them, and injected context is lifted out of the conversation, so the
+/// renderer walks an already-clean stream and never re-derives any of it.
 #[derive(Debug)]
-pub struct Panel {
+pub enum Panel {
+    Speech(Speech),
+    Gloss(GlossPanel),
+}
+
+impl Panel {
+    /// The assistant speech this panel is, for a tool result looking for the
+    /// call it answers. A gloss never absorbs one: a hook firing between a call
+    /// and its result does not make the result the hook's.
+    fn answering_assistant(&mut self) -> Option<&mut Speech> {
+        match self {
+            Panel::Speech(speech) if speech.role == Role::Assistant => Some(speech),
+            _ => None,
+        }
+    }
+
+    fn as_gloss(&self) -> Option<&GlossPanel> {
+        match self {
+            Panel::Gloss(gloss) => Some(gloss),
+            Panel::Speech(_) => None,
+        }
+    }
+
+    fn as_gloss_mut(&mut self) -> Option<&mut GlossPanel> {
+        match self {
+            Panel::Gloss(gloss) => Some(gloss),
+            Panel::Speech(_) => None,
+        }
+    }
+
+    pub fn is_sidechain(&self) -> bool {
+        match self {
+            Panel::Speech(speech) => speech.is_sidechain,
+            Panel::Gloss(gloss) => gloss.is_sidechain,
+        }
+    }
+
+    pub fn kind(&self) -> PanelKind {
+        match self {
+            Panel::Speech(speech) => speech.kind(),
+            Panel::Gloss(gloss) => PanelKind::Gloss(gloss.gloss.kind),
+        }
+    }
+
+    pub fn timestamp(&self) -> Timestamp {
+        match self {
+            Panel::Speech(speech) => speech.timestamp,
+            Panel::Gloss(gloss) => gloss.timestamp,
+        }
+    }
+
+    pub fn turn_number(&self) -> usize {
+        match self {
+            Panel::Speech(speech) => speech.turn_number,
+            Panel::Gloss(gloss) => gloss.turn_number,
+        }
+    }
+}
+
+/// One speaker's contribution as displayed.
+#[derive(Debug)]
+pub struct Speech {
     /// The 1-based position of this panel's leading turn in the raw stream.
     /// Gaps between successive panels mark turns that were folded in or
     /// dropped, so a panel that spans several turns still has one stable label.
@@ -388,12 +617,10 @@ pub struct Panel {
     pub usage: Option<Usage>,
     /// True for panels belonging to a subagent running inside this session.
     pub is_sidechain: bool,
-    /// True for panels the harness injected rather than the user typing them.
-    pub is_meta: bool,
 }
 
-impl Panel {
-    fn from_turn(turn: &Turn, turn_number: usize, blocks: Vec<Block>) -> Self {
+impl Speech {
+    fn of(turn: &Turn, turn_number: usize, blocks: Vec<Block>) -> Self {
         Self {
             turn_number,
             role: turn.role,
@@ -403,7 +630,6 @@ impl Panel {
             blocks,
             usage: turn.usage,
             is_sidechain: turn.is_sidechain,
-            is_meta: turn.is_meta,
         }
     }
 
@@ -424,6 +650,40 @@ impl Panel {
         } else {
             speaker
         }
+    }
+}
+
+/// One harness note as displayed.
+#[derive(Debug)]
+pub struct GlossPanel {
+    pub turn_number: usize,
+    pub timestamp: Timestamp,
+    pub is_sidechain: bool,
+    pub gloss: Gloss,
+    /// What this panel's leading line was called, so a note written about that
+    /// line can be gathered into it.
+    uuid: Option<String>,
+}
+
+impl GlossPanel {
+    fn of(glossed: &Glossed, turn_number: usize) -> Self {
+        Self {
+            turn_number,
+            timestamp: glossed.timestamp,
+            is_sidechain: glossed.is_sidechain,
+            gloss: glossed.gloss.clone(),
+            uuid: glossed.uuid.clone(),
+        }
+    }
+
+    /// True when the note belongs in this panel rather than one of its own: one
+    /// firing of a hook writes several lines, and a slash command's output is
+    /// written as a line naming the command's own.
+    fn gathers(&self, glossed: &Glossed) -> bool {
+        if self.gloss.same_firing_as(&glossed.gloss) {
+            return true;
+        }
+        matches!((&self.uuid, &glossed.answers), (Some(mine), Some(theirs)) if mine == theirs)
     }
 }
 
@@ -450,16 +710,37 @@ enum Entry {
     User(RawTurn),
     #[serde(rename = "assistant")]
     Assistant(RawTurn),
-    /// Attachment lines. Most are scaffolding (hook output, task reminders,
-    /// memory), but a `queued_command` carries a message the user typed while
-    /// the assistant was still working: real conversation the harness records
-    /// here rather than as a `user` turn, so it must not be dropped.
+    /// Attachment lines: a message the user queued mid-response, the notes the
+    /// harness wrote into the session (hook output, the memory files it pulled
+    /// in, plan-mode boundaries), and the scaffolding [`gloss::attachment`]
+    /// leaves unset.
     #[serde(rename = "attachment")]
     Attachment(RawAttachment),
-    /// Lines that carry no conversation: hook output, mode changes,
-    /// file-history snapshots, and whatever else gets added later.
+    /// What the harness said in its own voice. Most of it is bookkeeping it
+    /// keeps for itself; [`gloss::system`] picks out the rest.
+    #[serde(rename = "system")]
+    System(Value),
+    /// Lines that carry no conversation: mode changes, file-history snapshots,
+    /// and whatever else gets added later.
     #[serde(other)]
     Bookkeeping,
+}
+
+/// The note a `system` line carries, where it carries one and records when it
+/// was said. A line with no timestamp has no place in the stream to sit at.
+fn glossed_system(line: &Value) -> Option<Recorded> {
+    let timestamp = line.get("timestamp")?.as_str()?.parse().ok()?;
+    let named = |field| line.get(field).and_then(Value::as_str).map(str::to_owned);
+    Some(Recorded::Gloss(Glossed {
+        timestamp,
+        is_sidechain: line
+            .get("isSidechain")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        gloss: gloss::system(line)?,
+        uuid: named("uuid"),
+        answers: named("parentUuid"),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -473,6 +754,8 @@ struct RawTurn {
     is_sidechain: bool,
     #[serde(default, rename = "isMeta")]
     is_meta: bool,
+    #[serde(default)]
+    uuid: Option<String>,
 }
 
 impl RawTurn {
@@ -486,48 +769,57 @@ impl RawTurn {
             usage: self.message.usage,
             is_sidechain: self.is_sidechain,
             is_meta: self.is_meta,
+            uuid: self.uuid,
         }
     }
 }
 
-/// An `attachment` line. Only a `queued_command` body becomes a turn; every
-/// other attachment kind is scaffolding this drops.
+/// An `attachment` line. The body stays raw JSON because its shapes are the
+/// harness's rather than a contract: [`gloss::attachment`] reads each leniently
+/// and leaves unset what it doesn't recognise, so an attachment that grows a
+/// field can never abort a render.
 #[derive(Debug, Deserialize)]
 struct RawAttachment {
     timestamp: Timestamp,
-    attachment: AttachmentBody,
+    #[serde(default, rename = "isSidechain")]
+    is_sidechain: bool,
+    #[serde(default)]
+    uuid: Option<String>,
+    attachment: Value,
 }
 
 impl RawAttachment {
-    /// A turn for a message the user queued mid-response, or `None` for any
-    /// other attachment kind.
-    fn into_turn(self) -> Option<Turn> {
-        let AttachmentBody::QueuedCommand { prompt } = self.attachment else {
-            return None;
-        };
-        Some(Turn {
-            role: Role::User,
+    /// What this attachment contributes to the session: a user turn for the
+    /// message the user queued while the assistant was still working (real
+    /// conversation the harness records here rather than as a `user` line), a
+    /// gloss for the notes it wrote into the session, and nothing for the
+    /// scaffolding.
+    fn into_recorded(self) -> Option<Recorded> {
+        if self.attachment.get("type").and_then(Value::as_str) == Some("queued_command")
+            && let Some(prompt) = self.attachment.get("prompt").and_then(Value::as_str)
+        {
+            return Some(Recorded::Turn(Turn {
+                role: Role::User,
+                timestamp: self.timestamp,
+                model: None,
+                effort: None,
+                content: Content::Text(prompt.to_owned()),
+                usage: None,
+                is_sidechain: self.is_sidechain,
+                is_meta: false,
+                uuid: self.uuid,
+            }));
+        }
+        Some(Recorded::Gloss(Glossed {
             timestamp: self.timestamp,
-            model: None,
-            effort: None,
-            content: Content::Text(prompt),
-            usage: None,
-            is_sidechain: false,
-            is_meta: false,
-        })
+            is_sidechain: self.is_sidechain,
+            gloss: gloss::attachment(&self.attachment)?,
+            uuid: self.uuid,
+            // A hook's notes are gathered by the firing they name rather than
+            // by the line they were written about.
+            answers: None,
+        }))
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AttachmentBody {
-    /// A message the user typed while the assistant was still working, dequeued
-    /// and processed later in the same session.
-    QueuedCommand { prompt: String },
-    /// Every other attachment kind: hook output, task reminders, memory, and
-    /// whatever else gets added later, none of it conversation.
-    #[serde(other)]
-    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -548,19 +840,53 @@ pub enum Content {
 }
 
 impl Content {
+    /// What this turn says in words, or `None` when it carries anything that
+    /// isn't text. The harness writes a turn's text as a bare string or as text
+    /// blocks depending on how it arrived, which is a fact about the recording
+    /// rather than about what was said.
+    fn spoken(&self) -> Option<Cow<'_, str>> {
+        match self {
+            Content::Text(text) => Some(Cow::Borrowed(text)),
+            Content::Blocks(blocks) => blocks
+                .iter()
+                .map(|block| match block {
+                    Block::Known(Known::Text { text }) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<&str>>>()
+                .filter(|spoken| !spoken.is_empty())
+                .map(|spoken| Cow::Owned(spoken.join("\n"))),
+        }
+    }
+
     fn is_only_tool_results(&self) -> bool {
         match self {
             Content::Text(_) => false,
-            Content::Blocks(blocks) => {
-                !blocks.is_empty() && blocks.iter().all(Block::is_tool_result)
-            }
+            Content::Blocks(blocks) => !blocks.is_empty() && blocks.iter().all(Block::is_result),
         }
     }
 }
 
 impl Block {
-    fn is_tool_result(&self) -> bool {
+    /// The two halves of a tool exchange, paired so a reader of the code (and a
+    /// test) can weigh a panel's calls against the results that reached it.
+    pub fn is_call(&self) -> bool {
+        matches!(self, Block::Known(Known::ToolUse { .. }))
+    }
+
+    pub fn is_result(&self) -> bool {
         matches!(self, Block::Known(Known::ToolResult { .. }))
+    }
+
+    /// The call this block answers, for a result that names one.
+    fn answering(&self) -> Option<&str> {
+        match self {
+            Block::Known(Known::ToolResult {
+                tool_use_id: Some(id),
+                ..
+            }) => Some(id.as_str()),
+            _ => None,
+        }
     }
 
     fn is_tool(&self) -> bool {
@@ -580,22 +906,101 @@ impl Block {
 }
 
 /// What a panel actually shows, so a label can say more than "assistant": the
-/// role already has a colour, so the label names the content instead.
+/// role already has a colour, so the label names the content instead. A gloss
+/// is labelled by what wrote it rather than by what it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelKind {
     User,
     Assistant,
     Tool,
     Thinking,
+    Gloss(GlossKind),
+}
+
+/// Which side of the exchange a panel is on.
+///
+/// This is the folio's one organising axis, and it is declared here so nothing
+/// else has to restate it: the stylesheet pitches a kind's pigment warm or cool
+/// by it, the dock steps along it, and the label a reader sees is the same
+/// classification the code holds. A new [`PanelKind`] answers this question
+/// before it is given a colour or a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// What the model produced: what it said, its reasoning, the tools it
+    /// reached for. Set in the warm hues.
+    Model,
+    /// What reached the model from outside it: what the user said, the commands
+    /// they typed, the skills they wrote, the hooks that answer for them. Set in
+    /// the cool hues.
+    Entered,
+    /// Neither, deliberately. A plan boundary marks a division in the text
+    /// rather than anything said in it, and a rule or a passing note is ambient:
+    /// colouring every kind would leave nothing quiet, and stepping to every
+    /// kind would make the dock no faster than scrolling.
+    Aside,
+}
+
+impl Side {
+    pub fn label(self) -> &'static str {
+        match self {
+            Side::Model => "model",
+            Side::Entered => "entered",
+            Side::Aside => "aside",
+        }
+    }
 }
 
 impl PanelKind {
+    /// Every kind a panel can be, in the order the key reads them: down the cool
+    /// column, then down the warm one. The key builds its chips from this rather
+    /// than restating the list, so a new kind reaches it by being declared here
+    /// rather than by being remembered in the markup as well.
+    ///
+    /// The two halves are five and five so the key is a clean grid, which is why
+    /// `note` sits at the foot of the warm column despite being [`Side::Aside`].
+    /// Nothing reads the *order* as a classification: every chip carries its own
+    /// side, so the dock still steps past `note` and its neutral ink still keeps
+    /// it from reading as the model's.
+    pub const EVERY: [PanelKind; 10] = [
+        PanelKind::User,
+        PanelKind::Gloss(GlossKind::Command),
+        PanelKind::Gloss(GlossKind::Skill),
+        PanelKind::Gloss(GlossKind::Hook),
+        PanelKind::Gloss(GlossKind::Rule),
+        PanelKind::Assistant,
+        PanelKind::Thinking,
+        PanelKind::Tool,
+        PanelKind::Gloss(GlossKind::Plan),
+        PanelKind::Gloss(GlossKind::Note),
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             PanelKind::User => "user",
             PanelKind::Assistant => "assistant",
             PanelKind::Tool => "tool",
             PanelKind::Thinking => "thinking",
+            PanelKind::Gloss(kind) => kind.label(),
+        }
+    }
+
+    /// Which side of the exchange this kind belongs to. Exhaustive on purpose:
+    /// adding a kind will not compile until its side is decided.
+    ///
+    /// A rule is the user's own writing pulled into the conversation, so it is
+    /// theirs however the harness fetched it. A plan boundary belongs to the
+    /// model: the mode is the user's to ask for, but entering and leaving it is
+    /// the model reporting on its own working, which is why it reads beside the
+    /// reasoning rather than beside the asking.
+    pub fn side(self) -> Side {
+        match self {
+            PanelKind::Assistant | PanelKind::Tool | PanelKind::Thinking => Side::Model,
+            PanelKind::Gloss(GlossKind::Plan) => Side::Model,
+            PanelKind::User => Side::Entered,
+            PanelKind::Gloss(
+                GlossKind::Command | GlossKind::Skill | GlossKind::Hook | GlossKind::Rule,
+            ) => Side::Entered,
+            PanelKind::Gloss(GlossKind::Note) => Side::Aside,
         }
     }
 }

@@ -8,6 +8,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A folio opens with a **caveat** saying what a session file cannot show: the
+  system prompt, the tool descriptions, and the `CLAUDE.md` and rule files
+  loaded when a session starts are sent with every request but never recorded,
+  so the transcript is the conversation and not the whole of what shaped it. It
+  is the folio's own voice rather than anyone's turn, so it is drawn as a
+  rule-flanked note rather than a panel, and nothing that reads panels counts it
+  as one: the dock won't step to it, the minimap draws no band for it, the key
+  can't set it aside, and the search never returns it as a hit.
+- A minimap at the foot of the reading rail: the whole session seen edge-on, a
+  band per message in that message's own pigment and sized to the share of the
+  folio it takes, with your place on the leaf drawn over it. Drag along it to
+  travel, and turn the wheel over it to zoom the map alone, so a long session's
+  messages come apart far enough to pick one out without moving from where you
+  are reading. It answers to the key like everything else in the rail, fading
+  the kinds you have set aside. It is drawn as the book itself rather than as
+  another card: the volume shut and lying spine to the left, seen from above its
+  front board and off to the spine side, so the board and the spine each open
+  into a face of their own, the back board's edge shows at the foot, and the
+  painted edges of a great many leaves fill the space between.
+- A folio now remembers more of how you left it, each under the session it
+  belongs to: which kinds the key leaves in play, and how the minimap was
+  framed, alongside the folds and the follow mode it already kept.
+- The light a folio is read by is drawn in the corner, and is also the control
+  that chooses it: press the sun to read by day, the candle to read after dark.
+  Whichever light is in force is the one burning, so by day the sun turns its
+  rays and the candle stands smoking, and after dark the moon hangs among its
+  stars and the flame gutters; each casts a faint warm glow across the leaf, so
+  the corner reads as where the page's light comes from. A small reset appears
+  once a light has been chosen, and hands the choice back to the reader's own
+  system. Both lights are drawn into every folio and the scheme lights one, so a
+  folio still reads either way, and neither moves for a reader who asks for less
+  motion. This replaces the light/dark/system toggle that stood under them:
+  there is nothing left to label, because the lights are the control.
+- What the harness writes into a session is now on the page rather than hidden
+  or dropped: a hook's output, a `CLAUDE.md` or rule file pulled into context,
+  the instructions a skill or custom slash command carries, the slash command
+  itself, the plan-mode boundaries, and a file edited outside the session or
+  attached to it. Each gets its own quiet panel, a **gloss**, labelled by what
+  wrote it there, with its content folded away behind a summary line so it
+  annotates the conversation rather than crowding it. A reader can now see why
+  the assistant did what it did, and not just what it did.
+
+  One event is one panel however many lines the harness spent on it, so a hook
+  states what it decided on its summary line and what it injected in its fold,
+  and a slash command carries what it printed. A skill reads the same whether a
+  command loaded it or the assistant reached for it unbidden, including the
+  built-ins (`/review`, `/init`, `/security-review`) that have no directory to be
+  known by. A command that works the harness rather than the conversation
+  (`/copy`, `/config`, `/resume`, and the like) is left out, along with what it
+  printed: the transcript records every slash command alike, and being told that
+  the last reply went to the clipboard tells a reader nothing. The ones that
+  change the conversation stay, `/compact` and `/model` among them.
 - A copy button scratches like a quill taking the passage down: a short word of
   five to eight strokes, the pen lifted between them, each stroke its own
   length, weight, and tone, so no two words are written the same way. The sound
@@ -22,14 +74,65 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the platform default and is never hidden, since it is both the position
   indicator and the drag target, and a reader in a high-contrast mode gets
   their own system's scrollbar instead of this one.
-- A luminary over the theme toggle: a candle whose flame gutters after dark, the
-  sun with its rays circling by day, each casting a faint warm glow across the
-  leaf so the corner reads as the light the page is read by. Both are drawn into
-  every folio and the colour scheme lights one, so a folio still reads either
-  way. Neither moves for a reader who asks for less motion.
 
 ### Changed
 
+- Every kind of panel carries its own pigment, and they all run on one axis:
+  **warm is what the model produced, cool is what reached it from outside.** A
+  reader scrolling therefore learns which side of the exchange they are passing
+  before reading a label. The assistant speaks in its own orange, reasons in that
+  orange drawn back toward the ink, and reaches for a tool in ochre; you speak in
+  lapis, type a command in that lapis drawn back toward the ink, and your skills,
+  rules, and hooks arrive in teal and malachite. A plan boundary is rubricated
+  instead, marking a division in the text rather than anything said in it, and
+  the catch-all note stays in faint ink so the rest can be loud. Tool and
+  thinking labels were previously muted to a flat grey, which left them the
+  plainest things on the page.
+- The dock steps along that same axis: the cool arrows seek what reached the
+  model (your words, commands, skills, and hooks) and the warm ones what it
+  produced (replies, reasoning, tool calls), where before they sought one
+  speaker and skipped everything else.
+- The folio has a **key**: a chip per kind of panel, in its own card above the
+  search rather than inside it, set as a column per side of the exchange and
+  carrying each kind's own pigment, so it says what every edge in the margin
+  means as well as which kinds are wanted. The search, the navigation arrows, and
+  the minimap all answer to it, so narrowing it to skills searches skills, steps
+  through skills, and fades the rest of the map alike: one place to say what you
+  are reading through, rather than one per control that reads.
+- The reading controls stand together in one column down the right, led by that
+  key, with the search, the navigation dock, and the minimap under it. They were
+  scattered to opposite corners, which hid that they are one mechanism.
+- A tool result is shown against the call it answers. Calls issued together are
+  recorded one line each, so they became several panels and every result piled
+  onto the last of them while its siblings showed none: a batch of five searches
+  put all five results under the fifth. Each result now joins its own call's
+  panel.
+- A result's summary line previews what came back rather than saying "result".
+  Since each result now sits with its own call, the box above it already names
+  the tool and its subject, so the line shows the first thing the tool actually
+  said instead: what a command printed, a file's opening line, the option that
+  was chosen. Only a failure is still named, being the exception worth marking.
+- Every landing names its turn in the URL, so a reload returns you to where you
+  were reading and the position is a link you can share. Navigation also lands
+  at once instead of gliding, the leaps to either end included: over a folio
+  megabytes tall a smooth scroll is an animation to sit through, and one that a
+  live session's re-render can interrupt and lose.
+- Output that redrew itself reads as the terminal left it. A spinner or a
+  progress bar emits a frame per carriage return, overwriting its line each
+  time; the folio set every frame instead, running dozens of them together into
+  one line with no breaks, which is the shape a build log most often takes.
+- A fold whose body is prose carries a copy button, so a skill's instructions, a
+  rule pulled into context, a plan, or a subagent's prompt can be lifted out
+  whole. Only code and output blocks had one.
+- Prose in a fold is set at the size the conversation is. It took the marginalia's
+  smaller measure, which suits a summary line and a list of facts but not a
+  skill's whole instructions, which are read rather than scanned.
+- Inline code breaks rather than running out of whatever holds it. A single
+  unbreakable token (a flag's comma-separated values, a deep path) had nowhere
+  to go, since inline code has no scroller of its own the way a block does, and
+  it showed worst inside a fold, where the body is the box.
+- The folio is set a little larger, and its head and foot sit closer to the
+  first and last panel than its illuminated margins do to the text.
 - The dock's follow control is set only into a folio that `serve` is serving.
   Only that folio is re-read and re-rendered as the session is written; a folio
   written to a file or published as a gist is a snapshot, so following it
@@ -38,6 +141,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Following the end of a live session survived at most one reload, and none at
+  all once a step of the dock had left a permalink in the URL: the folio read
+  the hash it had written itself as a reader arriving at a turn, and the browser
+  restored the scroll position from before the reload over the top of it.
+  Following now keeps the newest message named in the URL as the session grows,
+  so a reload resumes at the end and a link copied out of a followed folio names
+  what was on the screen.
+- The gilt wash marking where you landed appeared only when you arrived by a
+  link, and then stayed on that message through every step afterward. Every way
+  of arriving at a message now marks it, and only it.
+- The cut faces carry the angle brackets and arrows that sessions turned out to
+  write (`⟨these⟩`, `⬆`), so a folio using one no longer falls back to embedding
+  the whole faces and quadrupling in size. The two blocks cost well under a
+  kilobyte between them.
+- A slash command reads as the command it is. The harness records one as a turn
+  wrapping its name, arguments, and output in XML-ish tags, and a folio set those
+  tags as literal text in the middle of the conversation; the caveat standing in
+  front of it was set as a paragraph of the user telling itself not to answer.
+- A folio rendered on Windows is the same file as one rendered anywhere else.
+  The stylesheet and the app script are inlined verbatim from the source tree, so
+  a checkout that rewrote their line endings carried those endings into every
+  folio it wrote.
 - A marginalia left open in one folio no longer opens panels in another, and
   following the end of a live session no longer snaps an unrelated folio to its
   end. Both were kept in one store shared by every folio on an origin, and a
