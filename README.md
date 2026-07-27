@@ -195,9 +195,11 @@ A command that works the harness rather than the conversation, `/copy` or
 `/config` say, is left out: being told the last reply went to the clipboard
 tells a reader nothing. The ones that change the conversation stay.
 
-Glosses are never navigation targets, and searching them is its own scope, so
-the reading column stays the conversation while the context behind it stays a
-click away.
+A gloss is a panel like any other, so the key names its kind, the search and the
+minimap reach it, and the dock steps to it along whichever side of the exchange
+it came from. Only `note`, the catch-all, stands aside from that walk. Its
+content stays folded behind its summary line either way, so the reading column
+stays the conversation while the context behind it stays a click away.
 
 Every kind of panel carries its own pigment, along one axis: **warm is what the
 model produced, cool is what reached it from outside.** So scrolling tells you

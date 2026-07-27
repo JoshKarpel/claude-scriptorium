@@ -48,8 +48,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attached to it. Each gets its own quiet panel, a **gloss**, labelled by what
   wrote it there, with its content folded away behind a summary line so it
   annotates the conversation rather than crowding it. A reader can now see why
-  the assistant did what it did, and not just what it did. Searching the notes
-  is its own scope, and they are never navigation targets.
+  the assistant did what it did, and not just what it did.
 
   One event is one panel however many lines the harness spent on it, so a hook
   states what it decided on its summary line and what it injected in its fold,
