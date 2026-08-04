@@ -220,11 +220,16 @@ Reading goes through git: a gist is a git repository, so `fetch` clones it,
 which has no size limit and no negotiation, with `gh auth git-credential` set as
 git's helper for that one command so no global git config is needed, and with
 git's own prompting off, so a gh that can't answer for the host fails there
-rather than asking for a password at whatever terminal is to hand. The clone URL
-comes from the API (`git_pull_url`) rather than being spelled out, so an instance
-that keeps its gists on a subdomain is followed rather than guessed at. Only a
-fetch clones, so that field is optional on the way in: a gist reported without
-one still lists and deletes, and only `fetch` fails.
+rather than asking for a password. Closing that off takes `GIT_TERMINAL_PROMPT`,
+`core.askpass`, and the two askpass environment variables together, because git
+reaches for an askpass program *ahead* of the terminal: with only the terminal
+shut, a machine carrying a credential manager or a keyring helper (which is the
+enterprise machine this path exists for) raises a dialog instead, and a scripted
+fetch hangs on it. The clone URL comes from the API (`git_pull_url`) rather than
+being spelled out, so an instance that keeps its gists on a subdomain is
+followed rather than guessed at. Only a fetch clones, so that field is optional
+on the way in: a gist reported without one still lists and deletes, and only
+`fetch` fails.
 
 **A clone lands a whole transcript in a directory the machine can list**, which
 is why `scratch` composes no path of its own. A predictable one is a path

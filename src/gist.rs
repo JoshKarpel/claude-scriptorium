@@ -321,9 +321,14 @@ fn scratch() -> Result<TempDir> {
 /// is a list, and a machine-wide helper answering first with a stale credential
 /// would fail a clone that gh's own token would have opened.
 ///
-/// Prompting is off, so a gh that cannot answer for this host fails here rather
-/// than asking for a username and password at whatever terminal is to hand: the
-/// premise of the whole module is that gh holds the credential.
+/// Prompting is off in all three of the ways git can ask, so a gh that cannot
+/// answer for this host fails here rather than asking for a username and
+/// password: the premise of the whole module is that gh holds the credential.
+/// `GIT_TERMINAL_PROMPT` closes only the terminal, and git reaches for an
+/// askpass program ahead of it, so a machine with a keyring helper or a
+/// credential manager configured (which is the enterprise machine this path
+/// exists for) would raise a dialog instead, and a scripted fetch would hang on
+/// it. The environment's askpass wins over `core.askpass`, so both have to go.
 fn clone(url: &str, into: &Path) -> Result<()> {
     let status = Command::new("git")
         .args([
@@ -331,6 +336,8 @@ fn clone(url: &str, into: &Path) -> Result<()> {
             "credential.helper=",
             "-c",
             "credential.helper=!gh auth git-credential",
+            "-c",
+            "core.askpass=",
             "clone",
             "--quiet",
             "--depth",
@@ -339,6 +346,8 @@ fn clone(url: &str, into: &Path) -> Result<()> {
         ])
         .arg(into)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
         .status()
         .context("running git (is git installed?)")?;
     if !status.success() {
