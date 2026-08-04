@@ -192,12 +192,51 @@ but never the reload snippet (see below).
 pipes the HTML to a gist, `fetch` downloads a gist's files for offline viewing,
 `scaffold-viewer` writes a self-hostable viewer site, and `gists`/`delete`
 manage what this tool has published. It shells out to the `gh` CLI (its `gist`
-porcelain, plus `gh api gists` where a JSON listing is needed) rather than
+porcelain, plus `gh api` for the requests no porcelain covers) rather than
 holding a GitHub token, so authentication, host selection, and account
 resolution stay gh's job and no token lives in this code. `gh gist create` has
 no `--hostname` and targets gh's default host, so `resolve_identity` recovers
 that account (mirroring gh's own host precedence) and the shell confirms it
-before pushing.
+before pushing. `scaffold-viewer` asks the same question for its default host,
+so a viewer scaffolded on a work machine reads that machine's instance.
+
+**Nothing reads a folio back through `raw_url`, and this is the constraint the
+sharing path is built around.** The gists API truncates a file over ~1 MB,
+answering a read with an empty `content` and a `raw_url` instead. The embedded
+faces put a folio's floor near that mark on their own (~850 kB with the cut ones,
+~2 MB with the whole ones), so any but the shortest session clears it and no
+folio can be counted on to sit under it. On github.com that URL is a plain file
+server that hands over even a secret gist to nobody in particular; on an
+enterprise instance it is the *web* app, which authenticates by session cookie
+and content-negotiates, so an API request arrives with an API `Accept` header and
+is answered `406 Not Acceptable`. That 406 reads as a quarrel about content types
+and is an auth failure wearing a disguise, and it is why `gh gist view` and
+`gh gist edit` are both unusable here: each reads the current content, and each
+reaches for `raw_url` to do it. Writing therefore goes through the API, which
+takes a whole folio on the way in and truncates only on the way out, so a
+republish is a `PATCH` carrying content and description in one request and
+reading nothing.
+Reading goes through git: a gist is a git repository, so `fetch` clones it,
+which has no size limit and no negotiation, with `gh auth git-credential` set as
+git's helper for that one command so no global git config is needed, and with
+git's own prompting off, so a gh that can't answer for the host fails there
+rather than asking for a password. Closing that off takes `GIT_TERMINAL_PROMPT`,
+`core.askpass`, and the two askpass environment variables together, because git
+reaches for an askpass program *ahead* of the terminal: with only the terminal
+shut, a machine carrying a credential manager or a keyring helper (which is the
+enterprise machine this path exists for) raises a dialog instead, and a scripted
+fetch hangs on it. The clone URL comes from the API (`git_pull_url`) rather than
+being spelled out, so an instance that keeps its gists on a subdomain is
+followed rather than guessed at. Only a fetch clones, so that field is optional
+on the way in: a gist reported without one still lists and deletes, and only
+`fetch` fails.
+
+**A clone lands a whole transcript in a directory the machine can list**, which
+is why `scratch` composes no path of its own. A predictable one is a path
+something can be waiting at (`git clone` will use an existing empty directory,
+and one another user created is one they can read the folio out of), so the
+directory is a scoped `TempDir`: unpredictable, owner-only on Unix, and swept up
+however the fetch returns. Don't reach for `temp_dir().join(...)` here.
 
 `publish` is idempotent per session. Every gist's description is stamped with a
 marker (`GIST_MARKER`, this tool's package name) followed by the session id, and
@@ -225,18 +264,29 @@ binary, so `scaffold_viewer` emits a self-hostable copy from the same source
 
 GitHub's ~1 MB limit is a real thing but a *different* thing, and the two are
 easy to conflate: it governs whether the API returns the file's content or
-truncates it, which the viewer already handles by falling back to the raw URL.
-It has nothing to do with whether a folio can be viewed, and no folio is ever
-readable without the viewer or `fetch`. So `publish` always prints the preview
-link and says outright that the gist page shows source. Don't reintroduce a
-size condition here, and don't describe the limit as an "inline-render cutoff".
+truncates it, and the viewer meets it by fetching the raw URL instead. It has
+nothing to do with whether a folio can be viewed, and no folio is ever readable
+without the viewer or `fetch`. So `publish` always prints the preview link and
+says outright that the gist page shows source. Don't reintroduce a size
+condition here, and don't describe the limit as an "inline-render cutoff".
+
+**The viewer is a static page holding no credential, so an enterprise instance
+is where that catches up with it**, in two independent ways: it reads the API as
+nobody, which an instance in private mode turns away, and its raw-URL path wants
+the session cookie a cross-origin fetch will not send. Both are the instance's
+to decide and neither is fixable from this side, so a scaffolded enterprise
+viewer's README says so and points at `fetch --open`, which clones and needs no
+viewer at all. Don't paper over this by teaching the viewer to hold a token: a
+reader's PAT in `localStorage` on the Pages origin is a worse thing than a
+one-line command.
 
 The viewer base comes from `--preview-base`, then `$CLAUDE_SCRIPTORIUM_VIEWER_BASE`,
 then this project's viewer for github.com; a host with no viewer (a GHES
 instance without `--preview-base`) simply prints no link. `fetch` stays the
 no-network-rendering path for sensitive sessions. The pure helpers (host
-precedence, identity parsing, URL and viewer construction) are unit-tested; the
-`gh`-shelling and prompts stay in the shell.
+precedence, identity parsing, URL and viewer construction, the scaffolded
+README) are unit-tested; the `gh`-shelling, the clone, and the prompts stay in
+the shell.
 
 `docs/index.html` is dual-purpose: this repo's own GitHub Pages viewer (Pages
 serves from `main`'s `/docs`) and the template `scaffold_viewer` copies. Editing

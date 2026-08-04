@@ -90,6 +90,13 @@ browser viewer out of the loop, but the gist itself already lives on GitHub; for
 a truly sensitive session, don't publish at all: `render` the folio and share the
 HTML file directly.
 
+The embedded fonts put a folio near the gists API's ~1 MB read limit before a
+session contributes anything, so any but the shortest clears it, and the API
+answers a read of one with a raw URL rather than its contents. `fetch` therefore
+clones the gist as the git repository it is. It needs `git` on the PATH, and uses
+`gh` as git's credential helper for that one clone, so it needs no git
+configuration of its own.
+
 #### View in a browser
 
 The gist page shows the folio's HTML source, not the folio, so `publish` also
@@ -111,14 +118,25 @@ project's viewer can't reach), scaffold your own viewer site and serve it from
 GitHub Pages:
 
 ```bash
-claude-scriptorium scaffold-viewer ./folio-viewer               # for github.com
+claude-scriptorium scaffold-viewer ./folio-viewer
 claude-scriptorium scaffold-viewer ./folio-viewer --host ghe.example.com
 ```
 
+The host defaults to the one `gh` publishes to, so a work machine scaffolds a
+viewer for its own instance without being told; `--host` overrides it.
+
 That writes a small git repo (a viewer `index.html`, its GitHub API base set to
 the chosen host, plus a README with deploy steps). Push it, enable Pages, then
-publish with `--preview-base <your Pages URL>`. The viewer is vendored from
-[GistHost](https://github.com/gisthost/gisthost.github.io) (MIT).
+set `CLAUDE_SCRIPTORIUM_VIEWER_BASE` to your Pages URL. The viewer is vendored
+from [GistHost](https://github.com/gisthost/gisthost.github.io) (MIT).
+
+A viewer is a static page holding no credential, which is a limit worth knowing
+before deploying one to an enterprise instance. It needs the instance to serve
+the gists API to an anonymous browser, so an instance in private mode will turn
+it away, and it needs the folio to be under the API's ~1 MB limit, or the API
+answers with a raw URL the instance's web app will only open for a session
+cookie. Where either holds, `fetch --open` is the way to read a folio, and it
+works regardless.
 
 Claude Code stores transcripts under `~/.claude/projects/`, one directory per
 project path, one JSONL file per session. Set `CLAUDE_CONFIG_DIR` to read from
