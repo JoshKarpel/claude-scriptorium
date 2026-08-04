@@ -7,10 +7,12 @@
 //! recovers that account up front, using gh's own host precedence, so the shell
 //! can confirm it before anything is published.
 //!
-//! **A folio is bigger than the gists API will read back.** The API truncates a
+//! **A folio outgrows what the gists API will read back.** The API truncates a
 //! file over ~1 MB, answering with empty `content` and a `raw_url` to fetch
-//! instead, and a folio passes that mark easily (the fonts alone are most of a
-//! short one). That raw URL is the only part of the flow not served by the API,
+//! instead. The embedded faces put a folio's floor near that mark on their own
+//! (~850 kB with the cut ones, ~2 MB with the whole ones), so anything but a
+//! short session clears it, and no folio can be relied on to sit under it. That
+//! raw URL is the only part of the flow not served by the API,
 //! and on a GitHub Enterprise instance it is served by the *web* app, which
 //! authenticates by session cookie and content-negotiates: an API request lands
 //! there with an API `Accept` header and is answered `406 Not Acceptable`, which
@@ -35,6 +37,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, de::IgnoredAny};
 use serde_json::json;
+use tempfile::TempDir;
 
 /// This project's own viewer, served from its GitHub Pages site, used to render
 /// a published github.com gist. The viewer's host never receives the transcript:
@@ -50,6 +53,11 @@ const VIEWER_TEMPLATE: &str = include_str!("../docs/index.html");
 /// The GitHub API the embedded viewer reads gists from by default. A scaffolded
 /// enterprise viewer rewrites this to the GHES instance's API.
 const DEFAULT_API_BASE: &str = "https://api.github.com";
+
+/// The host everything here assumes when nothing says otherwise: the one gh
+/// falls back to, the one the viewer template is written against, and so the one
+/// a scaffolded viewer needs no rewriting for.
+pub const DEFAULT_HOST: &str = "github.com";
 
 /// The marker every published gist's description begins with: this tool's own
 /// package name. It identifies a gist as one this tool created, so the
@@ -275,15 +283,34 @@ fn gh_stdin(args: &[&str], input: &str) -> Result<String> {
 /// targets.
 pub fn fetch(gist: &str) -> Result<Vec<(String, String)>> {
     let gist = lookup(gist)?;
-    let dir =
-        std::env::temp_dir().join(format!("{GIST_MARKER}-{}-{}", gist.id, std::process::id()));
+    let url = gist
+        .clone_url
+        .with_context(|| format!("gist {} reports no URL to clone it from", gist.id))?;
+    let dir = scratch()?;
+    clone(&url, dir.path())?;
+    worktree_files(dir.path())
+}
 
-    // `git clone` insists on an empty target, so a directory left behind by a
-    // killed run would otherwise poison every run after it.
-    let _ = fs::remove_dir_all(&dir);
-    let fetched = clone(&gist.clone_url, &dir).and_then(|()| worktree_files(&dir));
-    let _ = fs::remove_dir_all(&dir);
-    fetched
+/// The directory a fetch clones into: a scoped one rather than a path composed
+/// from what we know, since a whole transcript lands in it.
+///
+/// Its name is unpredictable, so nothing can be waiting at that path when the
+/// clone arrives (`git clone` will use an existing empty directory, and one
+/// another user created is one they can read the folio out of). On Unix it is
+/// readable by its owner alone, since the directory holding it is one the whole
+/// machine can list. And it is swept up when it drops, however this returns.
+fn scratch() -> Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(GIST_MARKER);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder
+        .tempdir()
+        .context("creating a directory to clone the gist into")
 }
 
 /// Clones `url` into `into`, shallowly, with `gh` as git's credential helper.
@@ -293,6 +320,10 @@ pub fn fetch(gist: &str) -> Result<Vec<(String, String)>> {
 /// value ahead of it clears any helper already configured: `credential.helper`
 /// is a list, and a machine-wide helper answering first with a stale credential
 /// would fail a clone that gh's own token would have opened.
+///
+/// Prompting is off, so a gh that cannot answer for this host fails here rather
+/// than asking for a username and password at whatever terminal is to hand: the
+/// premise of the whole module is that gh holds the credential.
 fn clone(url: &str, into: &Path) -> Result<()> {
     let status = Command::new("git")
         .args([
@@ -307,6 +338,7 @@ fn clone(url: &str, into: &Path) -> Result<()> {
             url,
         ])
         .arg(into)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .status()
         .context("running git (is git installed?)")?;
     if !status.success() {
@@ -358,7 +390,7 @@ fn resolve_host(gh_host: Option<String>, authenticated: &[String]) -> String {
     if let [only] = authenticated {
         return only.clone();
     }
-    "github.com".to_owned()
+    DEFAULT_HOST.to_owned()
 }
 
 /// The active account for `host` from `gh auth status --json hosts`.
@@ -383,7 +415,10 @@ fn parse_identity(status: &str, host: &str) -> Result<Identity> {
 /// self-hosted one). The viewer only needs the gist id and file name, since its
 /// own script fetches the content from the GitHub API; a folio over GitHub's
 /// ~1 MB API truncation limit is fetched from its raw URL by the same script.
-/// Unlike a re-serving proxy, the viewer's host never receives the transcript.
+/// That raw fetch is the *viewer's* path, in a reader's browser, and is the one
+/// this crate does not take (see the module header) and cannot take on an
+/// enterprise instance. Unlike a re-serving proxy, the viewer's host never
+/// receives the transcript.
 pub fn preview_url(viewer_base: &str, gist_url: &str, filename: &str) -> String {
     let id = gist_id(gist_url);
     let base = viewer_base.trim_end_matches('/');
@@ -408,6 +443,14 @@ pub fn scaffold_viewer(ghes_host: Option<&str>) -> Result<String> {
     Ok(rewritten)
 }
 
+/// Which host a scaffolded viewer has to be rewritten for: the one given, unless
+/// it is github.com, which [`scaffold_viewer`] and [`viewer_readme`] both already
+/// take as their default. Naming that default in one place keeps the viewer and
+/// its README from disagreeing about which instance they are for.
+pub fn enterprise_host(host: &str) -> Option<&str> {
+    (host != DEFAULT_HOST).then_some(host)
+}
+
 /// The README written beside a scaffolded viewer: how to deploy it, how to point
 /// `publish` at it once, and, for an enterprise host, what the viewer cannot do
 /// there and what to reach for instead.
@@ -417,7 +460,7 @@ pub fn scaffold_viewer(ghes_host: Option<&str>) -> Result<String> {
 /// shell.
 pub fn viewer_readme(host: Option<&str>, viewer_base_env: &str) -> String {
     let tool = env!("CARGO_PKG_NAME");
-    let reads_from = host.unwrap_or("github.com");
+    let reads_from = host.unwrap_or(DEFAULT_HOST);
     let ghes_note = match host {
         Some(host) => format!(
             "\n## On {host}\n\n\
@@ -503,7 +546,7 @@ struct ApiGist {
     description: Option<String>,
     public: bool,
     html_url: String,
-    git_pull_url: String,
+    git_pull_url: Option<String>,
     files: HashMap<String, IgnoredAny>,
 }
 
@@ -515,8 +558,9 @@ pub struct PublishedGist {
     pub public: bool,
     pub url: String,
     /// Where to clone the gist from, as the instance itself reports it, which is
-    /// how [`fetch`] reads a folio back whole.
-    pub clone_url: String,
+    /// how [`fetch`] reads a folio back whole. Only a fetch needs it, so a gist
+    /// that reports none still lists and deletes, and only [`fetch`] fails.
+    pub clone_url: Option<String>,
     pub files: Vec<String>,
 }
 
@@ -613,9 +657,66 @@ mod tests {
         assert_eq!(gist.id, "7f15");
         assert!(gist.public);
         assert_eq!(gist.url, "https://gist.github.com/scribe/7f15");
-        assert_eq!(gist.clone_url, "https://gist.github.com/7f15.git");
+        assert_eq!(
+            gist.clone_url.as_deref(),
+            Some("https://gist.github.com/7f15.git")
+        );
         assert_eq!(gist.files, vec!["abc123.html".to_owned()]);
         assert!(gist.is_ours());
+    }
+
+    /// Only a fetch clones, so a gist reported without a clone URL must still
+    /// list and delete rather than failing the whole listing it arrived in.
+    #[test]
+    fn published_gist_survives_a_payload_carrying_no_clone_url() {
+        let json = r#"{
+            "id": "7f15",
+            "description": "claude-scriptorium abc123: a title",
+            "public": false,
+            "html_url": "https://ghe.example.com/gist/scribe/7f15",
+            "files": {"abc123.html": {"filename": "abc123.html"}}
+        }"#;
+        let gist: PublishedGist = serde_json::from_str::<ApiGist>(json).unwrap().into();
+
+        assert_eq!(gist.clone_url, None);
+        assert!(gist.is_ours());
+    }
+
+    #[test]
+    fn a_cloned_gists_files_are_read_by_name_leaving_gits_own_directory_out() {
+        let clone = scratch().unwrap();
+        fs::create_dir(clone.path().join(".git")).unwrap();
+        fs::write(clone.path().join("session-7.html"), "<p>folio</p>").unwrap();
+        fs::write(clone.path().join("notes.md"), "a note").unwrap();
+
+        let files = worktree_files(clone.path()).unwrap();
+
+        assert_eq!(
+            files,
+            vec![
+                ("notes.md".to_owned(), "a note".to_owned()),
+                ("session-7.html".to_owned(), "<p>folio</p>".to_owned()),
+            ]
+        );
+    }
+
+    /// The transcript is cloned into a directory the whole machine can list, so
+    /// the mode is the only thing keeping it from being read there.
+    #[cfg(unix)]
+    #[test]
+    fn the_directory_a_fetch_clones_into_is_readable_by_its_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let clone = scratch().unwrap();
+
+        let mode = fs::metadata(clone.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn a_scaffolded_viewer_is_rewritten_for_every_host_but_the_default() {
+        assert_eq!(enterprise_host("ghe.example.com"), Some("ghe.example.com"));
+        assert_eq!(enterprise_host("github.com"), None);
     }
 
     #[test]

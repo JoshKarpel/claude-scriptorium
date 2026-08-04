@@ -357,7 +357,7 @@ fn confirm_publish(identity: &gist::Identity, public: bool, assume_yes: bool) ->
 fn resolve_viewer(identity: &gist::Identity, base_override: Option<String>) -> Option<String> {
     match base_override {
         Some(base) => Some(base),
-        None if identity.host == "github.com" => Some(gist::DEFAULT_VIEWER_BASE.to_owned()),
+        None if identity.host == gist::DEFAULT_HOST => Some(gist::DEFAULT_VIEWER_BASE.to_owned()),
         None => {
             eprintln!(
                 "Note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and set {VIEWER_BASE_ENV}. Publishing without a preview link.",
@@ -521,7 +521,7 @@ fn scaffold_viewer(args: ScaffoldViewerArgs) -> Result<()> {
     println!("{}", readme.display());
     println!(
         "Reads gists from {}.",
-        host.as_deref().unwrap_or("github.com")
+        host.as_deref().unwrap_or(gist::DEFAULT_HOST)
     );
     println!(
         "Next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then set {VIEWER_BASE_ENV} to your Pages URL",
@@ -547,7 +547,7 @@ fn scaffold_host(given: Option<String>) -> Result<Option<String>> {
                 .host
         }
     };
-    Ok((host != "github.com").then_some(host))
+    Ok(gist::enterprise_host(&host).map(str::to_owned))
 }
 
 /// Initializes a git repo in `dir`, since the scaffold is meant to be pushed to

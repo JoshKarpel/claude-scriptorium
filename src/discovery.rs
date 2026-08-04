@@ -140,7 +140,7 @@ mod tests {
     }
 
     /// Builds a throwaway projects root and removes it when dropped, so the
-    /// filesystem-facing enumeration can be exercised without a temp-dir crate.
+    /// filesystem-facing enumeration has a tree to walk.
     struct TempRoot {
         path: PathBuf,
     }

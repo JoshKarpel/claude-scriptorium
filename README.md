@@ -90,10 +90,12 @@ browser viewer out of the loop, but the gist itself already lives on GitHub; for
 a truly sensitive session, don't publish at all: `render` the folio and share the
 HTML file directly.
 
-A folio is comfortably over the gists API's ~1 MB read limit, so `fetch` clones
-the gist as the git repository it is rather than asking the API for its
-contents. It needs `git` on the PATH, and uses `gh` as git's credential helper
-for that one clone, so it needs no git configuration of its own.
+The embedded fonts put a folio near the gists API's ~1 MB read limit before a
+session contributes anything, so any but the shortest clears it, and the API
+answers a read of one with a raw URL rather than its contents. `fetch` therefore
+clones the gist as the git repository it is. It needs `git` on the PATH, and uses
+`gh` as git's credential helper for that one clone, so it needs no git
+configuration of its own.
 
 #### View in a browser
 
