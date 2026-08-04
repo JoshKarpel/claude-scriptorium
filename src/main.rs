@@ -185,8 +185,8 @@ struct ScaffoldViewerArgs {
     /// Directory to create the viewer repo in. Missing parents are created.
     output: PathBuf,
 
-    /// GitHub Enterprise host the viewer will read gists from, e.g.
-    /// `ghe.example.com`. Defaults to github.com.
+    /// GitHub host the viewer will read gists from, e.g. `ghe.example.com`.
+    /// Defaults to the host `publish` targets, as `gh` resolves it.
     #[arg(long, value_name = "HOST")]
     host: Option<String>,
 }
@@ -360,7 +360,7 @@ fn resolve_viewer(identity: &gist::Identity, base_override: Option<String>) -> O
         None if identity.host == "github.com" => Some(gist::DEFAULT_VIEWER_BASE.to_owned()),
         None => {
             eprintln!(
-                "Note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and pass --preview-base. Publishing without a preview link.",
+                "Note: no built-in viewer for {} gists; scaffold one with `{} scaffold-viewer` and set {VIEWER_BASE_ENV}. Publishing without a preview link.",
                 identity.host,
                 env!("CARGO_PKG_NAME")
             );
@@ -501,25 +501,53 @@ fn fetch(args: FetchArgs) -> Result<()> {
 }
 
 fn scaffold_viewer(args: ScaffoldViewerArgs) -> Result<()> {
-    let viewer = gist::scaffold_viewer(args.host.as_deref())?;
+    let host = scaffold_host(args.host)?;
+    let viewer = gist::scaffold_viewer(host.as_deref())?;
 
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
     let index = args.output.join("index.html");
     fs::write(&index, viewer).with_context(|| format!("writing {}", index.display()))?;
     let readme = args.output.join("README.md");
-    fs::write(&readme, viewer_readme(args.host.as_deref()))
-        .with_context(|| format!("writing {}", readme.display()))?;
+    fs::write(
+        &readme,
+        gist::viewer_readme(host.as_deref(), VIEWER_BASE_ENV),
+    )
+    .with_context(|| format!("writing {}", readme.display()))?;
 
     git_init(&args.output);
 
     println!("{}", index.display());
     println!("{}", readme.display());
     println!(
-        "Next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then publish with --preview-base <your Pages URL>",
+        "Reads gists from {}.",
+        host.as_deref().unwrap_or("github.com")
+    );
+    println!(
+        "Next: push {} to GitHub, enable Pages (Deploy from a branch, / root), then set {VIEWER_BASE_ENV} to your Pages URL",
         args.output.display()
     );
     Ok(())
+}
+
+/// The host a scaffolded viewer reads gists from: the one given, otherwise the
+/// one `gh` publishes to, so a viewer scaffolded on a work machine points at
+/// that machine's instance without being told. `None` means github.com, which
+/// the viewer template already targets and so needs no rewrite.
+///
+/// Asking `gh` is what makes the default right rather than merely present, so a
+/// gh that can't answer is an error naming the flag rather than a silent
+/// github.com viewer for an enterprise instance.
+fn scaffold_host(given: Option<String>) -> Result<Option<String>> {
+    let host = match given {
+        Some(host) => host,
+        None => {
+            gist::resolve_identity()
+                .context("could not resolve the GitHub host from gh; pass --host")?
+                .host
+        }
+    };
+    Ok((host != "github.com").then_some(host))
 }
 
 /// Initializes a git repo in `dir`, since the scaffold is meant to be pushed to
@@ -537,41 +565,6 @@ fn git_init(dir: &Path) {
             dir.display()
         );
     }
-}
-
-/// The README written alongside a scaffolded viewer: how to deploy it and point
-/// `publish --preview-base` at it, with the GHES caveats spelled out.
-fn viewer_readme(host: Option<&str>) -> String {
-    let reads_from = host.unwrap_or("github.com");
-    let ghes_note = match host {
-        Some(host) => format!(
-            "\nThis viewer reads gists from `{host}` (its `/api/v3` endpoint). It must be \
-             served from that instance's Pages, and the instance must allow cross-origin \
-             requests from the Pages origin to its API and enable GitHub Pages.\n"
-        ),
-        None => String::new(),
-    };
-
-    format!(
-        "# Folio viewer\n\n\
-         A self-hostable page that renders a Claude Code folio published as a gist on \
-         `{reads_from}`. The reader's browser fetches the gist from the GitHub API and \
-         writes it into the page, so this site's host never receives the transcript.\n\
-         {ghes_note}\n\
-         ## Deploy\n\n\
-         1. Push this directory to a repository.\n\
-         2. Enable GitHub Pages for it: Settings, Pages, Deploy from a branch, your \
-         branch, `/` (root).\n\
-         3. The viewer is then served at your Pages URL, e.g. \
-         `https://<owner>.github.io/<repo>/`.\n\n\
-         ## Use\n\n\
-         Point `publish` at it:\n\n\
-         ```\n\
-         {} publish --preview-base https://<owner>.github.io/<repo>/\n\
-         ```\n\n\
-         Vendored from GistHost (MIT); see the license header in `index.html`.\n",
-        env!("CARGO_PKG_NAME")
-    )
 }
 
 fn resolve_session(selection: Selection) -> Result<PathBuf> {

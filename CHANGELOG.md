@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6]
+
+### Fixed
+
+- `fetch` and re-`publish`ing a session both work against a GitHub Enterprise
+  instance. Both failed there with `406 Not Acceptable`, which reads as a
+  quarrel about content types and is really an authentication failure: a folio
+  is over the gists API's ~1 MB limit, so the API answers a read with a
+  `raw_url` instead of the content, and on an enterprise instance that URL is
+  served by the web app, which wants a session cookie rather than an API token.
+  Nothing now reads a folio through that URL. A republish writes through the API
+  in one request, without first reading back the file it is replacing, and
+  `fetch` clones the gist as the git repository it is, which has no size limit
+  and authenticates as any other clone does. Both paths change on `github.com`
+  too, where the raw URL happened to work; `fetch` now needs `git` on the PATH.
+
+### Changed
+
+- `scaffold-viewer` reads the host from `gh` when `--host` is not given, so a
+  viewer scaffolded on a machine that publishes to an enterprise instance points
+  at that instance rather than at github.com. It therefore needs `gh` to be
+  authenticated, unless `--host` says which instance to scaffold for.
+- A scaffolded viewer's README names `CLAUDE_SCRIPTORIUM_VIEWER_BASE`, so the
+  viewer can be pointed at once rather than per publish, and, for an enterprise
+  host, says what will stop the viewer working there (an instance in private
+  mode, and a folio over the API's size limit) and that `fetch --open` reads a
+  folio regardless.
+
 ## [0.1.5]
 
 ### Added

@@ -6,16 +6,35 @@
 //! accounts can silently push to the wrong identity. [`resolve_identity`]
 //! recovers that account up front, using gh's own host precedence, so the shell
 //! can confirm it before anything is published.
+//!
+//! **A folio is bigger than the gists API will read back.** The API truncates a
+//! file over ~1 MB, answering with empty `content` and a `raw_url` to fetch
+//! instead, and a folio passes that mark easily (the fonts alone are most of a
+//! short one). That raw URL is the only part of the flow not served by the API,
+//! and on a GitHub Enterprise instance it is served by the *web* app, which
+//! authenticates by session cookie and content-negotiates: an API request lands
+//! there with an API `Accept` header and is answered `406 Not Acceptable`, which
+//! reads as a content-type quarrel and is really an auth failure. On github.com
+//! the same URL is a plain file server that serves even a secret gist to nobody
+//! in particular, which is why the raw path works there and only there.
+//!
+//! So nothing here reads a folio through `raw_url`. Writing goes through the API
+//! (which accepts a whole folio on the way in, and truncates only on the way
+//! out), and reading goes through git: a gist is a git repository, so
+//! [`fetch`] clones it, which has no size limit, no content negotiation, and
+//! authenticates the way every other clone on the machine does.
 
 use std::{
     collections::HashMap,
-    fmt,
+    fmt, fs,
     io::Write,
+    path::Path,
     process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, de::IgnoredAny};
+use serde_json::json;
 
 /// This project's own viewer, served from its GitHub Pages site, used to render
 /// a published github.com gist. The viewer's host never receives the transcript:
@@ -123,24 +142,21 @@ pub fn publish(html: &str, session_id: &str, description: &str, public: bool) ->
                 existing.url
             );
         }
-        // Content and description in one call, and the trailing `-` is what
-        // makes it safe: `gh gist edit --desc` does not return once it has set
-        // the description, it falls through to the file-edit loop, and with no
-        // source file that loop opens $EDITOR. A second, description-only call
-        // would therefore launch an editor against a piped stdin rather than
-        // update anything. One call sets both in a single request.
+        // The API directly rather than `gh gist edit`, which reads the file's
+        // current content before writing the replacement and reaches for
+        // `raw_url` to do it when the file is truncated, which every folio is.
+        // A PATCH sets the content and the description in one request and never
+        // reads the old bytes we are about to overwrite.
         gh_stdin(
             &[
-                "gist",
-                "edit",
-                &existing.id,
-                "--filename",
-                &filename,
-                "--desc",
-                description,
+                "api",
+                "-X",
+                "PATCH",
+                &format!("gists/{}", existing.id),
+                "--input",
                 "-",
             ],
-            html,
+            &edit_body(&filename, description, html),
         )
         .context("editing the existing gist")?;
         return Ok(Published {
@@ -169,6 +185,17 @@ pub fn publish(html: &str, session_id: &str, description: &str, public: bool) ->
         url,
         updated: false,
     })
+}
+
+/// The body of the PATCH that republishes a session: the new description, and
+/// the whole folio as the gist's one file. The API takes a folio of any size on
+/// the way in; it is only reading one back that it truncates.
+fn edit_body(filename: &str, description: &str, html: &str) -> String {
+    json!({
+        "description": description,
+        "files": { filename: { "content": html } },
+    })
+    .to_string()
 }
 
 /// The gist this tool published for `session_id`, if any: the one among our
@@ -236,24 +263,84 @@ fn gh_stdin(args: &[&str], input: &str) -> Result<String> {
     String::from_utf8(output.stdout).context("gh produced non-UTF-8 output")
 }
 
-/// Downloads a published gist's raw files by id or URL via `gh gist view`,
-/// returning each file's name and contents so a folio can be viewed offline
-/// without any rendering proxy. `gh` resolves the id against its default host,
-/// the same one [`publish`] targets.
+/// Downloads a published gist's files by id or URL, returning each file's name
+/// and contents so a folio can be viewed offline without any rendering proxy.
+///
+/// A gist is a git repository, and cloning it is the only way to read a folio
+/// back whole: the API truncates a file this size and hands out a `raw_url` that
+/// no API credential opens on an enterprise instance (see the module header).
+/// The clone URL comes from the API rather than being spelled out here, so an
+/// instance that keeps its gists on a subdomain is followed rather than guessed
+/// at. `gh` resolves the id against its default host, the same one [`publish`]
+/// targets.
 pub fn fetch(gist: &str) -> Result<Vec<(String, String)>> {
-    let id = gist_id(gist);
-    let files = gh(&["gist", "view", id, "--files"])?;
+    let gist = lookup(gist)?;
+    let dir =
+        std::env::temp_dir().join(format!("{GIST_MARKER}-{}-{}", gist.id, std::process::id()));
 
-    let mut fetched = Vec::new();
-    for name in files.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let contents = gh(&["gist", "view", id, "--raw", "--filename", name])?;
-        fetched.push((name.to_owned(), contents));
-    }
-    Ok(fetched)
+    // `git clone` insists on an empty target, so a directory left behind by a
+    // killed run would otherwise poison every run after it.
+    let _ = fs::remove_dir_all(&dir);
+    let fetched = clone(&gist.clone_url, &dir).and_then(|()| worktree_files(&dir));
+    let _ = fs::remove_dir_all(&dir);
+    fetched
 }
 
-/// The gist id from a page URL or a bare id: `gh gist view` accepts either, but
-/// reducing a URL to its trailing id keeps a copied browser URL working too.
+/// Clones `url` into `into`, shallowly, with `gh` as git's credential helper.
+///
+/// The helper is set for this one command rather than in the user's git config,
+/// so `fetch` needs no `gh auth setup-git` and changes nothing global. The empty
+/// value ahead of it clears any helper already configured: `credential.helper`
+/// is a list, and a machine-wide helper answering first with a stale credential
+/// would fail a clone that gh's own token would have opened.
+fn clone(url: &str, into: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args([
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            "clone",
+            "--quiet",
+            "--depth",
+            "1",
+            url,
+        ])
+        .arg(into)
+        .status()
+        .context("running git (is git installed?)")?;
+    if !status.success() {
+        bail!("git clone {url} failed");
+    }
+    Ok(())
+}
+
+/// The files a cloned gist left in `dir`, by name, in name order. A gist's tree
+/// is flat, so everything but git's own directory is one of the gist's files.
+fn worktree_files(dir: &Path) -> Result<Vec<(String, String)>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry
+            .with_context(|| format!("reading {}", dir.display()))?
+            .path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .with_context(|| format!("{} has no readable name", path.display()))?;
+        if name == ".git" {
+            continue;
+        }
+        let contents =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        files.push((name.to_owned(), contents));
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// The gist id from a page URL or a bare id. The API endpoints take an id, so
+/// reducing a URL to its trailing id is what lets a reader paste the browser URL
+/// they were handed.
 fn gist_id(gist: &str) -> &str {
     gist.trim_end_matches('/')
         .rsplit('/')
@@ -321,6 +408,61 @@ pub fn scaffold_viewer(ghes_host: Option<&str>) -> Result<String> {
     Ok(rewritten)
 }
 
+/// The README written beside a scaffolded viewer: how to deploy it, how to point
+/// `publish` at it once, and, for an enterprise host, what the viewer cannot do
+/// there and what to reach for instead.
+///
+/// `viewer_base_env` is the environment variable that defaults the preview base,
+/// named here rather than assumed, so the one place that owns it stays the
+/// shell.
+pub fn viewer_readme(host: Option<&str>, viewer_base_env: &str) -> String {
+    let tool = env!("CARGO_PKG_NAME");
+    let reads_from = host.unwrap_or("github.com");
+    let ghes_note = match host {
+        Some(host) => format!(
+            "\n## On {host}\n\n\
+             This viewer reads gists from `{host}` (its `/api/v3` endpoint), so it must be \
+             served from that instance's Pages and the instance must enable Pages and allow \
+             cross-origin API requests from the Pages origin.\n\n\
+             Two things an enterprise instance does differently will stop it, and both are \
+             worth checking before you deploy:\n\n\
+             - **The page reads the API as nobody.** It carries no token, and a browser sends \
+             no cookie across origins, so an instance in private mode answers the fetch with a \
+             redirect to its sign-in page rather than the gist. There is nowhere for a static \
+             page to get a credential from.\n\
+             - **A folio is usually over the API's ~1 MB limit**, and the API then answers with \
+             a `raw_url` instead of the content. On `github.com` that URL is an open file \
+             server; on an enterprise instance it is the web app, which wants a session cookie \
+             the fetch cannot send.\n\n\
+             Where either holds, `{tool} fetch <gist> --open` is the way to read a folio: it \
+             clones the gist with your own git credentials and opens the file locally, with no \
+             viewer in the loop at all.\n"
+        ),
+        None => String::new(),
+    };
+
+    format!(
+        "# Folio viewer\n\n\
+         A self-hostable page that renders a Claude Code folio published as a gist on \
+         `{reads_from}`. The reader's browser fetches the gist from the GitHub API and \
+         writes it into the page, so this site's host never receives the transcript.\n\
+         {ghes_note}\n\
+         ## Deploy\n\n\
+         1. Push this directory to a repository.\n\
+         2. Enable GitHub Pages for it: Settings, Pages, Deploy from a branch, your \
+         branch, `/` (root).\n\
+         3. The viewer is then served at your Pages URL, e.g. \
+         `https://<owner>.github.io/<repo>/`.\n\n\
+         ## Use\n\n\
+         Point `publish` at it once, by setting the base in your shell profile:\n\n\
+         ```\n\
+         export {viewer_base_env}=https://<owner>.github.io/<repo>/\n\
+         ```\n\n\
+         Or per publish, with `{tool} publish --preview-base <url>`.\n\n\
+         Vendored from GistHost (MIT); see the license header in `index.html`.\n"
+    )
+}
+
 /// The hosts gh has an authenticated account for, in gh's own order.
 fn authenticated_hosts() -> Result<Vec<String>> {
     let output = gh(&[
@@ -361,6 +503,7 @@ struct ApiGist {
     description: Option<String>,
     public: bool,
     html_url: String,
+    git_pull_url: String,
     files: HashMap<String, IgnoredAny>,
 }
 
@@ -371,6 +514,9 @@ pub struct PublishedGist {
     pub description: Option<String>,
     pub public: bool,
     pub url: String,
+    /// Where to clone the gist from, as the instance itself reports it, which is
+    /// how [`fetch`] reads a folio back whole.
+    pub clone_url: String,
     pub files: Vec<String>,
 }
 
@@ -391,6 +537,7 @@ impl From<ApiGist> for PublishedGist {
             description: gist.description,
             public: gist.public,
             url: gist.html_url,
+            clone_url: gist.git_pull_url,
             files,
         }
     }
@@ -458,6 +605,7 @@ mod tests {
             "description": "claude-scriptorium abc123: a title",
             "public": true,
             "html_url": "https://gist.github.com/scribe/7f15",
+            "git_pull_url": "https://gist.github.com/7f15.git",
             "files": {"abc123.html": {"filename": "abc123.html"}}
         }"#;
         let gist: PublishedGist = serde_json::from_str::<ApiGist>(json).unwrap().into();
@@ -465,8 +613,37 @@ mod tests {
         assert_eq!(gist.id, "7f15");
         assert!(gist.public);
         assert_eq!(gist.url, "https://gist.github.com/scribe/7f15");
+        assert_eq!(gist.clone_url, "https://gist.github.com/7f15.git");
         assert_eq!(gist.files, vec!["abc123.html".to_owned()]);
         assert!(gist.is_ours());
+    }
+
+    #[test]
+    fn edit_body_carries_the_description_and_the_whole_folio() {
+        let body: serde_json::Value =
+            serde_json::from_str(&edit_body("abc123.html", "a description", "<p>folio</p>"))
+                .unwrap();
+
+        assert_eq!(body["description"], "a description");
+        assert_eq!(body["files"]["abc123.html"]["content"], "<p>folio</p>");
+    }
+
+    #[test]
+    fn a_github_com_viewer_readme_names_the_env_var_and_raises_no_enterprise_caveat() {
+        let readme = viewer_readme(None, "CLAUDE_SCRIPTORIUM_VIEWER_BASE");
+
+        assert!(readme.contains("export CLAUDE_SCRIPTORIUM_VIEWER_BASE=https://"));
+        assert!(!readme.contains("private mode"));
+    }
+
+    #[test]
+    fn an_enterprise_viewer_readme_names_the_host_and_points_at_fetch_instead() {
+        let readme = viewer_readme(Some("ghe.example.com"), "CLAUDE_SCRIPTORIUM_VIEWER_BASE");
+
+        assert!(readme.contains("gists from `ghe.example.com`"));
+        assert!(readme.contains("private mode"));
+        assert!(readme.contains("claude-scriptorium fetch <gist> --open"));
+        assert!(readme.contains("export CLAUDE_SCRIPTORIUM_VIEWER_BASE=https://"));
     }
 
     #[test]
@@ -476,6 +653,7 @@ mod tests {
             "description": "some unrelated gist",
             "public": false,
             "html_url": "https://gist.github.com/scribe/7f15",
+            "git_pull_url": "https://gist.github.com/7f15.git",
             "files": {"notes.txt": {"filename": "notes.txt"}}
         }"#;
         let gist: PublishedGist = serde_json::from_str::<ApiGist>(json).unwrap().into();
