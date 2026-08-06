@@ -199,10 +199,61 @@ impl Stream<'_> {
     pub fn url(&self) -> String {
         match self {
             Stream::Shelf => "/live".to_owned(),
-            Stream::Quire(id) => format!("/live/quire/{id}"),
-            Stream::Folio { session, from } => format!("/live/folio/{session}?from={from}"),
+            Stream::Quire(id) => format!("/live/quire/{}", encoded(id)),
+            Stream::Folio { session, from } => {
+                format!("/live/folio/{}?from={from}", encoded(session))
+            }
         }
     }
+}
+
+/// One path segment of a URL, with everything outside the unreserved set
+/// percent-encoded.
+///
+/// A session id is a file stem and `serve` is given an arbitrary path, so an id
+/// can hold a space or a `#` or a `?`. The browser encodes such a URL before it
+/// sends it, and the codex compares the segment it receives against the ids the
+/// listing holds, so an unencoded id arrives as a session no listing knows and
+/// the page silently never updates. Spelled here and read back by
+/// [`decoded`], which `codex::route` calls; the two are held together by test.
+pub fn encoded(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
+/// A path segment as it was spelled, undoing [`encoded`].
+///
+/// A segment that is not valid percent-encoding, or whose bytes are not UTF-8,
+/// names nothing this codex could hold, so it answers `None` rather than a
+/// mangled id that would go on to be looked up.
+pub fn decoded(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut plain: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            plain.push(bytes[index]);
+            index = index.checked_add(1)?;
+            continue;
+        }
+        let hex = segment.get(index.checked_add(1)?..index.checked_add(3)?)?;
+        // `from_str_radix` accepts a leading sign, so `%+1` would otherwise
+        // decode rather than being rejected as the malformed segment it is.
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        plain.push(u8::from_str_radix(hex, 16).ok()?);
+        index = index.checked_add(3)?;
+    }
+    String::from_utf8(plain).ok()
 }
 
 /// Which cut of the embedded faces a folio should carry.
@@ -249,6 +300,22 @@ pub fn beyond_cut(text: &str) -> BTreeMap<char, usize> {
         index += character.len_utf8();
     }
     tally
+}
+
+/// Everything a folio sets beyond the cut faces: what its panels reached, and
+/// the source path its plaque states, which is the only other place a folio sets
+/// text it did not choose. The rest of the chrome is this crate's own markup,
+/// which the tests hold inside the cut faces.
+///
+/// A whole folio and a patch of one are dressed from this one tally, so a page
+/// served in the whole faces can never be re-dressed down into cut ones its own
+/// plaque path has fallen out of.
+pub fn reached(folio: &Folio, panels: BTreeMap<char, usize>) -> BTreeMap<char, usize> {
+    let mut reached = panels;
+    for (character, count) in beyond_cut(&folio.source.display().to_string()) {
+        *reached.entry(character).or_insert(0) += count;
+    }
+    reached
 }
 
 fn dropped(character: char) -> bool {
@@ -513,15 +580,8 @@ impl<'a> Scribe<'a> {
     ) -> (Markup, BTreeMap<char, usize>) {
         let title = format!("folio {}", folio.session_id());
         let panels = folio.panels();
-        let source = folio.source.display().to_string();
-        let (rendered_panels, mut reached) = self.panels(&panels);
-
-        // The panels are the transcript; the source path is the only other
-        // place a folio sets text it didn't choose. The rest of the chrome is
-        // this crate's own markup, which the tests hold inside the cut faces.
-        for (character, count) in beyond_cut(&source) {
-            *reached.entry(character).or_insert(0) += count;
-        }
+        let (rendered_panels, panel_reach) = self.panels(&panels);
+        let reached = reached(folio, panel_reach);
         let faces = self.faces(!reached.is_empty());
 
         let content = html! {
@@ -853,7 +913,7 @@ impl<'a> Scribe<'a> {
         };
         self.leaf(
             "codex",
-            self.faces(!beyond_cut(&shelf.labels()).is_empty()),
+            self.listing_faces(&shelf.labels()),
             None,
             Some(Stream::Shelf),
             content,
@@ -879,7 +939,7 @@ impl<'a> Scribe<'a> {
         };
         self.leaf(
             &format!("quire {}", quire.project),
-            self.faces(!beyond_cut(&quire.labels()).is_empty()),
+            self.listing_faces(&quire.labels()),
             None,
             Some(Stream::Quire(&quire.id)),
             content,
@@ -915,14 +975,14 @@ impl<'a> Scribe<'a> {
                 // again over its own sessions would say the same thing twice.
                 @if !whole {
                     header .quire__head {
-                        a .quire__project href=(format!("/quire/{}", quire.id)) { (quire.project) }
+                        a .quire__project href=(format!("/quire/{}", encoded(&quire.id))) { (quire.project) }
                         span .quire__when { (quire.when) }
                     }
                 }
                 ul .quire__sessions {
                     @for session in &quire.sessions {
                         li .listed data-live[session.is_live] {
-                            a .listed__title href=(format!("/folio/{}", session.id)) {
+                            a .listed__title href=(format!("/folio/{}", encoded(&session.id))) {
                                 (session.title)
                             }
                             span .listed__facts {
@@ -941,7 +1001,7 @@ impl<'a> Scribe<'a> {
                 // Nothing is left out of a quire's own page, so nothing there
                 // sends the reader to the page they are on.
                 @if !whole && quire.more > 0 {
-                    a .quire__more href=(format!("/quire/{}", quire.id)) {
+                    a .quire__more href=(format!("/quire/{}", encoded(&quire.id))) {
                         (format!("and {} more", quire.more))
                     }
                 }
@@ -964,6 +1024,15 @@ impl<'a> Scribe<'a> {
             Fonts::Fitted if reached => Asset::FacesWhole,
             Fonts::Fitted => Asset::FacesCut,
         }
+    }
+
+    /// Which cut of the faces a listing carries, given every label in it.
+    ///
+    /// A listing page and a listing pushed into one both ask this, so a title
+    /// that reaches beyond the cut brings the whole faces with it whether the
+    /// reader loaded the page or was sent it.
+    pub fn listing_faces(&self, labels: &str) -> Asset {
+        self.faces(!beyond_cut(labels).is_empty())
     }
 
     fn stamp(&self, timestamp: Timestamp) -> String {
@@ -1200,7 +1269,6 @@ const CELL_HEIGHT: u32 = 210;
 /// the strip recurs, at the cost of a larger data URI.
 const STRIP_CELLS: usize = 48;
 
-/// The vine cell, the border's default section.
 /// Presentation controls, opposite the navigation dock: the lights a page can be
 /// read by, which are also the controls that choose between them. There is no
 /// separate toggle to label, because the reader presses the light they want: the
@@ -1241,6 +1309,7 @@ fn luminaries() -> Markup {
     }
 }
 
+/// The vine cell, the border's default section.
 const VINE_CELL: &str = include_str!("drolleries/vine.svg");
 
 /// A vine stub that eases the border into a drollery: baked above each creature
@@ -1486,6 +1555,46 @@ fn image(source: &ImageSource) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_id_a_url_can_carry_plainly_is_left_as_it_is() {
+        assert_eq!(encoded("6f1a-4b2c-9de3"), "6f1a-4b2c-9de3");
+        assert_eq!(encoded("-home-scribe-projects"), "-home-scribe-projects");
+    }
+
+    /// `serve` is given a path rather than a Claude Code session id, so a stem
+    /// with a space or a `#` in it reaches a URL. Unencoded, the browser rewrites
+    /// it before sending, and the stream is asked for a session no listing holds.
+    #[test]
+    fn an_id_that_would_not_survive_a_url_is_encoded_and_read_back() {
+        for id in [
+            "my session",
+            "notes #4",
+            "a/b",
+            "what?",
+            "100% done",
+            "café",
+            "plus+sign",
+        ] {
+            let spelled = encoded(id);
+            assert!(
+                !spelled.contains(|character| " #?/+".contains(character)),
+                "{spelled} still holds a character a URL takes differently"
+            );
+            assert_eq!(decoded(&spelled).as_deref(), Some(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_segment_that_is_not_valid_encoding_names_nothing() {
+        assert_eq!(decoded("%"), None);
+        assert_eq!(decoded("%2"), None);
+        assert_eq!(decoded("%zz"), None);
+        // `from_str_radix` would otherwise take the sign and decode this.
+        assert_eq!(decoded("%+1"), None);
+        // A byte sequence that is not UTF-8 is no id either.
+        assert_eq!(decoded("%FF"), None);
+    }
 
     #[test]
     fn token_counts_shorten_to_one_decimal_place_per_magnitude() {

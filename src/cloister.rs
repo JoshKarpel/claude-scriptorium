@@ -16,8 +16,9 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::UNIX_EPOCH,
 };
 
 use anyhow::{Context, Result, bail};
@@ -36,6 +37,17 @@ pub struct Charter {
     /// Absolute path to the binary, so the unit runs the same one that wrote it
     /// rather than whatever a `PATH` resolves to years later.
     pub program: PathBuf,
+    /// The state of that binary when the unit was written, as one word (see
+    /// [`stamped`]).
+    ///
+    /// `ExecStart` names a path and not a version, so installing a newer build
+    /// over the same path leaves the unit byte-identical: without this a re-run
+    /// after an upgrade would find nothing changed, skip the restart, and report
+    /// that the unit was already written while the service went on running the
+    /// code that was replaced. Recording it puts the binary's identity in the
+    /// declaration, so a rebuild *is* a change and converges the same way every
+    /// other change does.
+    pub program_stamp: String,
     /// The `codex` invocation, every argument spelled out. A user unit inherits
     /// none of the installing shell's environment, so anything the codex would
     /// otherwise read from it (`CLAUDE_CONFIG_DIR`, most of all) has to be
@@ -62,6 +74,11 @@ impl Charter {
     /// Nothing is ordered against `network-online.target`. It is a system unit
     /// and a user manager has no such target to wait on, and a codex binds a
     /// socket rather than reaching out, so there is nothing to wait for.
+    ///
+    /// The binary's own stamp is written as a comment rather than a directive:
+    /// systemd has nothing to do with it, it exists so that rebuilding the
+    /// binary changes this text (see [`Charter::program_stamp`]), and a comment
+    /// is the one thing every version of systemd is guaranteed to ignore.
     pub fn unit_file(&self) -> String {
         let command = std::iter::once(quoted(&self.program.to_string_lossy()))
             .chain(self.arguments.iter().map(|argument| quoted(argument)))
@@ -72,6 +89,7 @@ impl Charter {
 [Unit]
 Description=claude-scriptorium codex, serving every recorded session
 Documentation={home}
+# Installed from a binary of {stamp}.
 
 [Service]
 Type=exec
@@ -84,9 +102,27 @@ RestartSec=2
 WantedBy=default.target
 ",
             home = env!("CARGO_PKG_REPOSITORY"),
+            stamp = self.program_stamp,
             directory = self.home.display(),
         )
     }
+}
+
+/// The state of a binary, as one word: when it was last written and how large it
+/// is. Enough to tell one build from another over the same path, which is all
+/// [`Charter::program_stamp`] asks of it. A binary whose metadata cannot be read
+/// has no state to name, and says so rather than claiming an identity.
+pub fn stamped(program: &Path) -> String {
+    let Ok(metadata) = program.metadata() else {
+        return "unknown".to_owned();
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|since| since.as_secs())
+        .unwrap_or(0);
+    format!("{modified}-{}", metadata.len())
 }
 
 /// Quotes an argument for a systemd `ExecStart`, which splits on whitespace
@@ -185,9 +221,10 @@ pub fn unit_path(name: &str) -> Result<PathBuf> {
 /// printing.
 pub struct Installed {
     pub path: PathBuf,
-    /// Whether the unit file's text changed. A re-run that changes nothing does
-    /// not restart the service, so a reader with the page open keeps their
-    /// stream.
+    /// Whether what is cloistered changed: the arguments, the paths, or the
+    /// binary itself, all of which the unit's text states. A re-run that changes
+    /// none of them does not restart the service, so a reader with the page open
+    /// keeps their stream.
     pub changed: bool,
     pub linger: Linger,
 }
@@ -208,7 +245,9 @@ pub enum Linger {
 /// The write is what decides everything after it: the daemon reload and the
 /// restart are the cost of a *changed* unit and are skipped when the text is
 /// already what it should be, so re-running is genuinely free rather than
-/// merely harmless.
+/// merely harmless. That rests on the text stating everything a re-run could
+/// have changed, the binary included, which is what
+/// [`Charter::program_stamp`] is for.
 pub fn install(charter: &Charter) -> Result<Installed> {
     let path = unit_path(&charter.name)?;
     let directory = path
@@ -393,6 +432,7 @@ mod tests {
         Charter {
             name: "scriptorium-test".to_owned(),
             program: PathBuf::from("/opt/bin/claude-scriptorium"),
+            program_stamp: "1754400000-9123456".to_owned(),
             arguments: ["codex", "--host", "127.0.0.1", "--port", "8123", "--root"]
                 .iter()
                 .map(|argument| (*argument).to_owned())
@@ -415,6 +455,31 @@ mod tests {
     #[test]
     fn unit_file_is_the_same_text_every_time() {
         assert_eq!(charter().unit_file(), charter().unit_file());
+    }
+
+    /// `ExecStart` names a path rather than a version, so a rebuilt binary
+    /// leaves it identical. The unit has to change anyway, or a re-run after an
+    /// upgrade would skip the restart and leave the old process serving.
+    #[test]
+    fn a_rebuilt_binary_writes_a_different_unit() {
+        let installed = charter().unit_file();
+        let mut rebuilt = charter();
+        rebuilt.program_stamp = "1754500000-9200000".to_owned();
+
+        assert_ne!(rebuilt.unit_file(), installed);
+    }
+
+    /// The stamp is this crate's own bookkeeping, so it must not reach systemd
+    /// as something systemd will try to make sense of.
+    #[test]
+    fn the_binary_stamp_is_written_as_a_comment() {
+        let unit = charter().unit_file();
+
+        assert!(unit.contains("# Installed from a binary of 1754400000-9123456."));
+        assert_eq!(
+            exec_start(&unit),
+            exec_start(&unit.replace("1754400000", "0"))
+        );
     }
 
     #[test]

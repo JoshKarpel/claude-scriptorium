@@ -26,7 +26,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
@@ -153,6 +153,24 @@ struct Set {
     faces: Asset,
 }
 
+/// One gathering of a listing: the markup to seat, and the faces to be dressed
+/// in while it is seated.
+///
+/// The faces travel with it for the same reason a folio's patch carries them: a
+/// session title or a project path that reaches a character the cut faces
+/// dropped arrives after the page was dressed, and a listing replaced without
+/// them would render that title in the reader's own fallback font.
+struct Listing {
+    markup: String,
+    faces: Asset,
+}
+
+impl Listing {
+    fn told(&self) -> String {
+        json!({ "html": self.markup, "faces": self.faces.url() }).to_string()
+    }
+}
+
 /// One open page, and the frames it is waiting for.
 struct Listener {
     id: u64,
@@ -193,11 +211,19 @@ fn route(url: &str) -> Resource {
     // An id is a file stem or Claude Code's own encoded directory name, neither
     // of which holds a separator, and nothing here joins a path out of one
     // regardless: an id is looked up in the listing (see `Catalogue::session`).
+    //
+    // The id is percent-decoded, undoing what `render::encoded` spelled: `serve`
+    // takes an arbitrary path, so a session named with a space reaches the
+    // listing as itself rather than as `%20`. A segment that is not valid
+    // encoding names nothing this codex holds.
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let named = |id: &str, resource: fn(String) -> Resource| {
+        render::decoded(id).map_or(Resource::Missing, resource)
+    };
     match parts.as_slice() {
         [] => Resource::Shelf,
-        ["quire", id] => Resource::Quire((*id).to_owned()),
-        ["folio", id] => Resource::Folio((*id).to_owned()),
+        ["quire", id] => named(id, Resource::Quire),
+        ["folio", id] => named(id, Resource::Folio),
         // The token names the assets' contents, so a request carrying a stale one
         // is asking for something this binary does not have. Answering 404 rather
         // than serving today's bytes under yesterday's name is what keeps the
@@ -206,8 +232,14 @@ fn route(url: &str) -> Resource {
             Asset::named(name).map_or(Resource::Missing, Resource::Asset)
         }
         ["live"] => Resource::Live(Watching::Shelf, from()),
-        ["live", "quire", id] => Resource::Live(Watching::Quire((*id).to_owned()), from()),
-        ["live", "folio", id] => Resource::Live(Watching::Folio((*id).to_owned()), from()),
+        ["live", "quire", id] => match render::decoded(id) {
+            Some(id) => Resource::Live(Watching::Quire(id), from()),
+            None => Resource::Missing,
+        },
+        ["live", "folio", id] => match render::decoded(id) {
+            Some(id) => Resource::Live(Watching::Folio(id), from()),
+            None => Resource::Missing,
+        },
         _ => Resource::Missing,
     }
 }
@@ -263,6 +295,19 @@ impl<'a> Codex<'a> {
         }
     }
 
+    /// Everything mutable, locked.
+    ///
+    /// A poisoned lock is recovered rather than propagated. The lock is held
+    /// across real work (a listing reads and parses every previewed session), so
+    /// a panic under it is possible; and [`run`] never returns, so propagating
+    /// the poison would leave every later request and every tick panicking on
+    /// the lock while the process stayed up serving nothing, which is the one
+    /// failure a `Restart=always` unit cannot see. One bad answer is smaller
+    /// than a server that is up and dead.
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     // --- The control plane -------------------------------------------------
 
     /// Looks for changes on a timer, for the pages someone actually has open.
@@ -276,7 +321,10 @@ impl<'a> Codex<'a> {
             for watching in self.watched() {
                 match &watching {
                     Watching::Folio(id) => {
-                        if let Some(path) = self.locate(id) {
+                        // Out of the listing alone: a tick must never scan the
+                        // root (see [`Codex::locate`]), and a folio someone has
+                        // open was found by the request that served it.
+                        if let Some(path) = self.filed(id) {
                             // A session caught mid-write simply has not changed
                             // yet: the last good setting stands, and the next
                             // tick asks again. Nothing reaches the reader until a
@@ -292,10 +340,7 @@ impl<'a> Codex<'a> {
 
     /// What at least one open page is being told about.
     fn watched(&self) -> Vec<Watching> {
-        let state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let state = self.state();
         let mut watched: Vec<Watching> = Vec::new();
         for listener in &state.listeners {
             if !watched.contains(&listener.watching) {
@@ -323,14 +368,17 @@ impl<'a> Codex<'a> {
         }
         let folio = read(path)?;
         let panels = folio.panels();
-        let (set, reached) = self.scribe.panels(&panels);
+        let (set, panel_reach) = self.scribe.panels(&panels);
         let facts = self.scribe.facts(&folio, &panels).into_string();
-        let faces = self.scribe.faces(!reached.is_empty());
+        // Weighed exactly as a whole folio is, source path included: a page
+        // already dressed in the whole faces because of its own plaque must not
+        // be re-dressed down into the cut ones by a patch that only looked at
+        // the panels.
+        let faces = self
+            .scribe
+            .faces(!render::reached(&folio, panel_reach).is_empty());
 
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let mut state = self.state();
         if let Some(held) = state.folios.get(id) {
             let patch = patch(&held.panels, &set);
             // The faces are named only when they change, so a folio that was
@@ -361,10 +409,7 @@ impl<'a> Codex<'a> {
     /// Whether the setting already held for this folio was made from the session
     /// as it now stands.
     fn holds(&self, id: &str, stamp: &str) -> bool {
-        let state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let state = self.state();
         state.folios.get(id).is_some_and(|held| held.stamp == stamp)
     }
 
@@ -373,47 +418,48 @@ impl<'a> Codex<'a> {
     /// changes as a session is written is every row's "how long ago" as much as
     /// the rows themselves.
     fn relist(&self, watching: &Watching) {
-        let Some(markup) = self.listing(watching) else {
+        let Some(listing) = self.listing(watching) else {
             return;
         };
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
-        if state.listings.get(watching) == Some(&markup) {
+        let mut state = self.state();
+        if state.listings.get(watching) == Some(&listing.markup) {
             return;
         }
-        state.listings.insert(watching.clone(), markup.clone());
-        let data = json!({ "html": markup }).to_string();
-        state.tell(watching, "listing", &data, None);
+        state
+            .listings
+            .insert(watching.clone(), listing.markup.clone());
+        state.tell(watching, "listing", &listing.told(), None);
     }
 
     /// One listing's markup, gathered fresh. `None` when the quire a page names
     /// is no longer there, in which case the page keeps what it has until its
     /// reader goes back up.
-    fn listing(&self, watching: &Watching) -> Option<String> {
+    fn listing(&self, watching: &Watching) -> Option<Listing> {
         let root = self.root()?;
         let catalogue = Catalogue::scan(root).ok()?;
         let now = SystemTime::now();
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let mut state = self.state();
         state.peeks.keep_to(&catalogue);
-        let markup = match watching {
+        let listing = match watching {
             Watching::Shelf => {
                 let shelf = Shelf::of(&catalogue, &mut state.peeks, now);
-                self.scribe.shelf(&shelf).into_string()
+                Listing {
+                    markup: self.scribe.shelf(&shelf).into_string(),
+                    faces: self.scribe.listing_faces(&shelf.labels()),
+                }
             }
             Watching::Quire(id) => {
                 let quire = catalogue.quire(id)?;
                 let shelved = Shelved::whole(quire, &mut state.peeks, now);
-                self.scribe.leaves(&shelved).into_string()
+                Listing {
+                    markup: self.scribe.leaves(&shelved).into_string(),
+                    faces: self.scribe.listing_faces(&shelved.labels()),
+                }
             }
             Watching::Folio(_) => return None,
         };
         state.catalogue = catalogue;
-        Some(markup)
+        Some(listing)
     }
 
     // --- Where a session is ------------------------------------------------
@@ -425,35 +471,42 @@ impl<'a> Codex<'a> {
         }
     }
 
-    /// The session a URL's id names.
+    /// The session a URL's id names, out of what is already known.
     ///
-    /// A single-session scope answers for its own session and nothing else. A
-    /// codex answers out of the listing, rescanning once when the id is not in
-    /// it: a session recorded since the last scan is a miss to fill, not a
-    /// stranger. Either way no path is composed from what a request said.
-    fn locate(&self, id: &str) -> Option<PathBuf> {
+    /// A single-session scope answers for its own session and nothing else; a
+    /// codex answers out of the listing it last scanned. Either way no path is
+    /// composed from what a request said, and nothing here touches the disk.
+    fn filed(&self, id: &str) -> Option<PathBuf> {
         match &self.scope {
             Scope::Folio { session } => (stem(session) == id).then(|| session.clone()),
-            Scope::Codex { root } => {
-                if let Some(found) = self.filed(id) {
-                    return Some(found);
-                }
-                let catalogue = Catalogue::scan(root).ok()?;
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("the codex's state is not poisoned");
-                state.catalogue = catalogue;
-                state.catalogue.session(id).map(|found| found.path.clone())
-            }
+            Scope::Codex { .. } => self
+                .state()
+                .catalogue
+                .session(id)
+                .map(|found| found.path.clone()),
         }
     }
 
-    fn filed(&self, id: &str) -> Option<PathBuf> {
-        let state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+    /// The session a URL's id names, rescanning once if the listing does not
+    /// hold it: a session recorded since the last scan is a miss to fill, not a
+    /// stranger.
+    ///
+    /// This is the *request* path's lookup. A scan reads every project directory
+    /// and stats every session in it, which is far too much to do on a timer, so
+    /// the watcher asks [`Codex::filed`] instead: an id that is genuinely absent
+    /// misses forever, and a page left open on a session that has been deleted
+    /// would otherwise rescan the whole root several times a second for as long
+    /// as it stayed open.
+    fn locate(&self, id: &str) -> Option<PathBuf> {
+        if let Some(found) = self.filed(id) {
+            return Some(found);
+        }
+        let Scope::Codex { root } = &self.scope else {
+            return None;
+        };
+        let catalogue = Catalogue::scan(root).ok()?;
+        let mut state = self.state();
+        state.catalogue = catalogue;
         state.catalogue.session(id).map(|found| found.path.clone())
     }
 
@@ -496,10 +549,7 @@ impl<'a> Codex<'a> {
             .root()
             .and_then(|root| Catalogue::scan(root).ok())
             .unwrap_or_default();
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let mut state = self.state();
         state.peeks.keep_to(&catalogue);
         let shelf = Shelf::of(&catalogue, &mut state.peeks, now);
         state.catalogue = catalogue;
@@ -513,10 +563,7 @@ impl<'a> Codex<'a> {
     fn quire_page(&self, id: &str) -> Option<String> {
         let now = SystemTime::now();
         let catalogue = Catalogue::scan(self.root()?).ok()?;
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let mut state = self.state();
         let quire = catalogue.quire(id)?;
         let shelved = Shelved::whole(quire, &mut state.peeks, now);
         state.catalogue = catalogue;
@@ -560,10 +607,7 @@ impl<'a> Codex<'a> {
         let (frames, waiting) = mpsc::channel();
         let id = self.listeners.fetch_add(1, Ordering::Relaxed);
         {
-            let mut state = self
-                .state
-                .lock()
-                .expect("the codex's state is not poisoned");
+            let mut state = self.state();
             state.listeners.push(Listener {
                 id,
                 watching: watching.clone(),
@@ -578,10 +622,7 @@ impl<'a> Codex<'a> {
         let outcome = self.pour(&mut writer, &waiting);
         drop(writer);
 
-        let mut state = self
-            .state
-            .lock()
-            .expect("the codex's state is not poisoned");
+        let mut state = self.state();
         state.listeners.retain(|listener| listener.id != id);
         // A folio nobody is reading is not worth holding a setting of, and the
         // next reader's page will be measured against their own load.
@@ -612,10 +653,7 @@ impl<'a> Codex<'a> {
     fn greet(&self, watching: &Watching, held: Option<&str>, id: u64) {
         let hello = json!({ "boot": self.boot }).to_string();
         {
-            let state = self
-                .state
-                .lock()
-                .expect("the codex's state is not poisoned");
+            let state = self.state();
             state.only(id, "hello", &hello, None);
         }
 
@@ -627,10 +665,7 @@ impl<'a> Codex<'a> {
                     // somebody else's page was served.
                     let _ = self.reset(session, &path);
                 }
-                let state = self
-                    .state
-                    .lock()
-                    .expect("the codex's state is not poisoned");
+                let state = self.state();
                 let Some(set) = state.folios.get(session) else {
                     return;
                 };
@@ -655,16 +690,14 @@ impl<'a> Codex<'a> {
                 state.only(id, "panels", &data, Some(&set.stamp));
             }
             listing => {
-                let Some(markup) = self.listing(listing) else {
+                let Some(gathered) = self.listing(listing) else {
                     return;
                 };
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("the codex's state is not poisoned");
-                state.listings.insert(listing.clone(), markup.clone());
-                let data = json!({ "html": markup }).to_string();
-                state.only(id, "listing", &data, None);
+                let mut state = self.state();
+                state
+                    .listings
+                    .insert(listing.clone(), gathered.markup.clone());
+                state.only(id, "listing", &gathered.told(), None);
             }
         }
     }
@@ -956,6 +989,33 @@ mod tests {
         );
     }
 
+    /// `serve` takes an arbitrary path, so a session's stem is not always a
+    /// Claude Code uuid. The renderer spells the id into the URL and this reads
+    /// it back out, and a mismatch is a folio that silently never updates rather
+    /// than an error anyone would see, so the round trip is held here.
+    #[test]
+    fn an_id_that_needs_encoding_reaches_the_listing_as_itself() {
+        let session = "my session #2";
+
+        assert_eq!(
+            route(&format!("/folio/{}", render::encoded(session))),
+            Resource::Folio(session.to_owned())
+        );
+        assert_eq!(
+            route(
+                &Stream::Folio {
+                    session,
+                    from: "17-42"
+                }
+                .url()
+            ),
+            Resource::Live(
+                Watching::Folio(session.to_owned()),
+                Some("17-42".to_owned())
+            )
+        );
+    }
+
     #[test]
     fn nothing_else_is_routed_anywhere() {
         for url in [
@@ -966,6 +1026,8 @@ mod tests {
             "/live/folio",
             "/livereload",
             "/asset",
+            // Not valid percent-encoding, so it names no session.
+            "/folio/%zz",
         ] {
             assert_eq!(route(url), Resource::Missing, "{url}");
         }

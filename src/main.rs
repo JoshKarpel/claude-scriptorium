@@ -409,6 +409,7 @@ fn cloister_install(args: CloisterInstallArgs) -> Result<()> {
 
     let charter = cloister::Charter {
         name: args.unit.name,
+        program_stamp: cloister::stamped(&program),
         program,
         arguments,
         home,
@@ -420,7 +421,10 @@ fn cloister_install(args: CloisterInstallArgs) -> Result<()> {
         if installed.changed {
             "Wrote"
         } else {
-            "Already written:"
+            // Nothing to do: the unit states the binary it was installed from
+            // as well as its arguments, so this is the same service running the
+            // same code, not merely the same file on disk.
+            "Already serving, unchanged:"
         },
         installed.path.display()
     );

@@ -267,6 +267,58 @@ describe("a session written under its reader", () => {
     }
   });
 
+  /// The reader's place in the hit list is theirs. Looking again over what
+  /// arrived is right; landing on the first hit again is the search deciding
+  /// where the reader should be, and it drags them off the hit they were reading
+  /// and opens the folds around a hit they never asked for.
+  it("keeps the reader's place in the hit list", async () => {
+    const page = await browser.page();
+    const served = await serve();
+    try {
+      await openFolio(page, served.url);
+      await page.fill(".search__input", "the");
+      await page.press(".search__input", "Enter");
+      await page.press(".search__input", "Enter");
+      const place = (await page.textContent(".search__count")).split("/")[0];
+      const opened = await page.locator("main.folio details[open]").count();
+      assert.equal(place, "3");
+
+      await gains(page, served, "a panel with nothing to find in it");
+
+      assert.equal(
+        (await page.textContent(".search__count")).split("/")[0],
+        place,
+        "a panel arriving sent the reader back to the first hit",
+      );
+      assert.equal(
+        await page.locator("main.folio details[open]").count(),
+        opened,
+        "looking again opened a fold the reader never asked to see",
+      );
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("draws a band for the first panel of a session that had none", async () => {
+    const page = await browser.page();
+    const served = await serve("unwritten.jsonl");
+    try {
+      await page.goto(served.url);
+      // The map is wired against a folio with nothing in it yet, which is what
+      // `serve --latest` opens on while a session is being started.
+      await page.waitForSelector(".minimap__track");
+      assert.equal(await page.locator(BAND).count(), 0);
+
+      served.grow("the first thing this session had to say");
+      await page.waitForSelector(BAND, { timeout: 20000 });
+
+      assert.equal(await page.locator(BAND).count(), 1);
+    } finally {
+      served.stop();
+    }
+  });
+
   it("draws the arriving panel on the map and counts it in the plaque", async () => {
     const page = await browser.page();
     const served = await serve();

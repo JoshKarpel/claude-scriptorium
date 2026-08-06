@@ -266,7 +266,11 @@
     let hits = [];
     let index = -1;
 
-    const paint = () => {
+    // `land` is what separates a reader asking for a hit from the folio noticing
+    // one. Going to a hit opens the folds around it and scrolls it into view;
+    // merely re-counting must do neither, or a panel arriving would drag a
+    // reader who is halfway down the hit list back to the first one.
+    const paint = (land) => {
       hits.forEach((hit) => hit.classList.remove(CURRENT));
       const nav = hits.length > 0;
       prev.disabled = !nav;
@@ -281,23 +285,29 @@
       }
       const hit = hits[index];
       hit.classList.add(CURRENT);
-      revealHit(hit);
-      hit.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (land) {
+        revealHit(hit);
+        hit.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
       count.textContent = index + 1 + "/" + hits.length;
     };
 
-    const run = () => {
+    const mark = () => {
       clearHits(container);
       const query = input.value;
       hits = query ? markHits(container, query, enabledKinds()) : [];
+    };
+
+    const run = () => {
+      mark();
       index = hits.length ? 0 : -1;
-      paint();
+      paint(true);
     };
 
     const step = (delta) => {
       if (!hits.length) return;
       index = (index + delta + hits.length) % hits.length;
-      paint();
+      paint(true);
     };
 
     input.addEventListener("input", run);
@@ -317,9 +327,20 @@
     // Looking again over the whole column is both the simplest way to be right
     // and what a reader would do: the count is of the folio, not of what it held
     // when they typed.
+    //
+    // The reader's *place* in that count is theirs, though, so it is kept rather
+    // than reset: a session grows at its end, so the hit they were on is the hit
+    // at the same ordinal, and a folio that shrank below it lands them on the
+    // last one. Nothing here scrolls or opens a fold, because nobody asked it to.
     return {
       again() {
-        if (input.value) run();
+        if (!input.value) return;
+        const held = index;
+        mark();
+        index = hits.length
+          ? Math.min(Math.max(held, 0), hits.length - 1)
+          : -1;
+        paint(false);
       },
     };
   };
@@ -919,7 +940,11 @@
     if (!minimap || !container || !dock) return null;
     const track = minimap.querySelector(".minimap__track");
     const view = minimap.querySelector(".minimap__view");
-    if (!track || !view || !container.querySelector(".turn")) return null;
+    // No test for a panel: a folio that has none yet is exactly the one that is
+    // about to be sent some (`serve` on a session in its first seconds), and a
+    // map that was never wired can never adopt them. An empty map simply draws
+    // no bands.
+    if (!track || !view) return null;
 
     // A band per panel, in the panel's own pigment. Drawn from the panels
     // themselves rather than written into the markup: what a band states is the
@@ -1168,6 +1193,16 @@
     return held.content.firstElementChild;
   };
 
+  // Markup that arrives can set a character the cut faces dropped, whether it is
+  // a panel of transcript or a session title in a listing, so what arrives says
+  // which faces it needs and the page is re-dressed before it is seated: swapped
+  // after, the text is drawn once in a face that lacks it.
+  const dress = (href) => {
+    if (!href) return;
+    const link = document.querySelector("link[data-faces]");
+    if (link && !link.href.endsWith(href)) link.href = href;
+  };
+
   const wireLive = (parts) => {
     const stream = document.body.dataset.live;
     const container = document.querySelector("main.folio");
@@ -1193,13 +1228,7 @@
 
     const applyPanels = (told) => {
       if (!container) return;
-      // The faces first: a panel setting a character the cut ones dropped brings
-      // the whole ones with it, and swapping the link before the panel is seated
-      // means the text is never drawn in a face that lacks it.
-      if (told.faces) {
-        const link = document.querySelector("link[data-faces]");
-        if (link && !link.href.endsWith(told.faces)) link.href = told.faces;
-      }
+      dress(told.faces);
       (told.gone || []).forEach((turn) => {
         const held = container.querySelector(`.turn[data-turn="${turn}"]`);
         if (held) held.remove();
@@ -1234,8 +1263,10 @@
     // A listing is a few kilobytes and every row of it moves as time passes, so
     // it is replaced whole rather than picked apart.
     source.addEventListener("listing", (event) => {
+      const told = JSON.parse(event.data);
+      dress(told.faces);
       const shelf = document.querySelector("[data-listing]");
-      if (shelf) shelf.innerHTML = JSON.parse(event.data).html;
+      if (shelf) shelf.innerHTML = told.html;
     });
   };
 

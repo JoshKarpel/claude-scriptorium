@@ -60,11 +60,15 @@ const grower = (session) => (note) => {
 /**
  * Serves a copy of a session, which the test may grow. Only a served folio
  * carries the follow control, so following can be exercised nowhere else.
+ *
+ * The fixture is named so a test can start from a session that has been begun
+ * but holds no panels yet, which is what `serve --latest` opens on in a
+ * session's first seconds.
  */
-export const serve = async () => {
+export const serve = async (fixture = "session.jsonl") => {
   build();
   const session = join(scratch(), "live.jsonl");
-  copyFileSync(join(ROOT, "tests/fixtures/session.jsonl"), session);
+  copyFileSync(join(ROOT, "tests/fixtures", fixture), session);
   const { port, server } = await up(["serve", session]);
   return {
     url: `http://127.0.0.1:${port}/`,

@@ -51,6 +51,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is retried, and a followed folio simply is not told anything until a whole
   setting succeeds.
 
+### Fixed
+
+- A panel arriving no longer moves the reader. The search looked again over the
+  whole folio, which is right, but it also went back to the first hit, opening
+  the folds around it and scrolling there: a reader stepping through thirty
+  matches was pulled off the one they were reading each time the session grew.
+  The count now follows the folio while the reader's place in it stays theirs.
+- A page following a session that is no longer there costs the server nothing.
+  A folio id the listing does not hold missed on every tick, and each miss
+  rescanned the whole projects root, so one stale bookmark left open read every
+  project directory several times a second for as long as the page stayed open.
+  Only a request rescans now.
+- `serve` follows a session whose filename holds a space, a `#`, or any other
+  character a URL takes differently. The id went into the stream's URL as it was
+  written, so the browser sent an encoded one the server then failed to match,
+  and the folio silently never updated. Ids are percent-encoded and read back.
+- A folio served from a path that reaches beyond the cut faces stays dressed in
+  the whole ones. A page rejoining the stream was sent the faces chosen from its
+  panels alone, so its own plaque path could be dropped back into a face that
+  lacked it.
+- A listing pushed to an open codex page brings its faces with it, so a session
+  whose title reaches beyond the cut renders in the whole faces without waiting
+  for a reload.
+- A folio served before its session has any panels draws its minimap once panels
+  arrive, rather than leaving the map permanently empty. This is what
+  `serve --latest` opens on in a session's first seconds.
+- `cloister install` restarts the service after the binary is upgraded in place.
+  The unit names a path rather than a version, so a rebuilt binary left it
+  byte-identical and the re-run reported that nothing had changed while the old
+  process went on serving. The unit now records which binary it was installed
+  from, so a rebuild converges like every other change.
+- A panic while the codex's state is locked no longer leaves the server up and
+  answering nothing. The lock is recovered rather than propagated, so what would
+  have been a permanent outage that `Restart=always` could not see is one failed
+  request.
+
 ## [0.1.6]
 
 ### Fixed

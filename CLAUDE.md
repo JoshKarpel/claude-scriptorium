@@ -221,7 +221,11 @@ the server's boot id, and a page told a different one from the one that set it
 reloads, which is how a change to the renderer, the stylesheet, or the app script
 reaches a reader; `panels` carries the patch; `listing` carries a re-rendered
 listing, replaced whole because a listing is kilobytes and every row's "how long
-ago" moves anyway. A comment heartbeat keeps an idle stream from being culled.
+ago" moves anyway. Both of the latter two name the faces the markup they carry
+needs, and the page swaps its `link[data-faces]` before seating it: a session
+title reaches beyond the cut as readily as a panel does, so a listing arriving
+without them would render that title in the reader's fallback font.
+A comment heartbeat keeps an idle stream from being culled.
 `tiny_http` has no streaming response, so the stream is written through
 `Request::into_writer()`: the head by hand, then chunked frames flushed one at a
 time, since a frame in a buffer is a change the reader has not been told about.
@@ -252,10 +256,31 @@ does no work. A session caught mid-write is not a failure to show anybody: the
 read is retried (a half-written line is finished microseconds later), and until a
 whole setting succeeds the last good one stands and nobody is told anything.
 
+**A poisoned lock is recovered, not propagated.** Everything mutable sits behind
+one mutex, and it is held across real work (a listing reads and parses every
+previewed session), so a panic under it is possible. `run` never returns, so
+propagating the poison would leave every later request and every tick panicking on
+the lock while the process stayed up: a server that is running, answering nothing,
+and invisible to the cloister unit's `Restart=always`. `Codex::state` takes the
+guard with `PoisonError::into_inner`, so that failure is one bad answer instead.
+
 **A session id becomes a path only through the listing.** `Catalogue::session`
 looks one up; nothing composes a path from what a request said, so reaching
-outside the root is unrepresentable rather than defended against. A codex rescans
-once on a miss, since a session recorded since the last scan is a gap to fill.
+outside the root is unrepresentable rather than defended against. It is also
+percent-encoded on the way out (`render::encoded`) and decoded on the way back in,
+since `serve` takes an arbitrary path and a stem holding a space would otherwise
+reach the server as the browser rewrote it and match nothing, leaving the folio
+silently unfollowed.
+
+**A miss is rescanned on the request path and never on a tick.** `Codex::locate`
+rescans once when the listing does not hold an id, since a session recorded since
+the last scan is a gap to fill; `Codex::filed` answers out of the listing alone,
+and is what the watcher asks. The split is load-bearing: a genuinely absent id
+misses *every* time, so a tick that rescanned would read every project directory
+and stat every session two and a half times a second for as long as one stale page
+stayed open on a deleted session. Measured with `strace -c` over a root of 300
+sessions: zero `getdents64` in four seconds following an absent folio, against 420
+for a listing being watched, which is the work a listing is supposed to cost.
 
 **A served page links its stylesheet, script, and faces; a written one inlines
 them.** The faces are most of a folio, so browsing would otherwise re-download a
@@ -287,6 +312,17 @@ served a different root than the one the command was given. `Standing::bound`
 then *recovers* the address by parsing the unit's own `ExecStart` rather than
 restating what an install once meant, so a hand-edited unit is reported as it now
 stands and no copy of the defaults exists here to drift from clap's.
+
+**The unit states the binary as well as the arguments**, as a comment carrying
+its mtime and size (`Charter::program_stamp`). `ExecStart` names a path and not a
+version, so installing a newer build over the same path leaves the unit
+byte-identical: without the stamp a re-run after `cargo install` found nothing
+changed, skipped the restart, and reported that the unit was already written while
+the service went on running the code that had just been replaced. Recording it
+puts the binary inside the declaration, so a rebuild converges through the same
+path every other change does. A comment rather than a directive, because systemd
+has nothing to do with it and a comment is the one thing every version of it
+ignores.
 
 **The write decides everything after it.** A re-run compares the composed text
 with what is on disk; only a change reloads the daemon and restarts the service.
@@ -808,6 +844,15 @@ tell each other apart. Keep it that way when adding a kind.
   growing the folio by 2 MB would buy nothing. `--whole-fonts` forces the whole
   faces for a folio that will later gain text this session did not have.
 
+  **One tally decides, and `render::reached` is it.** A folio's panels are not
+  the whole of what it sets from outside this crate: the plaque states the source
+  path, which can reach past the cut on its own. `Scribe::folio` and the codex's
+  `reset` both go through `reached`, so a page served in the whole faces because
+  of its path cannot be re-dressed down into the cut ones by a patch that only
+  weighed the panels. A listing asks the same question of its labels through
+  `Scribe::listing_faces`. Anything else that chooses a cut belongs behind one of
+  those two rather than composing its own tally.
+
   `render::beyond_cut` skips runs of bytes under `0x80` without decoding them,
   which is only sound while nothing below that can be dropped; the tests hold
   that, and hold the stylesheet and app script inside the cut faces too, since
@@ -1130,6 +1175,24 @@ minimap draws its bands again (a band stands for a panel, so a map missing one
 misstates where every other panel sits), the search looks again, and the end is
 re-pinned if the reader is there. A control added to the folio needs the same
 answer, or it will be right on load and wrong a minute later.
+
+**Adopting is not the same as acting, and the search is where the two came
+apart.** Looking again over what arrived is the folio's business; going to a hit
+is the reader's. So the search re-marks and re-counts on adoption but keeps the
+ordinal the reader had stepped to, and `paint`'s `land` argument is what divides
+the two: only a reader's own step opens the folds around a hit and scrolls to it.
+Re-running the whole search on every arriving panel dragged a reader who was on
+hit seven of thirty back to the first one each time the session grew. The same
+question is worth asking of anything else given an `adopt`: a control that
+*decides* something on the reader's behalf must not decide it again merely because
+markup arrived. The minimap answers it the other way and is right to: a band is
+not a place the reader is, so redrawing every band costs them nothing.
+
+**A part that wires itself against the panels must wire with none.** `wireMinimap`
+returned `null` for a folio holding no `.turn`, which is exactly the folio that is
+about to be sent some (`serve --latest`, opened in a session's first seconds), and
+a map that never wired can never adopt one. Guard on the elements the renderer
+always emits, never on the transcript being non-empty.
 
 What the app script remembers is split by what it belongs to. The theme is the
 reader's, and holds across everything they open, so it keeps one key. Which
