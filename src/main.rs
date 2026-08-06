@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use claude_scriptorium::{
-    codex, discovery, gist, picker, render,
+    cloister, codex, discovery, gist, picker, render,
     render::{Colophon, Delivery, Scribe},
     transcript::Folio,
 };
@@ -38,6 +38,9 @@ enum Command {
     Codex(CodexArgs),
     /// Serve one session over HTTP, following it as it is written.
     Serve(ServeArgs),
+    /// Keep a codex served by a systemd user service, with nobody attending it.
+    #[command(subcommand)]
+    Cloister(CloisterCommand),
     /// Publish a rendered session to a GitHub gist via the `gh` CLI.
     Publish(PublishArgs),
     /// List the gists this tool has published.
@@ -144,6 +147,66 @@ struct CodexArgs {
     root: Option<PathBuf>,
 }
 
+/// Managing the service that keeps a codex served. Installing it is the whole
+/// of the setup; the other two are for asking after it and for undoing it,
+/// which are `systemctl --user` commands a reader should not have to compose.
+#[derive(Subcommand)]
+enum CloisterCommand {
+    /// Write, enable, and start the service, converging on what the arguments
+    /// ask for however the machine was already set up.
+    Install(CloisterInstallArgs),
+    /// Report whether the service is installed, enabled, and running, and what
+    /// it binds.
+    Status(CloisterArgs),
+    /// Stop, disable, and delete the service.
+    Remove(CloisterArgs),
+}
+
+/// Which service, for the commands that only need to name one.
+#[derive(Args)]
+struct CloisterArgs {
+    /// Name of the systemd user unit, for a machine serving more than one
+    /// codex.
+    #[arg(long, default_value = cloister::DEFAULT_UNIT)]
+    name: String,
+}
+
+#[derive(Args)]
+struct CloisterInstallArgs {
+    #[command(flatten)]
+    unit: CloisterArgs,
+
+    #[command(flatten)]
+    listen: ServiceListen,
+
+    #[command(flatten)]
+    faces: Faces,
+
+    /// Projects root to list, defaulting to Claude Code's own
+    /// (`$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`). Resolved now
+    /// and written into the unit, since a service inherits none of this shell's
+    /// environment.
+    #[arg(long, value_name = "DIR")]
+    root: Option<PathBuf>,
+}
+
+/// Where the service listens. The same defaults as [`Listen`], without its
+/// `--open`: nothing is watching a service start, so there is no browser to
+/// point at it.
+#[derive(Args)]
+struct ServiceListen {
+    /// Port to serve on.
+    #[arg(long, default_value_t = 8000)]
+    port: u16,
+
+    /// Address to bind. The default answers only this machine, which is what a
+    /// proxy in front of it reaches; pass `0.0.0.0` only where something else
+    /// says who may read, since anything that can route to the machine can then
+    /// read every session on it.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+}
+
 #[derive(Args)]
 struct ServeArgs {
     #[command(flatten)]
@@ -232,6 +295,7 @@ fn main() -> Result<()> {
         Command::Render(args) => render(args),
         Command::Codex(args) => codex(args),
         Command::Serve(args) => serve(args),
+        Command::Cloister(command) => cloister(command),
         Command::Publish(args) => publish(args),
         Command::Gists => gists(),
         Command::Delete(args) => delete(args),
@@ -305,6 +369,115 @@ fn serve(args: ServeArgs) -> Result<()> {
         args.listen.open,
         &scribe,
     )
+}
+
+fn cloister(command: CloisterCommand) -> Result<()> {
+    match command {
+        CloisterCommand::Install(args) => cloister_install(args),
+        CloisterCommand::Status(args) => cloister_status(&args.name),
+        CloisterCommand::Remove(args) => cloister_remove(&args.name),
+    }
+}
+
+/// Installs the service, then reports what it did and where to read the codex.
+///
+/// Every argument the codex will run under is resolved here and written into
+/// the unit, rather than being left to the service's own environment: a systemd
+/// user unit inherits nothing from this shell, so a `CLAUDE_CONFIG_DIR` set in
+/// the installing session would otherwise mean the service quietly served a
+/// different root than the one this command was told about.
+fn cloister_install(args: CloisterInstallArgs) -> Result<()> {
+    let root = match args.root {
+        Some(root) => root,
+        None => discovery::projects_root()?,
+    };
+    let program = std::env::current_exe().context("locating this binary")?;
+    let home = std::env::home_dir().context("locating home directory")?;
+
+    let mut arguments = vec![
+        "codex".to_owned(),
+        "--host".to_owned(),
+        args.listen.host.clone(),
+        "--port".to_owned(),
+        args.listen.port.to_string(),
+        "--root".to_owned(),
+        root.display().to_string(),
+    ];
+    if args.faces.whole_fonts {
+        arguments.push("--whole-fonts".to_owned());
+    }
+
+    let charter = cloister::Charter {
+        name: args.unit.name,
+        program,
+        arguments,
+        home,
+    };
+    let installed = cloister::install(&charter)?;
+
+    println!(
+        "{} {}",
+        if installed.changed {
+            "Wrote"
+        } else {
+            "Already written:"
+        },
+        installed.path.display()
+    );
+    println!("  {}", charter.unit_file().trim().replace('\n', "\n  "));
+
+    if let cloister::Linger::Refused(why) = &installed.linger {
+        eprintln!(
+            "Note: could not enable lingering, so this service stops when you log out: {why}"
+        );
+        eprintln!("  Enable it with: sudo loginctl enable-linger $USER");
+    }
+
+    println!();
+    println!("Serving http://{}:{}/", args.listen.host, args.listen.port);
+    Ok(())
+}
+
+fn cloister_status(name: &str) -> Result<()> {
+    let standing = cloister::status(name)?;
+    let Some(unit_file) = &standing.unit_file else {
+        println!(
+            "Nothing cloistered as {name}: no {}",
+            standing.path.display()
+        );
+        println!(
+            "Install it with: {} cloister install",
+            env!("CARGO_PKG_NAME")
+        );
+        return Ok(());
+    };
+
+    println!("{}", standing.path.display());
+    println!("  {}", unit_file.trim().replace('\n', "\n  "));
+    println!();
+    println!("enabled: {}", standing.enabled);
+    println!("active:  {}", standing.active);
+
+    println!();
+    match standing.bound() {
+        Some(address) => println!("Serving http://{address}/"),
+        // Only a hand-edited unit can get here, since an install always writes
+        // both flags out; saying so beats saying nothing.
+        None => println!(
+            "This unit's ExecStart names no --host and --port, so what it binds is its own business."
+        ),
+    }
+    Ok(())
+}
+
+fn cloister_remove(name: &str) -> Result<()> {
+    let removed = cloister::remove(name)?;
+    if removed.existed {
+        println!("Removed {}", removed.path.display());
+    } else {
+        println!("Nothing to remove: no {}", removed.path.display());
+    }
+    Ok(())
 }
 
 fn publish(args: PublishArgs) -> Result<()> {

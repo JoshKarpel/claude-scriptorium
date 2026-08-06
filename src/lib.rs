@@ -1,6 +1,7 @@
 //! Renders Claude Code session transcripts into self-contained HTML folios.
 
 pub mod catalogue;
+pub mod cloister;
 pub mod codex;
 pub mod discovery;
 pub mod gist;

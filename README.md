@@ -89,6 +89,34 @@ forwards ports 3000 to 9999, so the codex above is at
 `--root` lists a projects root other than Claude Code's own, and `--port`
 chooses the port for either server, which defaults to 8000.
 
+### Keeping a codex served
+
+`cloister install` writes a systemd user service and starts it, so a machine
+that records sessions serves them from the moment it boots, with nobody
+attending it:
+
+```bash
+claude-scriptorium cloister install
+```
+
+It takes the same `--host`, `--port`, and `--root` as `codex`, and writes each
+of them into the unit: a user service inherits nothing from the shell that
+installed it, so a `CLAUDE_CONFIG_DIR` set in your session would otherwise mean
+the service quietly served a different root than the one you asked for. The
+`ExecStart` names the binary by absolute path, so install from a stable location
+(`cargo install` puts it in `~/.cargo/bin`) rather than from a build tree that a
+`cargo clean` will empty.
+
+It is a *user* service rather than a system one, so it needs no root, and it
+enables [lingering](https://www.freedesktop.org/software/systemd/man/loginctl.html)
+so it outlives the session that installed it.
+
+Re-running converges rather than starting over: the unit is rewritten only if it
+differs, and only a changed unit restarts the service, so a re-run that changes
+nothing leaves a reader's open folio and its event stream alone. `cloister
+status` reports where it stands and what it binds, `cloister remove` undoes it,
+and `--name` runs a second codex beside the first.
+
 ### Sharing a folio
 
 Publish a folio to a GitHub gist via the [`gh`](https://cli.github.com/) CLI,
@@ -343,6 +371,7 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
 | codex | The bound volume of every quire, which `codex` serves |
+| cloister | The enclosure a codex is served from unattended, as a service |
 | caveat | The folio's own note to its reader, at the head of the column |
 | marginalia | A collapsible tool call or result |
 | gloss | A note the harness wrote into the session, set as its own panel |

@@ -130,6 +130,8 @@ module each:
   picker label is best-effort where a render is strict.
 - `picker`: the interactive two-stage selector (project, then session) the
   shell opens when no session is named and a terminal is attached.
+- `cloister`: the systemd user service that keeps a codex served, which is the
+  one place that knows anything about systemd's shape.
 - `render`: `Scribe` turns a folio's panels into `Markup`.
 - `tools`: how each built-in tool's call and result are set, which is the one
   place that knows anything about a specific tool's shape.
@@ -266,6 +268,53 @@ arrives setting a character the cut faces dropped brings the whole ones with it 
 swapping the `link[data-faces]` href, so cutting never renders a character worse
 than upstream on a served page either. **The written artifact is unchanged**, and
 the "self-contained" invariant below is about it.
+
+### The cloister: a unit file that is the only record of what is served
+
+`cloister` (`src/cloister.rs`) installs the systemd **user** service that keeps a
+codex served with nobody attending it. User rather than system, because the
+sessions are one user's under their own home: a system unit would need root to
+install and would then have to be told whose transcripts to read back. Lingering
+(`loginctl enable-linger`) is what makes it outlive the session that installed
+it, and a refusal there is reported rather than raised, since the install has
+still produced a running service and what it costs is named outright.
+
+**The unit file is the single declaration, and nothing is kept alongside it.**
+An install resolves every argument and writes it out in full, `--root` included,
+because a user unit inherits nothing from the installing shell and a
+`CLAUDE_CONFIG_DIR` set in that session would otherwise mean the service quietly
+served a different root than the one the command was given. `Standing::bound`
+then *recovers* the address by parsing the unit's own `ExecStart` rather than
+restating what an install once meant, so a hand-edited unit is reported as it now
+stands and no copy of the defaults exists here to drift from clap's.
+
+**The write decides everything after it.** A re-run compares the composed text
+with what is on disk; only a change reloads the daemon and restarts the service.
+That is not a tidiness point: a restart drops every reader's event stream, so a
+converging re-run has to be genuinely free rather than merely harmless.
+
+The split of what is tested follows `gist`'s: `Charter::unit_file`, the
+`ExecStart` round trip, and `bound` are pure and unit-tested, while the
+`systemctl`-shelling stays in the shell and is exercised by hand against a real
+user manager (install, re-run, change the port, remove, and watch the unit's
+`MainPID` across each). Committing that as a test would mean CI installing a
+service into whatever user manager the runner has, which is worse than the
+coverage is worth.
+
+`systemctl --user` finds its manager through `XDG_RUNTIME_DIR`, which a login
+shell has and `ssh host cmd` or a first-boot setup script does not; without it
+every call fails with `Failed to connect to bus: No medium found`, which reads as
+systemd being absent and is really the environment being thin. `loginctl` is
+asked for the path rather than `/run/user/<uid>` being composed here. The two
+query commands (`is-enabled`, `is-active`) answer on **stdout** for a unit that
+does not exist as readily as for one that does, so their output is read and their
+exit status ignored; it is nonzero for every answer but the affirmative one.
+
+**Nothing here knows about exe.dev**, deliberately. Sniffing `/etc/hosts` for a
+marker, or asking the reflection integration for `default_port`, would put a
+moving product's shape inside this binary to save a reader one line of prose. The
+default port is 8000, which is what that proxy already targets; that they agree
+is worth writing down somewhere, and somewhere is not here.
 
 `gist` (`src/gist.rs`) is the sharing path: `publish` renders a session and
 pipes the HTML to a gist, `fetch` downloads a gist's files for offline viewing,

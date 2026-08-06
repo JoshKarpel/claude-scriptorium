@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7]
 
 ### Added
 
@@ -14,6 +14,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as a folio. `--host` binds it somewhere other than localhost, for a machine
   that has something in front of it to say who may read (a reverse proxy that
   authenticates); `--root` lists a projects root other than Claude Code's own.
+- **`cloister install`**, which keeps a codex served by a systemd user service,
+  so a machine that records sessions serves them from the moment it boots with
+  nobody attending it. It converges: re-running writes the unit, reloads,
+  enables, and starts, from whatever state the machine was already in, and a run
+  that changes nothing does not restart the service, so a reader with a folio
+  open keeps their stream. `cloister status` reports whether the service is
+  installed, enabled, and running, and what it binds; `cloister remove` undoes
+  it. `--name` runs a second codex beside the first.
 
 ### Changed
 
