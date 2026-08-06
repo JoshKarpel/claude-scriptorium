@@ -6,7 +6,7 @@
 // for the same reason `just render` is: an unoptimized render takes longer than
 // an optimized build and render together.
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, copyFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,26 @@ export const render = (fixture) => {
 };
 
 /**
+ * Appends an assistant turn, as a live session gains one. The server notices the
+ * session has changed and pushes the panel to every page following it.
+ */
+const grower = (session) => (note) => {
+  appendFileSync(
+    session,
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-03-11T16:00:00.000Z",
+      isSidechain: false,
+      message: {
+        role: "assistant",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: note }],
+      },
+    }) + "\n",
+  );
+};
+
+/**
  * Serves a copy of a session, which the test may grow. Only a served folio
  * carries the follow control, so following can be exercised nowhere else.
  */
@@ -45,35 +65,50 @@ export const serve = async () => {
   build();
   const session = join(scratch(), "live.jsonl");
   copyFileSync(join(ROOT, "tests/fixtures/session.jsonl"), session);
-  const port = await freePort();
-  const server = spawn(BINARY, ["serve", session, "--port", String(port)], {
-    cwd: ROOT,
-    stdio: "ignore",
-  });
-  await reachable(port);
+  const { port, server } = await up(["serve", session]);
   return {
     url: `http://127.0.0.1:${port}/`,
-    // Append an assistant turn, as a live session gains one. `serve` polls the
-    // session's mtime and reloads the page on its own.
-    grow(note) {
-      appendFileSync(
-        session,
-        JSON.stringify({
-          type: "assistant",
-          timestamp: "2026-03-11T16:00:00.000Z",
-          isSidechain: false,
-          message: {
-            role: "assistant",
-            model: "claude-opus-5",
-            content: [{ type: "text", text: note }],
-          },
-        }) + "\n",
-      );
-    },
+    grow: grower(session),
     stop() {
       server.kill();
     },
   };
+};
+
+/**
+ * Serves a codex over a throwaway projects root holding one quire of one
+ * session, which the test may grow. Its own root rather than the machine's, so
+ * the suite lists what it put there and nothing else.
+ */
+export const codex = async () => {
+  build();
+  const root = join(scratch(), "projects");
+  const quire = "-srv-alpha";
+  mkdirSync(join(root, quire), { recursive: true });
+  const session = join(root, quire, "live.jsonl");
+  copyFileSync(join(ROOT, "tests/fixtures/session.jsonl"), session);
+  const { port, server } = await up(["codex", "--root", root]);
+  const at = `http://127.0.0.1:${port}`;
+  return {
+    url: `${at}/`,
+    quire: `${at}/quire/${quire}`,
+    folio: `${at}/folio/live`,
+    grow: grower(session),
+    stop() {
+      server.kill();
+    },
+  };
+};
+
+/** Starts the binary on a free port and waits for it to answer. */
+const up = async (args) => {
+  const port = await freePort();
+  const server = spawn(BINARY, [...args, "--port", String(port)], {
+    cwd: ROOT,
+    stdio: "ignore",
+  });
+  await reachable(port);
+  return { port, server };
 };
 
 // Bound rather than guessed: a listener on port 0 is handed a free one, and

@@ -3,15 +3,13 @@ use std::{
     fs,
     io::IsTerminal,
     path::{Path, PathBuf},
-    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use claude_scriptorium::{
-    discovery, gist, picker, render,
-    render::{Colophon, Delivery, Labour, Scribe},
-    serve,
+    codex, discovery, gist, picker, render,
+    render::{Colophon, Delivery, Scribe},
     transcript::Folio,
 };
 use comrak::plugins::syntect::{SyntectAdapter, SyntectAdapterBuilder};
@@ -35,7 +33,10 @@ struct Cli {
 enum Command {
     /// Write a session to a self-contained HTML file.
     Render(RenderArgs),
-    /// Serve a session over HTTP with live reload for iterating on the render.
+    /// Serve every recorded session over HTTP, following live ones as they are
+    /// written.
+    Codex(CodexArgs),
+    /// Serve one session over HTTP, following it as it is written.
     Serve(ServeArgs),
     /// Publish a rendered session to a GitHub gist via the `gh` CLI.
     Publish(PublishArgs),
@@ -103,21 +104,56 @@ struct RenderArgs {
     open: bool,
 }
 
+/// Where a server listens. Shared by `codex` and `serve`, so a folio is reached
+/// the same way whichever of them is serving it.
+#[derive(Args)]
+struct Listen {
+    /// Port to serve on.
+    #[arg(long, default_value_t = 8000)]
+    port: u16,
+
+    /// Address to bind. The default answers only this machine; pass `0.0.0.0` to
+    /// let something in front of it (a reverse proxy that handles authentication)
+    /// reach it. Anything that can route to the machine can then read every
+    /// session on it, so bind it wide only behind something that says who may.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Open the server in the default browser once it is up.
+    #[arg(long)]
+    open: bool,
+}
+
+impl Listen {
+    fn address(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+#[derive(Args)]
+struct CodexArgs {
+    #[command(flatten)]
+    listen: Listen,
+
+    #[command(flatten)]
+    faces: Faces,
+
+    /// Projects root to list, defaulting to Claude Code's own
+    /// (`$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`).
+    #[arg(long, value_name = "DIR")]
+    root: Option<PathBuf>,
+}
+
 #[derive(Args)]
 struct ServeArgs {
     #[command(flatten)]
     selection: Selection,
 
     #[command(flatten)]
+    listen: Listen,
+
+    #[command(flatten)]
     faces: Faces,
-
-    /// Port to serve on.
-    #[arg(long, default_value_t = 7878)]
-    port: u16,
-
-    /// Open the served folio in the default browser.
-    #[arg(long)]
-    open: bool,
 }
 
 #[derive(Args)]
@@ -194,6 +230,7 @@ struct ScaffoldViewerArgs {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Render(args) => render(args),
+        Command::Codex(args) => codex(args),
         Command::Serve(args) => serve(args),
         Command::Publish(args) => publish(args),
         Command::Gists => gists(),
@@ -215,11 +252,11 @@ fn render(args: RenderArgs) -> Result<()> {
         args.faces.choice(),
         Delivery::Static,
     );
-    let (html, labour, reached) = inscribe(&scribe, &folio);
+    let set = inscribe(&scribe, &folio);
 
-    fs::write(&output, &html).with_context(|| format!("writing {}", output.display()))?;
+    fs::write(&output, &set.document).with_context(|| format!("writing {}", output.display()))?;
     println!("{}", output.display());
-    report(&html, &labour, &reached);
+    report(&set);
 
     if args.open {
         open::that(&output).with_context(|| format!("opening {}", output.display()))?;
@@ -227,11 +264,34 @@ fn render(args: RenderArgs) -> Result<()> {
     Ok(())
 }
 
+/// Serves every session the machine has recorded. A folio reached this way is
+/// one leaf of a codex, so it carries the way back up to the listing.
+fn codex(args: CodexArgs) -> Result<()> {
+    let root = match args.root {
+        Some(root) => root,
+        None => discovery::projects_root()?,
+    };
+    let highlighter = highlighter();
+    let scribe = Scribe::new(
+        &highlighter,
+        TimeZone::system(),
+        args.faces.choice(),
+        Delivery::Codex,
+    );
+
+    codex::run(
+        &args.listen.address(),
+        codex::Scope::Codex { root },
+        args.listen.open,
+        &scribe,
+    )
+}
+
+/// Serves one session, which is the render loop: the same server as `codex` with
+/// nothing above the folio, so `/` is the folio itself.
 fn serve(args: ServeArgs) -> Result<()> {
     let session = resolve_session(args.selection)?;
     let highlighter = highlighter();
-    // The one folio that can gain a message under its reader: this server
-    // re-reads the session and re-renders on every load.
     let scribe = Scribe::new(
         &highlighter,
         TimeZone::system(),
@@ -239,12 +299,12 @@ fn serve(args: ServeArgs) -> Result<()> {
         Delivery::Served,
     );
 
-    serve::run(args.port, &session, args.open, || {
-        let folio = Folio::read(&session)?;
-        let (html, labour, reached) = inscribe(&scribe, &folio);
-        report(&html, &labour, &reached);
-        Ok(html)
-    })
+    codex::run(
+        &args.listen.address(),
+        codex::Scope::Folio { session },
+        args.listen.open,
+        &scribe,
+    )
 }
 
 fn publish(args: PublishArgs) -> Result<()> {
@@ -267,13 +327,13 @@ fn publish(args: PublishArgs) -> Result<()> {
         args.faces.choice(),
         Delivery::Static,
     );
-    let (html, labour, reached) = inscribe(&scribe, &folio);
-    report(&html, &labour, &reached);
+    let set = inscribe(&scribe, &folio);
+    report(&set);
 
     let session_id = folio.session_id();
     let filename = format!("{session_id}.html");
     let description = gist::describe(session_id, Folio::peek(&session).title.as_deref());
-    let published = gist::publish(&html, session_id, &description, args.public)?;
+    let published = gist::publish(&set.document, session_id, &description, args.public)?;
 
     if published.updated {
         println!("Updated the gist already published for this session");
@@ -622,19 +682,10 @@ fn highlighter() -> SyntectAdapter {
         .build()
 }
 
-/// Sets a folio and records what setting it cost, filling both figures into the
-/// plaque's placeholders. The time is the render alone, so it means the same
-/// thing under every subcommand; the size is of the markup the figures are
-/// substituted into, which is the whole folio bar the substitution itself.
-fn inscribe(scribe: &Scribe, folio: &Folio) -> (String, Labour, BTreeMap<char, usize>) {
-    let started = Instant::now();
-    let (markup, reached) = scribe.folio(folio, &colophon());
-    let markup = markup.into_string();
-    let labour = Labour {
-        took: started.elapsed(),
-        bytes: markup.len(),
-    };
-    (render::inscribe(markup, &labour), labour, reached)
+/// Sets a folio for a subcommand that writes one out, which is never a followed
+/// folio: a file and a gist are both snapshots, so neither names a stream.
+fn inscribe(scribe: &Scribe, folio: &Folio) -> render::Set {
+    render::set(scribe, folio, &colophon(), None)
 }
 
 /// Reports what a render cost, using the same formatting helpers as the folio's own plaque.
@@ -644,14 +695,14 @@ fn inscribe(scribe: &Scribe, folio: &Folio) -> (String, Labour, BTreeMap<char, u
 ///
 /// A folio driven onto the whole faces says so and names what drove it, since
 /// it is otherwise a silent five-fold jump in the file a reader downloads.
-fn report(html: &str, labour: &Labour, reached: &BTreeMap<char, usize>) {
+fn report(set: &render::Set) {
     eprintln!(
         "{} in {}",
-        render::size(html.len()),
-        render::elapsed(labour.took)
+        render::size(set.document.len()),
+        render::elapsed(set.labour.took)
     );
-    if !reached.is_empty() {
-        eprintln!("Note: embedding the whole fonts: {}", named(reached));
+    if !set.reached.is_empty() {
+        eprintln!("Note: embedding the whole fonts: {}", named(&set.reached));
     }
 }
 

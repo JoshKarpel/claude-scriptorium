@@ -2504,3 +2504,174 @@ pre.syntax-highlighting {
 .ink-markup.ink-deleted {
   color: var(--syn-deleted);
 }
+
+/* ---------------------------------------------------------------------------
+ * The codex: the volume's own leaves, listing what the scriptorium holds.
+ *
+ * A listing is a leaf like a folio, read inside the same parchment body, by the
+ * same lights, between the same illuminated margins. Only what stands in the
+ * reading column differs, so nothing here restates the page itself.
+ * ------------------------------------------------------------------------- */
+
+.codex__head {
+  margin: 0 0 2rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.codex__title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 2.1rem;
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--rubric);
+  word-break: break-word;
+}
+
+/* A quire is titled by the directory its sessions ran in, and a path belongs in
+ * the mono face wherever it appears. */
+.codex__title--path {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.codex__lead {
+  margin: 0.5rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+/* The trail back up, above the title it leaves behind rather than beside it. */
+.codex__up {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-decoration: none;
+}
+
+.codex__up:hover,
+.codex__up:focus-visible {
+  color: var(--lapis);
+}
+
+.codex__empty {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* One quire: a project, and the sessions gathered under it. Ruled off from the
+ * next rather than boxed, the way the panels of a folio are set apart. */
+.quire {
+  margin: 0 0 1.9rem;
+}
+
+.quire__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+}
+
+.quire__project {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: break-word;
+}
+
+a.quire__project:hover,
+a.quire__project:focus-visible {
+  color: var(--lapis);
+  text-decoration: underline;
+}
+
+.quire__when {
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+.quire__sessions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.quire__more {
+  display: inline-block;
+  margin-top: 0.4rem;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+/* One session. The title is what a reader is choosing by, so it takes the room
+ * and the facts sit out of its way; the whole row is the link's target, so a
+ * session is as easy to hit as its own words. */
+.listed {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.32rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.listed__title {
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.listed__title:hover,
+.listed__title:focus-visible {
+  color: var(--lapis);
+  text-decoration: underline;
+}
+
+.listed__facts {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+/* A session still being written is the one a reader has usually come for, so it
+ * is marked in the rubric a scribe reserved for what matters on the page. The
+ * mark is a word rather than a dot, since a dot needs a legend. */
+.listed__live {
+  color: var(--rubric);
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+
+.listed[data-live] .listed__title {
+  color: var(--rubric);
+}
+
+/* The way out of a folio, at the head of the rail. A card like the ones under
+ * it, since `.rail > *` already cuts them all the same way; only its own type
+ * and hue are its. */
+.rail__up {
+  color: var(--ink-soft);
+  text-align: center;
+  text-decoration: none;
+}
+
+.rail__up:hover,
+.rail__up:focus-visible {
+  color: var(--lapis);
+}

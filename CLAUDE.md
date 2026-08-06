@@ -15,7 +15,8 @@ just test <name>       # single test, e.g. just test markdown_becomes_html
 just test-js           # the folio's own script, without a browser
 just test-browser      # a rendered folio, driven in a headless Chromium
 just render <session>  # write a session to HTML (CLI `render` subcommand)
-just serve <session>   # live-reload dev server, rebuilds on source change
+just serve <session>   # serve one folio, rebuilding and restarting on source change
+just codex             # serve every folio, the same way
 just publish <session> # render a session and push it to a gist (CLI `publish` subcommand)
 just bench             # hyperfine over the release binary rendering the fixtures
 just bench-huge        # the same, over generated sessions of megabytes
@@ -24,7 +25,7 @@ just profile <session> # sample a render and print where the time went
 just fix               # pre-commit across the staged tree
 ```
 
-`just render`, `just publish`, and `just serve` build with `--release`, and so
+`just render`, `just publish`, `just serve`, and `just codex` build with `--release`, and so
 should any render you run by hand. A render is heavy enough (highlighting,
 base64'ing the fonts, megabytes of markup) that an unoptimized build takes
 longer to render a session than an optimized one takes to compile *and* render
@@ -117,6 +118,10 @@ module each:
   project directory is named after its path with everything outside
   `[A-Za-z0-9_]` flattened to a dash. `CLAUDE_CONFIG_DIR` relocates the root.
   `all_quires` enumerates every project for the cross-project picker.
+- `catalogue`: what discovery found, as a *listing*: `Catalogue::scan` stats every
+  session without reading one, and `Peeks` memoizes the titles, which cost a whole
+  file read each. `Shelf`/`Shelved`/`Leaf` are the same listing with every label
+  already looked up, so a page is a function of a value the way a folio is.
 - `transcript`: parses JSONL lines into a `Folio` of raw `Recorded`s (a `Turn`
   of the conversation, or a `Gloss` the harness wrote into it), then folds those
   into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
@@ -137,16 +142,17 @@ The folio's own behaviour is split the same way the Rust is, and for the same
 reason: `illumination.core.js` is a functional core (one object, `core`, of
 functions that take values and answer with values, touching neither the DOM nor
 storage nor the clock) and `illumination.shell.js` is the imperative shell around
-it. Both are inlined into one `<script>`, the core first, so the shell closes
-over it. Anything that can be worked out from values belongs in the core, where
+it. A written folio inlines both into one `<script>`, a served one links them as
+two, and either way the core comes first so the shell closes over it. Anything
+that can be worked out from values belongs in the core, where
 `just test-js` exercises it in a couple of hundred milliseconds without a
 browser; what is left in the shell is wiring, exercised in a real one by `just
 test-browser`. The script stays a *classic* script rather than a module: a module
 is deferred, and the theme has to apply before the body paints.
 
-`src/main.rs` is the imperative shell: it dispatches the `render`, `serve`,
-`publish`, and `fetch` subcommands, resolves which session to show, reads the
-clock and system
+`src/main.rs` is the imperative shell: it dispatches the `render`, `codex`,
+`serve`, `publish`, and `fetch` subcommands, resolves which session to show, reads
+the clock and system
 timezone, builds the syntect adapter, and writes the file. Session resolution
 is layered: an explicit path wins, then `--latest` (the current project's most
 recent session), then the interactive picker on a TTY, then a loud error when
@@ -181,12 +187,85 @@ figure means the same thing under every subcommand, and prints it (with the
 finished document's exact size) on **stderr**, keeping stdout the folio's path
 alone for a script to consume.
 
-`serve` (`src/serve.rs`) is a dev-loop HTTP server: it re-renders on each page
-load and injects a live-reload snippet so the browser refreshes when the
-session file grows or the server restarts with fresh code. `just serve`
-rebuilds and restarts it on source changes. The reload snippet is injected only
-into the *served* response; the written file carries the folio's own app script
-but never the reload snippet (see below).
+### The codex: one server, two scopes, pages that are patched rather than reloaded
+
+`codex` (`src/codex.rs`) serves every folio the machine holds; `serve` is the
+same server with one session in scope. `Scope` is the only difference between
+them: it decides what `/` answers with and which sessions can be named, and
+everything below that (the assets, the folio page, the stream) is one code path,
+so the browsing server and the render loop cannot drift apart. `Delivery` says
+which of the three a folio is: `Static` (written or published), `Served` (alone),
+`Codex` (one leaf of a listing, and so carrying the way back up to it).
+
+**A page is patched, not reloaded, and turn numbers are why.** `Panel::turn_number`
+counts the *raw* records, and a session file is only ever appended to, so a
+panel's number, and therefore its `id="turn-N"`, is a stable identity across
+renders rather than a position. `Scribe::panels` hands back a folio's panels keyed
+by it; the server compares them with the ones it last sent and pushes only those
+that differ, which for a growing session is the last panel or two (a tool result
+joins the panel holding its call, so that panel is set again under the same
+number). The client replaces `#turn-N` where it has it and seats it in turn order
+where it does not. Applying the same event twice therefore changes nothing, which
+is what lets a reconnecting page be sent everything without reasoning about what
+it missed. **Don't reach for a positional diff here**: panels are not
+position-stable, and nothing else about the page survives a reload.
+
+The transport is one server-sent event stream, named in the page itself
+(`data-live` on `<body>`, built from `render::Stream` and parsed back by
+`codex::route`, which its tests hold together). Its *presence* is the whole of
+what tells the app script to listen and what the follow control keys on, so a
+written folio names none and nothing in it waits. Three events: `hello` carries
+the server's boot id, and a page told a different one from the one that set it
+reloads, which is how a change to the renderer, the stylesheet, or the app script
+reaches a reader; `panels` carries the patch; `listing` carries a re-rendered
+listing, replaced whole because a listing is kilobytes and every row's "how long
+ago" moves anyway. A comment heartbeat keeps an idle stream from being culled.
+`tiny_http` has no streaming response, so the stream is written through
+`Request::into_writer()`: the head by hand, then chunked frames flushed one at a
+time, since a frame in a buffer is a change the reader has not been told about.
+
+**A page reports the state it holds, so no history has to be kept.** The server
+holds only its own last setting of each folio; a page carries the `stamp` (the
+session file's mtime and length) it was set from, and reports it back in `from=`
+or, after a dropped connection, in the `Last-Event-ID` the browser resends on its
+own. A stamp that matches is a page already current and is told nothing; one that
+does not is sent the folio as it stands, which is the honest answer when the state
+that page was set from is gone. A subscription brings the stored setting up to date
+before measuring anything against it, so what a page is compared with is the
+session now rather than as it was when somebody else's page was served: that is
+what keeps two readers at different points both correct with one stored state.
+
+**A setting is a pure function of the session file, and the stamp is how that is
+cashed in.** A tick that finds the same stamp does nothing at all: it would
+produce the same markup, so it is not produced. Only the stamp is read on a tick,
+which is one `metadata` call per open folio, where setting a folio again is most of
+a render. Measured: a 6.5 MB folio held open and unchanging costs the server no
+measurable CPU over five seconds, where re-setting it on every tick would have run
+a render continuously. Don't drop that check to simplify the tick.
+
+**Nothing reads a session on the request path.** One watcher thread holds the
+listing, the titles it has read, and the last setting of each folio being read,
+and looks for changes on a timer, only for what someone has open, so an idle codex
+does no work. A session caught mid-write is not a failure to show anybody: the
+read is retried (a half-written line is finished microseconds later), and until a
+whole setting succeeds the last good one stands and nobody is told anything.
+
+**A session id becomes a path only through the listing.** `Catalogue::session`
+looks one up; nothing composes a path from what a request said, so reaching
+outside the root is unrepresentable rather than defended against. A codex rescans
+once on a miss, since a session recorded since the last scan is a gap to fill.
+
+**A served page links its stylesheet, script, and faces; a written one inlines
+them.** The faces are most of a folio, so browsing would otherwise re-download a
+megabyte per session opened. `Asset::url` puts them under `ASSET_TOKEN`, a hash
+`build.rs` takes over all of their bytes, and the server serves those URLs
+`immutable`: an edited stylesheet is a *different* URL, so no reader can be handed
+a stale one, and a request under a stale token is a 404 rather than today's bytes
+under yesterday's name. A patch can therefore also re-dress a page: a panel that
+arrives setting a character the cut faces dropped brings the whole ones with it by
+swapping the `link[data-faces]` href, so cutting never renders a character worse
+than upstream on a served page either. **The written artifact is unchanged**, and
+the "self-contained" invariant below is about it.
 
 `gist` (`src/gist.rs`) is the sharing path: `publish` renders a session and
 pipes the HTML to a gist, `fetch` downloads a gist's files for offline viewing,
@@ -622,9 +701,14 @@ tell each other apart. Keep it that way when adding a kind.
 
 ### Rendering invariants worth preserving
 
-- **Self-contained and gist-shareable.** Everything the folio needs is inlined:
-  no external CSS, JS, fonts, or image files, so the one written file works
-  offline and travels as a single artifact. The delivery path is a GitHub gist,
+- **Self-contained and gist-shareable.** Everything a *written* folio needs is
+  inlined: no external CSS, JS, fonts, or image files, so the one written file
+  works offline and travels as a single artifact. This is about the artifact, not
+  about the renderer: a folio the codex serves links the same stylesheet, script,
+  and faces under cached URLs (see the codex above), because a page read over a
+  connection that can cache should not carry a megabyte of fonts per session
+  opened. `Delivery` is what decides, and `Delivery::Static` must keep inlining
+  every byte. The delivery path for a shared folio is a GitHub gist,
   which never renders HTML at any size, so a shared folio is read through the
   `gist` module's viewer (or downloaded with `fetch`) rather than GitHub's own
   file view. The constraint to respect is therefore **total bundle size** (keep
@@ -639,9 +723,9 @@ tell each other apart. Keep it that way when adding a kind.
   reach and would cost tens of kilobytes in every folio. Do **not**
   reintroduce a "no scripts" rule, it was dropped deliberately; the live
   invariant below is that *transcript* content is never executed, which is a
-  different thing. `serve`
-  still injects its live-reload snippet only into the *served* response, never
-  persisting it to the file.
+  different thing. That holds for a pushed panel too: it is the scribe's own
+  markup, escaped as everything it writes is, and it is seated with
+  `insertAdjacentHTML`/`template`, neither of which runs a script in it.
 - **Fonts embedded, licensed.** The three families (`Junicode` serif body,
   `Fira Code` mono, `UnifrakturCook` blackletter headings and versals) are woff2 vendored
   under `src/fonts/` and base64'd into `@font-face` data URIs by `build.rs`,
@@ -967,29 +1051,36 @@ corona spin about the disc's `cx`/`cy`, and an origin left over from where the
 sun used to sit sends them round an orbit rather than round themselves, which
 reads as the whole sun wandering off its own centre.
 
-The dock's follow control (`tail -f`: re-pin the newest message's start on each
-reload until the reader takes control by scrolling or by loading a `#turn-N`
-deep link) is set only into a **served** folio, which is what `Delivery` on the
-`Scribe` decides. `serve` re-reads the session and re-renders on every load, so
-a served folio gains messages under its reader; a written or published one is a
-snapshot of a session that may have ended a year ago, and following it would
-promise an update that can never come. The control's *presence* is what tells
-the app script this folio can follow, so there is one source of truth rather
-than a flag in each: no control means jumping to the end stays a jump, and no
-follow state is stored.
+The dock's follow control (`tail -f`: keep the newest message's start pinned as
+panels arrive, until the reader takes control by scrolling or by loading a
+`#turn-N` deep link) is set only into a folio that names a stream, which is what
+the `from` stamp passed to `Scribe::folio` decides. Only a followed folio is told
+when the session grows; a written or published one is a snapshot of a session that
+may have ended a year ago, and following it would promise an update that can never
+come. The control's *presence* is what tells the app script this folio can follow,
+so there is one source of truth rather than a flag in each: no control means
+jumping to the end stays a jump, and no follow state is stored.
 
 **Following is a mode, and what it stores is the permalink it last wrote**, not a
 flag. Three things follow from that, each of which broke when it was missing.
 The pin is what tells a hash the folio wrote itself apart from one the reader
-arrived with: a live session grows between loads, so by the time a followed folio
-is reloaded the hash it wrote no longer names the end, and reading every hash as
-the reader's released following on the first reload (and on every reload at all,
-once a step of the dock had left a permalink in the URL). While following,
-`history.scrollRestoration` is `manual`, because the browser restores the
-position it recorded before the reload *after* this script has run, quietly
-undoing the snap to the end. And the end is re-pinned whenever the leaf changes
-height under the reader (a `ResizeObserver` on the panels), since the fonts
-landing and a fold opening both move it.
+arrived with: a live session grows, so by the time a followed folio is reloaded
+the hash it wrote no longer names the end, and reading every hash as the reader's
+released following on the first reload (and on every reload at all, once a step of
+the dock had left a permalink in the URL). While following,
+`history.scrollRestoration` is `manual`, because the browser restores the position
+it recorded before the reload *after* this script has run, quietly undoing the
+snap to the end. And the end is re-pinned whenever the leaf changes height under
+the reader (a `ResizeObserver` on the panels), since the fonts landing, a fold
+opening, and a panel arriving all move it.
+
+**Everything the app script wires has to be adoptable**, because panels now arrive
+after it has run. Each `wire*` answers with what a page needs when markup arrives:
+the copy buttons are seated on it, the reader's open folds are restored in it, the
+minimap draws its bands again (a band stands for a panel, so a map missing one
+misstates where every other panel sits), the search looks again, and the end is
+re-pinned if the reader is there. A control added to the folio needs the same
+answer, or it will be right on load and wrong a minute later.
 
 What the app script remembers is split by what it belongs to. The theme is the
 reader's, and holds across everything they open, so it keeps one key. Which
@@ -1050,9 +1141,12 @@ reuse it rather than introducing a second convention.
 
 Types are named after a manuscript scriptorium, and the names are load-bearing
 in the code: `Folio` (one rendered session), `Quire` (the gathering of folios
-for one project), `Colophon` (generation metadata, shown in the plaque),
-`Scribe` (the renderer), `Gloss` (a note the harness entered into a session, as
-a later hand annotates a manuscript). Markup classes continue it with
+for one project), `Codex` (the bound volume of every quire, which the server of
+that name serves, a leaf of it at a time), `Colophon` (generation metadata, shown
+in the plaque), `Scribe` (the renderer), `Gloss` (a note the harness entered into
+a session, as a later hand annotates a manuscript), `Shelf`/`Shelved`/`Leaf` (a
+listing with its labels looked up, as a shelf of quires and their leaves). Markup
+classes continue it with
 `caveat` (the folio's own note to its reader, at the head of the column),
 `marginalia` (a collapsible tool call or result), `drollery` (a marginal
 creature), `versal` (the dropped initial that opens a speaker's paragraph),
@@ -1095,16 +1189,24 @@ await browser.close();
 '
 ```
 
-Read the PNG back to check the illumination. For an interactive loop, `just
-serve <session>` reloads the browser as you edit the renderer or CSS.
+Read the PNG back to check the illumination. For an interactive loop, `just serve
+<session>` reloads the browser as you edit the renderer or CSS, and `just codex`
+does the same for the listing pages (whose markup is `Scribe::codex` and
+`Scribe::quire`, and whose stylesheet section is `.codex`/`.quire`/`.listed`).
 
 Behaviour is a different question from appearance, and has its own two suites:
 `just test-js` for the script's core (values in, values out, no browser) and
 `just test-browser` for what it does to a real folio in a real Chromium, both
 run by `just check`. A change to `illumination.*.js` belongs in one of them:
-`tests/browser` renders through the actual CLI and even serves a session it
-grows under the reader, so following, the dock, the minimap, and what a folio
-remembers across a reload are all exercised as a reader meets them.
+`tests/browser` drives the real binary, serving both a session it grows under the
+reader (`serve()`) and a whole codex over a throwaway projects root (`codex()`),
+so following, the dock, the minimap, what a folio remembers across a reload, and
+what arrives while the reader is reading are all exercised as a reader meets them.
+
+**A pushed change is proved by what survived it.** The test sets a mark on
+`window`, grows the session, waits for the panel, and asserts the mark is still
+there: a reload would have wiped it, and a reload is what this replaced. Assert
+the same way for anything else claimed to be patched rather than rebuilt.
 
 ### Verifying the gist viewer end to end
 

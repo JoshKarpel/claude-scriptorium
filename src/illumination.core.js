@@ -52,6 +52,31 @@ const core = {
     };
   },
 
+  // --- What arrives while the folio is open -----------------------------
+
+  // Where a panel belongs among the ones already on the leaf, as an index into
+  // them: which of them it goes in front of, or their count to say it goes last.
+  //
+  // A panel is placed by its turn number rather than appended, because a session
+  // does not only grow at the end: a tool result joins the panel holding its
+  // call, and a gloss the harness wrote is gathered into the panel it belongs to,
+  // so a folio can be told about a panel that belongs in the middle of what the
+  // reader already has. Turn numbers count the raw records and never change, so
+  // they order the leaf on their own.
+  seatFor(turns, turn) {
+    const at = turns.findIndex((held) => held > turn);
+    return at === -1 ? turns.length : at;
+  },
+
+  // Whether the server saying hello is a different run of it from the one this
+  // page was set by, which is the only thing a page cannot patch its way through:
+  // the stylesheet, the script, and the renderer are all part of the page rather
+  // than of the session, so a new binary means a reload. The first hello is what
+  // the page was set by, since the page and that greeting came from one run.
+  restarted(seen, boot) {
+    return Boolean(seen) && Boolean(boot) && seen !== boot;
+  },
+
   // --- The hash, which two hands write ---------------------------------
 
   // The hash is arbitrary text off the end of a shared URL, so it need not be

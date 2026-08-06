@@ -1,6 +1,10 @@
 //! Turning a parsed folio into a self-contained HTML document.
 
-use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use comrak::{
@@ -12,6 +16,7 @@ use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{
+    catalogue::{Shelf, Shelved},
     gloss,
     tools::{self, Setting},
     transcript::{Block, Folio, GlossPanel, ImageSource, Known, Panel, PanelKind, Speech, Usage},
@@ -32,13 +37,23 @@ const FONT_NOTICES: [(&str, &str); 3] = [
 
 /// The font attribution as an HTML comment for the top of every folio.
 fn font_notice() -> String {
-    let mut notice = String::from(
-        "<!-- Embedded fonts, SIL Open Font License 1.1 (https://openfontlicense.org):",
-    );
+    wrapped_notice("<!-- ", "     ", "\n-->")
+}
+
+/// The same attribution as a CSS comment, for the `@font-face` block a served
+/// folio links rather than inlines. The block carries the woff2 files as data
+/// URIs, so it is a copy of the fonts and must carry their notice on its own.
+pub fn faces_notice() -> String {
+    wrapped_notice("/* ", "   ", "\n*/\n")
+}
+
+fn wrapped_notice(open: &str, indent: &str, close: &str) -> String {
+    let mut notice =
+        format!("{open}Embedded fonts, SIL Open Font License 1.1 (https://openfontlicense.org):");
     for (family, copyright) in FONT_NOTICES {
-        notice.push_str(&format!("\n     {family}: {copyright}"));
+        notice.push_str(&format!("\n{indent}{family}: {copyright}"));
     }
-    notice.push_str("\n-->");
+    notice.push_str(close);
     notice
 }
 
@@ -54,18 +69,140 @@ const CUT_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-cut.c
 const WHOLE_FACES: &str = include_str!(concat!(env!("OUT_DIR"), "/font-faces-whole.css"));
 
 include!(concat!(env!("OUT_DIR"), "/dropped.rs"));
+include!(concat!(env!("OUT_DIR"), "/asset-token.rs"));
+
+/// The stylesheet and script a folio is dressed in. A written folio inlines
+/// every one of them, which is what makes it a single portable file; a served
+/// folio links them instead, because a reader browsing a codex would otherwise
+/// download the same megabyte of faces once per session they open.
+///
+/// Their URLs carry [`ASSET_TOKEN`], which names their contents, so they can be
+/// served immutably: an edited stylesheet is a different URL rather than a stale
+/// cache entry, which is what keeps the render loop honest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asset {
+    /// The cut faces, and the whole ones behind them. Which a folio links is the
+    /// same decision it makes about which to inline (see [`Fonts`]).
+    FacesCut,
+    FacesWhole,
+    Style,
+    /// The app script's two halves, linked in the order they are inlined in, so
+    /// the shell still closes over the core.
+    Core,
+    Shell,
+}
+
+impl Asset {
+    pub const EVERY: [Asset; 5] = [
+        Asset::FacesCut,
+        Asset::FacesWhole,
+        Asset::Style,
+        Asset::Core,
+        Asset::Shell,
+    ];
+
+    /// The asset this filename names, or `None` for anything else asked for
+    /// under the asset route.
+    pub fn named(filename: &str) -> Option<Self> {
+        Asset::EVERY
+            .into_iter()
+            .find(|asset| asset.filename() == filename)
+    }
+
+    pub fn body(self) -> &'static str {
+        match self {
+            Asset::FacesCut => CUT_FACES,
+            Asset::FacesWhole => WHOLE_FACES,
+            Asset::Style => include_str!("illumination.css"),
+            Asset::Core => include_str!("illumination.core.js"),
+            Asset::Shell => include_str!("illumination.shell.js"),
+        }
+    }
+
+    pub fn filename(self) -> &'static str {
+        match self {
+            Asset::FacesCut => "faces-cut.css",
+            Asset::FacesWhole => "faces-whole.css",
+            Asset::Style => "illumination.css",
+            Asset::Core => "illumination.core.js",
+            Asset::Shell => "illumination.shell.js",
+        }
+    }
+
+    pub fn mime(self) -> &'static str {
+        match self {
+            Asset::FacesCut | Asset::FacesWhole | Asset::Style => "text/css; charset=utf-8",
+            Asset::Core | Asset::Shell => "text/javascript; charset=utf-8",
+        }
+    }
+
+    /// Whether this asset is a copy of the embedded fonts, and so has to carry
+    /// their copyright notice wherever it is served.
+    pub fn is_faces(self) -> bool {
+        matches!(self, Asset::FacesCut | Asset::FacesWhole)
+    }
+
+    pub fn url(self) -> String {
+        format!("/asset/{ASSET_TOKEN}/{}", self.filename())
+    }
+}
 
 /// How a folio reaches its reader, which decides whether it can gain a message
-/// under them. `serve` re-reads the session and re-renders on every load, so a
-/// served folio grows as the session is written; a written one is a fixed
-/// artifact, and the file it was rendered from could be a year old.
+/// under them. A served folio is re-read and re-rendered as the session is
+/// written, and gains panels in place; a written one is a fixed artifact, and
+/// the file it was rendered from could be a year old.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Delivery {
-    /// Written to a file or published as a gist: the reader holds a snapshot.
+    /// Written to a file or published as a gist: the reader holds a snapshot,
+    /// with everything it needs inlined into it.
     #[default]
     Static,
-    /// Served by `serve`, which re-renders the session on every page load.
+    /// Served on its own by `serve`, which follows the session and pushes what
+    /// changes. There is nothing above this folio to go up to.
     Served,
+    /// Served as one leaf of a codex, which is the same thing with a way back to
+    /// the listing it was reached from.
+    Codex,
+}
+
+impl Delivery {
+    /// Whether the stylesheet and script are linked rather than inlined. Only a
+    /// written folio has to be one file; a served one is read over a connection
+    /// that can cache, and re-sending the faces per session opened is the one
+    /// cost worth avoiding while browsing.
+    fn links(self) -> bool {
+        !matches!(self, Delivery::Static)
+    }
+}
+
+/// What a page follows to be told of a change, which is also what tells the app
+/// script that this page *can* be told: a written folio names no stream, so
+/// nothing in it waits for one.
+///
+/// The URLs are spelled here, beside the assets', and `codex::route` reads them
+/// back; its tests hold the two together rather than trusting them to agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream<'a> {
+    /// The codex's own listing.
+    Shelf,
+    Quire(&'a str),
+    /// One folio, from the state its reader was served. The stamp is what tells
+    /// a page that is already current from one that fell behind between being
+    /// set and being followed, so nothing has to be assumed about either.
+    Folio {
+        session: &'a str,
+        from: &'a str,
+    },
+}
+
+impl Stream<'_> {
+    pub fn url(&self) -> String {
+        match self {
+            Stream::Shelf => "/live".to_owned(),
+            Stream::Quire(id) => format!("/live/quire/{id}"),
+            Stream::Folio { session, from } => format!("/live/folio/{session}?from={from}"),
+        }
+    }
 }
 
 /// Which cut of the embedded faces a folio should carry.
@@ -137,6 +274,20 @@ pub struct Colophon {
     pub home: &'static str,
 }
 
+impl Colophon {
+    /// This tool, setting a folio now. The clock is read here rather than in
+    /// [`Scribe`], which answers with the same markup every time it is asked;
+    /// what a folio says about when it was set arrives as a value like any other.
+    pub fn now() -> Self {
+        Self {
+            generated: Timestamp::now(),
+            tool: env!("CARGO_PKG_NAME"),
+            version: env!("CARGO_PKG_VERSION"),
+            home: env!("CARGO_PKG_REPOSITORY"),
+        }
+    }
+}
+
 /// What a render cost: how long the scribe took, and how large the folio came
 /// out. Neither can be known while the markup is being written, so the plaque
 /// carries a placeholder for each and [`inscribe`] fills them in afterwards.
@@ -169,6 +320,45 @@ pub fn inscribe(markup: String, labour: &Labour) -> String {
     markup
         .replace(TOOK_MARK, &elapsed(labour.took))
         .replace(SIZE_MARK, &size(labour.bytes))
+}
+
+/// One panel as it was set: the turn number its markup carries as an id, and that
+/// markup. The number is the panel's identity rather than its place in the folio,
+/// which is what lets a served folio be patched panel by panel (see
+/// [`Scribe::panels`]).
+pub type SetPanel = (usize, String);
+
+/// One whole setting of a folio: the finished document with its own cost filled
+/// into its plaque, what that cost was, and which characters reached beyond the
+/// cut faces.
+pub struct Set {
+    pub document: String,
+    pub labour: Labour,
+    pub reached: BTreeMap<char, usize>,
+}
+
+/// Sets a folio and records what the setting cost, filling both figures into the
+/// plaque's placeholders.
+///
+/// A free function rather than a method, because this is where the clock is read:
+/// [`Scribe`] answers with the same markup every time it is asked, and every
+/// subcommand that writes a folio goes through here so a figure means the same
+/// thing under all of them. The time is the setting alone; the size is of the
+/// markup the figures are substituted into, which is the whole folio bar the
+/// substitution itself.
+pub fn set(scribe: &Scribe, folio: &Folio, colophon: &Colophon, from: Option<&str>) -> Set {
+    let started = Instant::now();
+    let (markup, reached) = scribe.folio(folio, colophon, from);
+    let markup = markup.into_string();
+    let labour = Labour {
+        took: started.elapsed(),
+        bytes: markup.len(),
+    };
+    Set {
+        document: inscribe(markup, &labour),
+        labour,
+        reached,
+    }
 }
 
 /// A duration in the coarsest unit that still says something: whole
@@ -270,12 +460,16 @@ impl<'a> Scribe<'a> {
         timestamp.to_zoned(self.timezone.clone())
     }
 
-    /// Sets a folio, and reports which characters (if any) drove it onto the
-    /// whole faces. An empty tally means the cut faces served it.
-    pub fn folio(&self, folio: &Folio, colophon: &Colophon) -> (Markup, BTreeMap<char, usize>) {
-        let title = format!("folio {}", folio.session_id());
-        let panels = folio.panels();
-        let source = folio.source.display().to_string();
+    /// Sets every panel of a folio on its own, each keyed by the turn number its
+    /// markup carries as an id, and reports which characters (if any) reached
+    /// beyond the cut faces on the way.
+    ///
+    /// **The turn number is a panel's identity, not its position.** It counts the
+    /// raw records, and a session file is only ever appended to, so a panel keeps
+    /// its number however much the session grows. That is what lets a served
+    /// folio be patched panel by panel: the server sets the panels again, and the
+    /// ones whose markup changed are the ones to send.
+    pub fn panels(&self, panels: &[Panel]) -> (Vec<SetPanel>, BTreeMap<char, usize>) {
         // A panel's cost is dominated by highlighting its tool bodies, where a
         // syntax's regexes compile the first time that language is met, so the
         // panels are set concurrently and several languages compile at once
@@ -285,69 +479,52 @@ impl<'a> Scribe<'a> {
         // Each panel is also weighed against the cut faces as it is set, which
         // rides along on the threads already running rather than costing a
         // second pass over the finished markup.
-        let (rendered_panels, reaches): (Vec<Markup>, Vec<BTreeMap<char, usize>>) = panels
+        let (set, reaches): (Vec<SetPanel>, Vec<BTreeMap<char, usize>>) = panels
             .par_iter()
             .map(|panel| {
-                let markup = self.panel(panel);
-                let reach = beyond_cut(&markup.0);
-                (markup, reach)
+                let markup = self.panel(panel).into_string();
+                let reach = beyond_cut(&markup);
+                ((panel.turn_number(), markup), reach)
             })
             .unzip();
 
-        // The panels are the transcript; the source path is the only other
-        // place a folio sets text it didn't choose. The rest of the chrome is
-        // this crate's own markup, which the tests hold inside the cut faces.
-        let mut reached = beyond_cut(&source);
+        let mut reached = BTreeMap::new();
         for reach in reaches {
             for (character, count) in reach {
                 *reached.entry(character).or_insert(0) += count;
             }
         }
-        let faces = match self.fonts {
-            Fonts::Whole => WHOLE_FACES,
-            Fonts::Fitted if !reached.is_empty() => WHOLE_FACES,
-            Fonts::Fitted => CUT_FACES,
-        };
+        (set, reached)
+    }
 
-        let left_border = margin_strip(border_seed(folio.session_id(), "left"));
-        let right_border = margin_strip(border_seed(folio.session_id(), "right"));
-        let document = html! {
-            (DOCTYPE)
-            (PreEscaped(font_notice()))
-            html lang="en" {
-                head {
-                    meta charset="utf-8";
-                    meta name="viewport" content="width=device-width, initial-scale=1";
-                    title { (title) }
-                    style {
-                        (PreEscaped(faces))
-                        (PreEscaped(include_str!("illumination.css")))
-                    }
-                    // The folio's own behaviour: theme, search, copy, the
-                    // navigation dock, and the minimap. It sits in <head> so the
-                    // stored theme applies before the body paints, avoiding a
-                    // flash of the wrong scheme, which is also why it stays a
-                    // classic script rather than a module (a module is deferred,
-                    // and would paint first). The core is inlined ahead of the
-                    // shell, in the same script, so the shell closes over it:
-                    // two files because one is pure and testable without a
-                    // browser, one script because a folio is one file.
-                    script {
-                        (PreEscaped(include_str!("illumination.core.js")))
-                        (PreEscaped(include_str!("illumination.shell.js")))
-                    }
-                }
-                // The session the folio was set from, so the app script can key
-                // what it remembers about this folio to this folio: a fold's
-                // own key is a turn number and a position within it, which name
-                // a different marginalia in every session.
-                body data-folio=(folio.session_id()) {
-                    // Illuminated borders down each outer margin: a per-session
-                    // strip of vine sections with drolleries seated among them,
-                    // tiled by the stylesheet. Purely decorative, so hidden from
-                    // assistive tech.
-                    div .margin.margin--left style=(format!("background-image:url({left_border})")) aria-hidden="true" {}
-                    div .margin.margin--right style=(format!("background-image:url({right_border})")) aria-hidden="true" {}
+    /// Sets a folio, and reports which characters (if any) drove it onto the
+    /// whole faces. An empty tally means the cut faces served it.
+    ///
+    /// `stamp` names the state of the session file this was set from, for a folio
+    /// that is being followed. Its presence is what makes the folio a followed
+    /// one: it names the stream to listen to and the state that stream's first
+    /// word is measured against, so a written folio passes `None` and waits for
+    /// nothing.
+    pub fn folio(
+        &self,
+        folio: &Folio,
+        colophon: &Colophon,
+        from: Option<&str>,
+    ) -> (Markup, BTreeMap<char, usize>) {
+        let title = format!("folio {}", folio.session_id());
+        let panels = folio.panels();
+        let source = folio.source.display().to_string();
+        let (rendered_panels, mut reached) = self.panels(&panels);
+
+        // The panels are the transcript; the source path is the only other
+        // place a folio sets text it didn't choose. The rest of the chrome is
+        // this crate's own markup, which the tests hold inside the cut faces.
+        for (character, count) in beyond_cut(&source) {
+            *reached.entry(character).or_insert(0) += count;
+        }
+        let faces = self.faces(!reached.is_empty());
+
+        let content = html! {
                     // The folio's plaque: title, facts, and colophon, tucked
                     // into the top corner so the reading column is pure
                     // transcript. A pure-CSS hover/focus disclosure (no script):
@@ -357,21 +534,7 @@ impl<'a> Scribe<'a> {
                         button .plaque__seal type="button" aria-label="folio details" title="folio details" { "❦" }
                         div .plaque__panel {
                             h1 .plaque__title { (title) }
-                            dl .plaque__facts {
-                                dt { "source" } dd { code { (source) } }
-                                dt { "turns" } dd { (panels.len()) }
-                                @if let Some(first) = panels.first() {
-                                    dt { "opened" } dd { (self.stamp(first.timestamp())) }
-                                }
-                                // The session's flux: how big the conversation
-                                // ever got, against all the output. The input
-                                // is the largest single turn's rather than a
-                                // sum, since every turn is sent the whole
-                                // conversation.
-                                @if let (Some(input), Some(output)) = (folio.largest_input(), folio.output()) {
-                                    dt { "tokens" } dd title=(folio_flux(input, output)) { (tally(input, output)) }
-                                }
-                            }
+                            (self.facts(folio, &panels))
                             // The render's own cost is stated here rather than
                             // among the facts above, which are the session's.
                             // Both figures arrive after the markup exists, as
@@ -392,6 +555,15 @@ impl<'a> Scribe<'a> {
                     // Standing them in one column is what says they are tied
                     // together, without a word of explanation.
                     div .rail {
+                        // The way back out, at the head of the rail: a card like
+                        // the ones under it, since it is reached the same way and
+                        // pressed the same way, but standing above them because
+                        // they work within the folio and it leaves it. Only a
+                        // folio reached from a codex has somewhere to go up to,
+                        // which is the whole of what `Delivery::Codex` says.
+                        @if self.delivery == Delivery::Codex {
+                            a .rail__up href="/" title="back to the codex" { "‹ codex" }
+                        }
                         // The folio's key leads the rail, because everything
                         // under it answers to it: which kinds are in play, and,
                         // since each chip carries its own kind's pigment, what
@@ -444,16 +616,16 @@ impl<'a> Scribe<'a> {
                             button .dock__btn .dock__btn--model type="button" data-nav="next" data-side="model" aria-label="next message the model produced" title="next message the model produced" { "▼" }
                         }
                         // Jump to the first or last message, and, where the
-                        // session can still grow, a follow toggle that re-pins
-                        // the newest message's start on every reload until the
-                        // reader scrolls away. Only a served folio is re-read
-                        // as the session is written, so only it offers the
-                        // toggle: the control's presence is what tells the app
-                        // script this folio can follow.
+                        // session can still grow, a follow toggle that keeps the
+                        // newest message's start pinned as panels arrive, until
+                        // the reader scrolls away. Only a followed folio is told
+                        // when the session grows, so only it offers the toggle:
+                        // the control's presence is what tells the app script
+                        // this folio can follow.
                         div .dock__leap {
                             button .dock__btn type="button" data-nav="top" aria-label="jump to top" title="jump to top" { "⤒" }
                             button .dock__btn type="button" data-nav="end" aria-label="jump to end" title="jump to end" { "⤓" }
-                            @if self.delivery == Delivery::Served {
+                            @if from.is_some() {
                                 button .dock__btn .dock__btn--tail type="button" data-tail="toggle" aria-pressed="false" aria-label="follow new messages" title="follow new messages, like tail -f" { "⇊" }
                             }
                         }
@@ -510,26 +682,7 @@ impl<'a> Scribe<'a> {
                     // Drawn rather than lettered, so each needs the name it used
                     // to spell out: a figure says nothing to a reader who cannot
                     // see it.
-                    div .controls {
-                        div .luminaries role="group" aria-label="colour theme" {
-                            button .luminary type="button" data-theme-choice="light"
-                                aria-label="read by daylight" title="read by daylight" {
-                                span .luminary__radiance .luminary__radiance--day {}
-                                (PreEscaped(SUN))
-                            }
-                            button .luminary type="button" data-theme-choice="dark"
-                                aria-label="read by candlelight" title="read by candlelight" {
-                                span .luminary__radiance .luminary__radiance--night {}
-                                (PreEscaped(CANDLE))
-                            }
-                            // Only of use once a light has been chosen, so the
-                            // stylesheet shows it only then, keyed off the
-                            // `data-theme` the choice sets on the document.
-                            button .theme-reset type="button" data-theme-choice="system"
-                                aria-pressed="true" aria-label="follow the system"
-                                title="follow the system" { (PreEscaped(SYSTEM)) }
-                        }
-                    }
+                    (luminaries())
                     main .folio {
                         // The only text in the reading column this crate wrote
                         // rather than set from the session: a session file is
@@ -551,14 +704,266 @@ impl<'a> Scribe<'a> {
                             em { "did" } " write down (hook output, a skill's instructions, a file "
                             "pulled into context mid-session) is here."
                         }
-                        @for panel in &rendered_panels {
-                            (panel)
+                        @for (_, panel) in &rendered_panels {
+                            (PreEscaped(panel))
                         }
                     }
+        };
+        // The session the folio was set from names the body, so the app script
+        // can key what it remembers about this folio to this folio: a fold's own
+        // key is a turn number and a position within it, which name a different
+        // marginalia in every session. It also seeds the illuminated margins, so
+        // a session's borders are its own.
+        let following = from.map(|from| Stream::Folio {
+            session: folio.session_id(),
+            from,
+        });
+        let document = self.leaf(&title, faces, Some(folio.session_id()), following, content);
+        (document, reached)
+    }
+
+    /// What the plaque says about the session itself, as against the colophon
+    /// beneath it, which is about the render.
+    ///
+    /// Its own block because every one of these grows as a session does: a
+    /// followed folio is sent this again whenever it gains a panel, so the facts
+    /// keep pace with the transcript instead of describing the session as it
+    /// stood when the page was opened.
+    pub fn facts(&self, folio: &Folio, panels: &[Panel]) -> Markup {
+        html! {
+            dl .plaque__facts {
+                dt { "source" } dd { code { (folio.source.display().to_string()) } }
+                dt { "turns" } dd { (panels.len()) }
+                @if let Some(first) = panels.first() {
+                    dt { "opened" } dd { (self.stamp(first.timestamp())) }
+                }
+                // The session's flux: how big the conversation ever got, against
+                // all the output. The input is the largest single turn's rather
+                // than a sum, since every turn is sent the whole conversation.
+                @if let (Some(input), Some(output)) = (folio.largest_input(), folio.output()) {
+                    dt { "tokens" } dd title=(folio_flux(input, output)) { (tally(input, output)) }
+                }
+            }
+        }
+    }
+
+    /// One leaf of the codex: the chrome every page shares, wrapped around
+    /// whatever that page has to say. A folio and a listing are illuminated
+    /// alike, read by the same lights, and dressed the same way, because they are
+    /// leaves of one volume rather than a document and a menu in front of it.
+    ///
+    /// `folio` names the session a page's stored state belongs to, and only a
+    /// folio has one: a listing remembers nothing about itself, and naming it
+    /// here would enter it into a scope it has no state in. It seeds the margins
+    /// too, so each page's borders are its own.
+    ///
+    /// `live` names the stream this page follows to be told of a change. Its
+    /// presence is the whole of what tells the app script to listen, so a written
+    /// folio names none and nothing in it waits.
+    fn leaf(
+        &self,
+        title: &str,
+        faces: Asset,
+        folio: Option<&str>,
+        live: Option<Stream<'_>>,
+        content: Markup,
+    ) -> Markup {
+        let seed = folio.unwrap_or("codex");
+        let left = margin_strip(border_seed(seed, "left"));
+        let right = margin_strip(border_seed(seed, "right"));
+        let live = live.map(|stream| stream.url());
+        html! {
+            (DOCTYPE)
+            (PreEscaped(font_notice()))
+            html lang="en" {
+                head {
+                    meta charset="utf-8";
+                    meta name="viewport" content="width=device-width, initial-scale=1";
+                    title { (title) }
+                    (self.dress(faces))
+                }
+                body data-folio=[folio] data-live=[live.as_deref()] {
+                    // Illuminated borders down each outer margin: a strip of vine
+                    // sections with drolleries seated among them, tiled by the
+                    // stylesheet. Purely decorative, so hidden from assistive
+                    // tech.
+                    div .margin.margin--left style=(format!("background-image:url({left})")) aria-hidden="true" {}
+                    div .margin.margin--right style=(format!("background-image:url({right})")) aria-hidden="true" {}
+                    (content)
+                }
+            }
+        }
+    }
+
+    /// The stylesheet and script for one page's `<head>`: inlined, which is what
+    /// makes a written folio a single portable file, or linked, which is what
+    /// keeps a reader browsing a codex from downloading the faces once per
+    /// session they open.
+    ///
+    /// Either way the script sits in `<head>` and stays a *classic* script, so
+    /// the stored theme applies before the body paints (a module is deferred,
+    /// and would paint first). The core comes ahead of the shell so the shell
+    /// closes over it: two files because one is pure and testable without a
+    /// browser, one inlined script because a written folio is one file.
+    fn dress(&self, faces: Asset) -> Markup {
+        match self.delivery.links() {
+            false => html! {
+                style {
+                    (PreEscaped(faces.body()))
+                    (PreEscaped(Asset::Style.body()))
+                }
+                script {
+                    (PreEscaped(Asset::Core.body()))
+                    (PreEscaped(Asset::Shell.body()))
+                }
+            },
+            true => html! {
+                // Named, so a page told that a panel has arrived setting a
+                // character the cut faces dropped can be dressed in the whole
+                // ones without being reloaded.
+                link rel="stylesheet" data-faces href=(faces.url());
+                link rel="stylesheet" href=(Asset::Style.url());
+                script src=(Asset::Core.url()) {}
+                script src=(Asset::Shell.url()) {}
+            },
+        }
+    }
+
+    /// The codex itself: every quire the scriptorium holds, each showing the
+    /// sessions most recently written in it, so the session being written right
+    /// now is on the front page rather than two clicks into it.
+    pub fn codex(&self, shelf: &Shelf) -> Markup {
+        let content = html! {
+            (luminaries())
+            main .codex {
+                header .codex__head {
+                    h1 .codex__title { "codex" }
+                    p .codex__lead {
+                        "Every session this machine has recorded, most recently worked in first."
+                    }
+                }
+                // The listing proper, marked as the part that is replaced when
+                // the codex is told something changed: a session written, a
+                // project worked in, or simply another minute passing under the
+                // "how long ago" each row states.
+                div .codex__shelf data-listing {
+                    (self.shelf(shelf))
                 }
             }
         };
-        (document, reached)
+        self.leaf(
+            "codex",
+            self.faces(!beyond_cut(&shelf.labels()).is_empty()),
+            None,
+            Some(Stream::Shelf),
+            content,
+        )
+    }
+
+    /// One quire's own page: every session in it, however many that is.
+    pub fn quire(&self, quire: &Shelved) -> Markup {
+        let content = html! {
+            (luminaries())
+            main .codex {
+                header .codex__head {
+                    a .codex__up href="/" { "‹ codex" }
+                    // A path, set as one: every other path in a folio is in the
+                    // mono face, and the blackletter the codex titles itself in
+                    // is for a word rather than for a line of directories.
+                    h1 .codex__title.codex__title--path { (quire.project) }
+                }
+                div .codex__shelf data-listing {
+                    (self.shelved(quire, true))
+                }
+            }
+        };
+        self.leaf(
+            &format!("quire {}", quire.project),
+            self.faces(!beyond_cut(&quire.labels()).is_empty()),
+            None,
+            Some(Stream::Quire(&quire.id)),
+            content,
+        )
+    }
+
+    /// Every quire, as the codex page's listing. This is what a codex being
+    /// followed is sent when something under it changes, so it is set apart from
+    /// the page it sits in rather than written into it.
+    pub fn shelf(&self, shelf: &Shelf) -> Markup {
+        html! {
+            @if shelf.quires.is_empty() {
+                p .codex__empty { "No sessions recorded yet." }
+            }
+            @for quire in &shelf.quires {
+                (self.shelved(quire, false))
+            }
+        }
+    }
+
+    /// One quire, as its own page's listing. See [`Scribe::shelf`].
+    pub fn leaves(&self, quire: &Shelved) -> Markup {
+        self.shelved(quire, true)
+    }
+
+    /// A quire as a listing shows it: what it is, when it was last worked in,
+    /// and the sessions gathered in it. On its own page every session is here,
+    /// so there is nothing left to send the reader on to.
+    fn shelved(&self, quire: &Shelved, whole: bool) -> Markup {
+        html! {
+            section .quire data-live[quire.is_live()] {
+                // On its own page the quire is already the title, so naming it
+                // again over its own sessions would say the same thing twice.
+                @if !whole {
+                    header .quire__head {
+                        a .quire__project href=(format!("/quire/{}", quire.id)) { (quire.project) }
+                        span .quire__when { (quire.when) }
+                    }
+                }
+                ul .quire__sessions {
+                    @for session in &quire.sessions {
+                        li .listed data-live[session.is_live] {
+                            a .listed__title href=(format!("/folio/{}", session.id)) {
+                                (session.title)
+                            }
+                            span .listed__facts {
+                                // A session still being written is the one a
+                                // reader is usually after, so it says so in
+                                // words rather than by a mark alone.
+                                @if session.is_live {
+                                    span .listed__live { "being written" }
+                                }
+                                span .listed__when { (session.when) }
+                                span .listed__size { (size(session.bytes as usize)) }
+                            }
+                        }
+                    }
+                }
+                // Nothing is left out of a quire's own page, so nothing there
+                // sends the reader to the page they are on.
+                @if !whole && quire.more > 0 {
+                    a .quire__more href=(format!("/quire/{}", quire.id)) {
+                        (format!("and {} more", quire.more))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Which cut of the faces a page carries, given whether anything on it
+    /// reached beyond the cut ones.
+    ///
+    /// Every page answers this the same way, folio and listing alike: a listing's
+    /// own words are this crate's, but the titles and project paths in it came out
+    /// of transcripts, so cutting must never render one worse than upstream would
+    /// there either. It is also what a followed folio asks again as it grows,
+    /// since a panel that arrives setting a dropped character has to bring the
+    /// whole faces with it.
+    pub fn faces(&self, reached: bool) -> Asset {
+        match self.fonts {
+            Fonts::Whole => Asset::FacesWhole,
+            Fonts::Fitted if reached => Asset::FacesWhole,
+            Fonts::Fitted => Asset::FacesCut,
+        }
     }
 
     fn stamp(&self, timestamp: Timestamp) -> String {
@@ -796,6 +1201,46 @@ const CELL_HEIGHT: u32 = 210;
 const STRIP_CELLS: usize = 48;
 
 /// The vine cell, the border's default section.
+/// Presentation controls, opposite the navigation dock: the lights a page can be
+/// read by, which are also the controls that choose between them. There is no
+/// separate toggle to label, because the reader presses the light they want: the
+/// sun for day, the candle for after dark.
+///
+/// Which of them is *lit* is the scheme's to say, not the press's: by day the sun
+/// burns and the candle stands smoking, after dark the moon hangs and the candle
+/// is lit. That is one set of `light-dark()` pigments (see the stylesheet), so a
+/// page still reads either way with no second set of rules and nothing rendered
+/// for one scheme alone. What the press changes is which scheme is in force.
+///
+/// Each carries its own radiance, the light it throws across the leaf, so the
+/// glow comes from whichever is burning. Drawn rather than lettered, so each
+/// needs the name it used to spell out: a figure says nothing to a reader who
+/// cannot see it.
+fn luminaries() -> Markup {
+    html! {
+        div .controls {
+            div .luminaries role="group" aria-label="colour theme" {
+                button .luminary type="button" data-theme-choice="light"
+                    aria-label="read by daylight" title="read by daylight" {
+                    span .luminary__radiance .luminary__radiance--day {}
+                    (PreEscaped(SUN))
+                }
+                button .luminary type="button" data-theme-choice="dark"
+                    aria-label="read by candlelight" title="read by candlelight" {
+                    span .luminary__radiance .luminary__radiance--night {}
+                    (PreEscaped(CANDLE))
+                }
+                // Only of use once a light has been chosen, so the stylesheet
+                // shows it only then, keyed off the `data-theme` the choice sets
+                // on the document.
+                button .theme-reset type="button" data-theme-choice="system"
+                    aria-pressed="true" aria-label="follow the system"
+                    title="follow the system" { (PreEscaped(SYSTEM)) }
+            }
+        }
+    }
+}
+
 const VINE_CELL: &str = include_str!("drolleries/vine.svg");
 
 /// A vine stub that eases the border into a drollery: baked above each creature

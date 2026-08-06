@@ -1,0 +1,1064 @@
+//! The codex: one server for every folio the scriptorium holds, each following
+//! its session as it is written.
+//!
+//! Two scopes, one server. Pointed at a projects root it lists every quire and
+//! serves any session in it; pointed at a single session it serves that folio and
+//! nothing else, which is the render loop. What differs between them is what `/`
+//! answers with and which sessions can be named; everything below that (the
+//! assets, the folio page, the stream) is the same code, so the two cannot drift
+//! apart.
+//!
+//! **A page is patched, not reloaded.** A panel's id is its turn number, which
+//! counts the raw records of a session file that is only ever appended to, so a
+//! panel keeps its id however much the session grows (see [`Scribe::panels`]).
+//! The server therefore sets the session again, compares the panels it got with
+//! the ones it last sent, and pushes only those that differ. A reader keeps their
+//! scroll position, their open folds, their search, and their place in the
+//! conversation, because nothing about the page is thrown away to add to it.
+//!
+//! **Nothing about a session is read on the request path.** One watcher thread
+//! holds every mutable thing here: the listing, the titles it has read, and the
+//! last setting of each folio being read. It looks for changes on a timer, and
+//! only for folios someone actually has open, so an idle codex does no work.
+
+use std::{
+    collections::HashMap,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    },
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{Result, anyhow};
+use serde_json::{Value, json};
+use tiny_http::{Header, Request, Response, Server};
+
+use crate::{
+    catalogue::{Catalogue, Peeks, Shelf, Shelved},
+    render::{self, Asset, Colophon, Scribe},
+    transcript::Folio,
+};
+
+/// How often the watcher looks for a change. Short enough that a session reads
+/// as live, long enough that a metadata check per open folio is nothing.
+const TICK: Duration = Duration::from_millis(400);
+
+/// How long a stream may say nothing before it says nothing out loud. A silent
+/// connection is one an intermediary may decide is dead, so an idle codex sends
+/// a comment rather than trusting the path to hold.
+const HEARTBEAT: Duration = Duration::from_secs(15);
+
+/// How long to keep trying a session that will not parse. A live session is
+/// caught mid-line often enough to matter, and a half-written line is finished
+/// microseconds later, so the answer is to ask again rather than to hand the
+/// reader a failure. A session that is genuinely malformed still fails, having
+/// cost half a second.
+const PATIENCE: usize = 12;
+const BREATH: Duration = Duration::from_millis(40);
+
+/// What a codex is serving.
+pub enum Scope {
+    /// Every session under a projects root, listed and browsable.
+    Codex { root: PathBuf },
+    /// One session, named on the command line. There is no listing above it, so
+    /// nothing links to one.
+    Folio { session: PathBuf },
+}
+
+/// Serves until interrupted. `address` is what the server binds, `open` asks for
+/// the reader's browser to be pointed at it once it is up.
+pub fn run(address: &str, scope: Scope, open: bool, scribe: &Scribe<'_>) -> Result<()> {
+    let server = bind(address)?;
+    let codex = Codex::new(scope, scribe);
+    println!("serving http://{address}  (Ctrl-C to stop)");
+    if open {
+        let _ = open::that(format!("http://{address}"));
+    }
+
+    // Scoped, so the watcher and every request can borrow the scribe rather than
+    // the server having to own a `'static` copy of everything a render needs.
+    thread::scope(|threads| {
+        threads.spawn(|| codex.watch());
+        for request in server.incoming_requests() {
+            // A thread per request rather than a pool: a stream holds its
+            // connection for as long as its reader has the page open, and a pool
+            // would spend its workers on waiting.
+            threads.spawn(|| codex.answer(request));
+        }
+    });
+    Ok(())
+}
+
+/// Binds the port, retrying briefly so a restart can reclaim it from the
+/// previous run's lingering connections before giving up.
+fn bind(address: &str) -> Result<Server> {
+    let mut last = None;
+    for _ in 0..40 {
+        match Server::http(address) {
+            Ok(server) => return Ok(server),
+            Err(error) => {
+                last = Some(error.to_string());
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    Err(anyhow!(
+        "could not bind {address}: {}",
+        last.unwrap_or_default()
+    ))
+}
+
+struct Codex<'a> {
+    scope: Scope,
+    scribe: &'a Scribe<'a>,
+    /// This run of the server. A page told a different one is a page set by a
+    /// binary that is no longer running, which is the render loop's cue to
+    /// reload: a change to the stylesheet or to the renderer reaches a reader no
+    /// other way.
+    boot: String,
+    state: Mutex<State>,
+    listeners: AtomicU64,
+}
+
+/// Everything mutable, in one place, behind one lock. The contention is a listing
+/// against a tick every few hundred milliseconds, so nothing here is worth
+/// splitting up.
+#[derive(Default)]
+struct State {
+    catalogue: Catalogue,
+    peeks: Peeks,
+    /// The last setting of each folio someone has open, by session id.
+    folios: HashMap<String, Set>,
+    /// The last listing markup sent for each kind of listing page open.
+    listings: HashMap<Watching, String>,
+    listeners: Vec<Listener>,
+}
+
+/// One setting of a folio: what the reader following it is holding.
+struct Set {
+    /// The state of the session file this was set from, which is what a
+    /// reconnecting page reports back so the catch-up can be measured.
+    stamp: String,
+    panels: Vec<(usize, String)>,
+    facts: String,
+    /// Which cut of the faces the page is dressed in. A panel that arrives
+    /// setting a character the cut faces dropped has to bring the whole ones
+    /// with it, or a followed folio would render that character worse than a
+    /// written one.
+    faces: Asset,
+}
+
+/// One open page, and the frames it is waiting for.
+struct Listener {
+    id: u64,
+    watching: Watching,
+    frames: Sender<String>,
+}
+
+/// What an open page is being told about.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum Watching {
+    Shelf,
+    Quire(String),
+    Folio(String),
+}
+
+/// What a URL names. Parsing it is a pure function of the path, so every shape a
+/// request can take is a test rather than a socket.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Resource {
+    /// The codex's own listing, which under a single-session scope is the folio.
+    Shelf,
+    Quire(String),
+    Folio(String),
+    Asset(Asset),
+    /// A stream to follow, and the state the page asking already holds.
+    Live(Watching, Option<String>),
+    Missing,
+}
+
+fn route(url: &str) -> Resource {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let from = || {
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("from="))
+            .map(str::to_owned)
+    };
+    // An id is a file stem or Claude Code's own encoded directory name, neither
+    // of which holds a separator, and nothing here joins a path out of one
+    // regardless: an id is looked up in the listing (see `Catalogue::session`).
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    match parts.as_slice() {
+        [] => Resource::Shelf,
+        ["quire", id] => Resource::Quire((*id).to_owned()),
+        ["folio", id] => Resource::Folio((*id).to_owned()),
+        // The token names the assets' contents, so a request carrying a stale one
+        // is asking for something this binary does not have. Answering 404 rather
+        // than serving today's bytes under yesterday's name is what keeps the
+        // immutable caching honest.
+        ["asset", token, name] if *token == render::ASSET_TOKEN => {
+            Asset::named(name).map_or(Resource::Missing, Resource::Asset)
+        }
+        ["live"] => Resource::Live(Watching::Shelf, from()),
+        ["live", "quire", id] => Resource::Live(Watching::Quire((*id).to_owned()), from()),
+        ["live", "folio", id] => Resource::Live(Watching::Folio((*id).to_owned()), from()),
+        _ => Resource::Missing,
+    }
+}
+
+/// What changed between two settings of one folio, as turn numbers: which panels
+/// to set again, and which the folio no longer has.
+///
+/// Keyed by turn number rather than by position, which is what makes a patch
+/// small: a tool result joins the panel holding its call, so a session usually
+/// changes its last panel or two and adds one, however long it is.
+///
+/// Answering with numbers rather than markup keeps this a function of its
+/// arguments with nothing to copy; the caller looks up what it sends.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct Patch {
+    changed: Vec<usize>,
+    gone: Vec<usize>,
+}
+
+impl Patch {
+    fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.gone.is_empty()
+    }
+}
+
+fn patch(before: &[(usize, String)], after: &[(usize, String)]) -> Patch {
+    let held: HashMap<usize, &str> = before
+        .iter()
+        .map(|(turn, markup)| (*turn, markup.as_str()))
+        .collect();
+    let changed = after
+        .iter()
+        .filter(|(turn, markup)| held.get(turn) != Some(&markup.as_str()))
+        .map(|(turn, _)| *turn)
+        .collect();
+    let standing: HashMap<usize, ()> = after.iter().map(|(turn, _)| (*turn, ())).collect();
+    let gone = before
+        .iter()
+        .map(|(turn, _)| *turn)
+        .filter(|turn| !standing.contains_key(turn))
+        .collect();
+    Patch { changed, gone }
+}
+
+impl<'a> Codex<'a> {
+    fn new(scope: Scope, scribe: &'a Scribe<'a>) -> Self {
+        Self {
+            scope,
+            scribe,
+            boot: format!("{}", nanos(SystemTime::now())),
+            state: Mutex::new(State::default()),
+            listeners: AtomicU64::new(0),
+        }
+    }
+
+    // --- The control plane -------------------------------------------------
+
+    /// Looks for changes on a timer, for the pages someone actually has open.
+    ///
+    /// Everything that reads a session happens here rather than while a request
+    /// waits: a folio nobody is reading is never set, and a listing nobody is
+    /// looking at is never gathered.
+    fn watch(&self) {
+        loop {
+            thread::sleep(TICK);
+            for watching in self.watched() {
+                match &watching {
+                    Watching::Folio(id) => {
+                        if let Some(path) = self.locate(id) {
+                            // A session caught mid-write simply has not changed
+                            // yet: the last good setting stands, and the next
+                            // tick asks again. Nothing reaches the reader until a
+                            // whole setting succeeds.
+                            let _ = self.reset(id, &path);
+                        }
+                    }
+                    _ => self.relist(&watching),
+                }
+            }
+        }
+    }
+
+    /// What at least one open page is being told about.
+    fn watched(&self) -> Vec<Watching> {
+        let state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        let mut watched: Vec<Watching> = Vec::new();
+        for listener in &state.listeners {
+            if !watched.contains(&listener.watching) {
+                watched.push(listener.watching.clone());
+            }
+        }
+        watched
+    }
+
+    /// Sets a folio again, tells everyone following it what changed, and holds
+    /// the result as what those readers are now holding.
+    ///
+    /// A subscription and a tick both come through here, so a reader can never be
+    /// left holding a state no patch was ever measured against.
+    ///
+    /// A session that has not been written since the last setting is not set
+    /// again: the stamp is the file's own, and a setting is a pure function of the
+    /// file, so an unchanged stamp means the answer would be the same markup. Only
+    /// the stamp is looked at on a tick, which is one `metadata` call per open
+    /// folio, where setting one again is most of a render.
+    fn reset(&self, id: &str, path: &Path) -> Result<()> {
+        let stamp = stamp(path);
+        if self.holds(id, &stamp) {
+            return Ok(());
+        }
+        let folio = read(path)?;
+        let panels = folio.panels();
+        let (set, reached) = self.scribe.panels(&panels);
+        let facts = self.scribe.facts(&folio, &panels).into_string();
+        let faces = self.scribe.faces(!reached.is_empty());
+
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        if let Some(held) = state.folios.get(id) {
+            let patch = patch(&held.panels, &set);
+            // The faces are named only when they change, so a folio that was
+            // already dressed in the whole ones says nothing about them.
+            let dress = (faces != held.faces).then(|| faces.url());
+            if !patch.is_empty() || facts != held.facts || dress.is_some() {
+                let data = told(&stamp, &patch, &set, &facts, dress.as_deref());
+                state.tell(
+                    &Watching::Folio(id.to_owned()),
+                    "panels",
+                    &data,
+                    Some(&stamp),
+                );
+            }
+        }
+        state.folios.insert(
+            id.to_owned(),
+            Set {
+                stamp,
+                panels: set,
+                facts,
+                faces,
+            },
+        );
+        Ok(())
+    }
+
+    /// Whether the setting already held for this folio was made from the session
+    /// as it now stands.
+    fn holds(&self, id: &str, stamp: &str) -> bool {
+        let state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        state.folios.get(id).is_some_and(|held| held.stamp == stamp)
+    }
+
+    /// Gathers a listing again and sends it if it says anything new. A listing is
+    /// a few kilobytes, so it is replaced whole rather than picked apart: what
+    /// changes as a session is written is every row's "how long ago" as much as
+    /// the rows themselves.
+    fn relist(&self, watching: &Watching) {
+        let Some(markup) = self.listing(watching) else {
+            return;
+        };
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        if state.listings.get(watching) == Some(&markup) {
+            return;
+        }
+        state.listings.insert(watching.clone(), markup.clone());
+        let data = json!({ "html": markup }).to_string();
+        state.tell(watching, "listing", &data, None);
+    }
+
+    /// One listing's markup, gathered fresh. `None` when the quire a page names
+    /// is no longer there, in which case the page keeps what it has until its
+    /// reader goes back up.
+    fn listing(&self, watching: &Watching) -> Option<String> {
+        let root = self.root()?;
+        let catalogue = Catalogue::scan(root).ok()?;
+        let now = SystemTime::now();
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        state.peeks.keep_to(&catalogue);
+        let markup = match watching {
+            Watching::Shelf => {
+                let shelf = Shelf::of(&catalogue, &mut state.peeks, now);
+                self.scribe.shelf(&shelf).into_string()
+            }
+            Watching::Quire(id) => {
+                let quire = catalogue.quire(id)?;
+                let shelved = Shelved::whole(quire, &mut state.peeks, now);
+                self.scribe.leaves(&shelved).into_string()
+            }
+            Watching::Folio(_) => return None,
+        };
+        state.catalogue = catalogue;
+        Some(markup)
+    }
+
+    // --- Where a session is ------------------------------------------------
+
+    fn root(&self) -> Option<&Path> {
+        match &self.scope {
+            Scope::Codex { root } => Some(root),
+            Scope::Folio { .. } => None,
+        }
+    }
+
+    /// The session a URL's id names.
+    ///
+    /// A single-session scope answers for its own session and nothing else. A
+    /// codex answers out of the listing, rescanning once when the id is not in
+    /// it: a session recorded since the last scan is a miss to fill, not a
+    /// stranger. Either way no path is composed from what a request said.
+    fn locate(&self, id: &str) -> Option<PathBuf> {
+        match &self.scope {
+            Scope::Folio { session } => (stem(session) == id).then(|| session.clone()),
+            Scope::Codex { root } => {
+                if let Some(found) = self.filed(id) {
+                    return Some(found);
+                }
+                let catalogue = Catalogue::scan(root).ok()?;
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("the codex's state is not poisoned");
+                state.catalogue = catalogue;
+                state.catalogue.session(id).map(|found| found.path.clone())
+            }
+        }
+    }
+
+    fn filed(&self, id: &str) -> Option<PathBuf> {
+        let state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        state.catalogue.session(id).map(|found| found.path.clone())
+    }
+
+    // --- The request path --------------------------------------------------
+
+    fn answer(&self, request: Request) {
+        let resource = route(request.url());
+        match resource {
+            Resource::Live(watching, from) => self.stream(request, watching, from),
+            Resource::Asset(asset) => respond(request, asset_response(asset)),
+            other => match self.page(&other) {
+                Ok(Some(page)) => respond(request, page_response(page)),
+                Ok(None) => respond(request, missing()),
+                Err(error) => respond(request, failed(&error)),
+            },
+        }
+    }
+
+    /// One page's markup, or `None` for a resource this codex does not hold.
+    fn page(&self, resource: &Resource) -> Result<Option<String>> {
+        match resource {
+            // Under a single-session scope the root *is* the folio: there is no
+            // listing to stand in front of one session.
+            Resource::Shelf => match &self.scope {
+                Scope::Folio { session } => self.folio(&stem(session)).map(Some),
+                Scope::Codex { .. } => Ok(Some(self.shelf_page())),
+            },
+            Resource::Quire(id) => Ok(self.quire_page(id)),
+            Resource::Folio(id) => match self.locate(id) {
+                Some(_) => self.folio(id).map(Some),
+                None => Ok(None),
+            },
+            Resource::Asset(_) | Resource::Live(..) | Resource::Missing => Ok(None),
+        }
+    }
+
+    fn shelf_page(&self) -> String {
+        let now = SystemTime::now();
+        let catalogue = self
+            .root()
+            .and_then(|root| Catalogue::scan(root).ok())
+            .unwrap_or_default();
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        state.peeks.keep_to(&catalogue);
+        let shelf = Shelf::of(&catalogue, &mut state.peeks, now);
+        state.catalogue = catalogue;
+        let page = self.scribe.codex(&shelf).into_string();
+        state
+            .listings
+            .insert(Watching::Shelf, self.scribe.shelf(&shelf).into_string());
+        page
+    }
+
+    fn quire_page(&self, id: &str) -> Option<String> {
+        let now = SystemTime::now();
+        let catalogue = Catalogue::scan(self.root()?).ok()?;
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        let quire = catalogue.quire(id)?;
+        let shelved = Shelved::whole(quire, &mut state.peeks, now);
+        state.catalogue = catalogue;
+        let page = self.scribe.quire(&shelved).into_string();
+        state.listings.insert(
+            Watching::Quire(id.to_owned()),
+            self.scribe.leaves(&shelved).into_string(),
+        );
+        Some(page)
+    }
+
+    /// A folio, set from the session as it stands, and told which state it was
+    /// set from so it can be followed from there.
+    fn folio(&self, id: &str) -> Result<String> {
+        let path = self
+            .locate(id)
+            .ok_or_else(|| anyhow!("no session named {id}"))?;
+        let stamp = stamp(&path);
+        let folio = read(&path)?;
+        let set = render::set(self.scribe, &folio, &Colophon::now(), Some(&stamp));
+        eprintln!(
+            "{} {} in {}",
+            id,
+            render::size(set.document.len()),
+            render::elapsed(set.labour.took)
+        );
+        Ok(set.document)
+    }
+
+    // --- The stream --------------------------------------------------------
+
+    /// Follows a page for as long as its reader has it open.
+    ///
+    /// The reader says what they already hold, either in `Last-Event-ID` (which
+    /// the browser resends on its own after a dropped connection) or in the `from`
+    /// the page was set with. A page that is already current is told nothing; one
+    /// that fell behind is sent the folio as it stands, which is the honest answer
+    /// when the server no longer holds the state that page was set from.
+    fn stream(&self, request: Request, watching: Watching, from: Option<String>) {
+        let held = resumed(&request).or(from);
+        let (frames, waiting) = mpsc::channel();
+        let id = self.listeners.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut state = self
+                .state
+                .lock()
+                .expect("the codex's state is not poisoned");
+            state.listeners.push(Listener {
+                id,
+                watching: watching.clone(),
+                frames,
+            });
+        }
+
+        // Bring this page up to date before anything else can change under it.
+        self.greet(&watching, held.as_deref(), id);
+
+        let mut writer = request.into_writer();
+        let outcome = self.pour(&mut writer, &waiting);
+        drop(writer);
+
+        let mut state = self
+            .state
+            .lock()
+            .expect("the codex's state is not poisoned");
+        state.listeners.retain(|listener| listener.id != id);
+        // A folio nobody is reading is not worth holding a setting of, and the
+        // next reader's page will be measured against their own load.
+        if !state
+            .listeners
+            .iter()
+            .any(|listener| listener.watching == watching)
+        {
+            match &watching {
+                Watching::Folio(session) => {
+                    state.folios.remove(session);
+                }
+                other => {
+                    state.listings.remove(other);
+                }
+            }
+        }
+        if let Err(error) = outcome {
+            // A reader closing a tab is an ordinary end to a stream, not a fault.
+            if error.kind() != io::ErrorKind::BrokenPipe {
+                eprintln!("stream ended: {error}");
+            }
+        }
+    }
+
+    /// What a page is told the moment it starts listening: which run of the
+    /// server it is talking to, and whatever it is missing.
+    fn greet(&self, watching: &Watching, held: Option<&str>, id: u64) {
+        let hello = json!({ "boot": self.boot }).to_string();
+        {
+            let state = self
+                .state
+                .lock()
+                .expect("the codex's state is not poisoned");
+            state.only(id, "hello", &hello, None);
+        }
+
+        match watching {
+            Watching::Folio(session) => {
+                if let Some(path) = self.locate(session) {
+                    // Set it again first, so what this page is measured against
+                    // is the session as it stands rather than as it was when
+                    // somebody else's page was served.
+                    let _ = self.reset(session, &path);
+                }
+                let state = self
+                    .state
+                    .lock()
+                    .expect("the codex's state is not poisoned");
+                let Some(set) = state.folios.get(session) else {
+                    return;
+                };
+                if held == Some(set.stamp.as_str()) {
+                    return;
+                }
+                // The page holds a state this server does not, so the only honest
+                // answer is the folio as it stands. Every panel is keyed by its
+                // turn number, so setting them all again lands exactly where the
+                // page already agrees and replaces what it does not.
+                let whole = Patch {
+                    changed: set.panels.iter().map(|(turn, _)| *turn).collect(),
+                    gone: Vec::new(),
+                };
+                let data = told(
+                    &set.stamp,
+                    &whole,
+                    &set.panels,
+                    &set.facts,
+                    Some(&set.faces.url()),
+                );
+                state.only(id, "panels", &data, Some(&set.stamp));
+            }
+            listing => {
+                let Some(markup) = self.listing(listing) else {
+                    return;
+                };
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("the codex's state is not poisoned");
+                state.listings.insert(listing.clone(), markup.clone());
+                let data = json!({ "html": markup }).to_string();
+                state.only(id, "listing", &data, None);
+            }
+        }
+    }
+
+    /// Writes frames as they arrive, and a comment when none does, until the
+    /// reader goes away.
+    fn pour(&self, writer: &mut dyn Write, waiting: &Receiver<String>) -> io::Result<()> {
+        write!(writer, "{}", head())?;
+        // A hint at how long to wait before reconnecting, so a restart is picked
+        // up in about a second rather than in whatever the browser defaults to.
+        chunk(writer, "retry: 1000\n\n")?;
+        loop {
+            match waiting.recv_timeout(HEARTBEAT) {
+                Ok(frame) => chunk(writer, &frame)?,
+                Err(RecvTimeoutError::Timeout) => chunk(writer, ": still here\n\n")?,
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+        }
+    }
+}
+
+impl State {
+    /// Tells every page watching the same thing. A listener whose reader has gone
+    /// is dropped by its own thread, so a failed send here is simply a race with
+    /// that and is nothing to answer for.
+    fn tell(&self, watching: &Watching, event: &str, data: &str, id: Option<&str>) {
+        let frame = frame(event, data, id);
+        for listener in &self.listeners {
+            if &listener.watching == watching {
+                let _ = listener.frames.send(frame.clone());
+            }
+        }
+    }
+
+    /// Tells one page, which is how a page that has just started listening is
+    /// caught up without telling every other page what it already knows.
+    fn only(&self, id: u64, event: &str, data: &str, stamp: Option<&str>) {
+        if let Some(listener) = self.listeners.iter().find(|listener| listener.id == id) {
+            let _ = listener.frames.send(frame(event, data, stamp));
+        }
+    }
+}
+
+/// What a folio's reader is told: the panels to set, the ones to drop, the plaque
+/// facts as they now stand, and, when it has changed, the faces to be dressed in.
+fn told(
+    stamp: &str,
+    patch: &Patch,
+    panels: &[(usize, String)],
+    facts: &str,
+    faces: Option<&str>,
+) -> String {
+    let held: HashMap<usize, &str> = panels
+        .iter()
+        .map(|(turn, markup)| (*turn, markup.as_str()))
+        .collect();
+    let set: Vec<Value> = patch
+        .changed
+        .iter()
+        .filter_map(|turn| {
+            held.get(turn)
+                .map(|markup| json!({ "turn": turn, "html": markup }))
+        })
+        .collect();
+    json!({
+        "stamp": stamp,
+        "panels": set,
+        "gone": patch.gone,
+        "facts": facts,
+        "faces": faces,
+    })
+    .to_string()
+}
+
+/// One event, as the wire carries it.
+///
+/// The data is split on newlines because that is what the format means by a line;
+/// compact JSON never holds one, so this costs nothing and cannot be caught out
+/// by a payload that does.
+fn frame(event: &str, data: &str, id: Option<&str>) -> String {
+    let mut frame = String::new();
+    if let Some(id) = id {
+        frame.push_str(&format!("id: {id}\n"));
+    }
+    frame.push_str(&format!("event: {event}\n"));
+    for line in data.split('\n') {
+        frame.push_str(&format!("data: {line}\n"));
+    }
+    frame.push('\n');
+    frame
+}
+
+/// The response head for a stream, written by hand because a stream has no length
+/// to declare and tiny_http has no streaming response of its own.
+///
+/// Chunked rather than closed-delimited, so an intermediary is told where each
+/// event ends rather than having to wait for the connection to end to find out.
+/// `X-Accel-Buffering` says the same thing to the proxies that read it.
+fn head() -> String {
+    [
+        "HTTP/1.1 200 OK",
+        "Content-Type: text/event-stream; charset=utf-8",
+        "Cache-Control: no-store",
+        "Connection: close",
+        "Transfer-Encoding: chunked",
+        "X-Accel-Buffering: no",
+        "",
+        "",
+    ]
+    .join("\r\n")
+}
+
+/// One chunk, flushed at once: a frame held in a buffer is a change the reader
+/// has not been told about.
+fn chunk(writer: &mut dyn Write, text: &str) -> io::Result<()> {
+    write!(writer, "{:x}\r\n{text}\r\n", text.len())?;
+    writer.flush()
+}
+
+/// What the browser resends after a dropped connection, which is the last state
+/// it was told about. It is preferred over the page's own `from`, since the page
+/// may have been following for hours by then.
+fn resumed(request: &Request) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Last-Event-ID"))
+        .map(|header| header.value.as_str().to_owned())
+}
+
+/// The state of a session file, as one word: a page reports it back so a
+/// catch-up can be measured without the server keeping a history. A file that
+/// cannot be read has no state to name, which is not a state any render matches.
+fn stamp(path: &Path) -> String {
+    let Ok(metadata) = path.metadata() else {
+        return "gone".to_owned();
+    };
+    let modified = metadata.modified().map(nanos).unwrap_or(0);
+    format!("{modified}-{}", metadata.len())
+}
+
+fn nanos(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0)
+}
+
+fn stem(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session".to_owned())
+}
+
+/// Reads a session, asking again if it will not parse.
+///
+/// A live session is caught between a line being written and its newline often
+/// enough to matter, and that line is complete a moment later, so this retries
+/// the same read rather than reaching for a different answer.
+fn read(path: &Path) -> Result<Folio> {
+    let mut last = None;
+    for attempt in 0..PATIENCE {
+        match Folio::read(path) {
+            Ok(folio) => return Ok(folio),
+            Err(error) => last = Some(error),
+        }
+        if attempt + 1 < PATIENCE {
+            thread::sleep(BREATH);
+        }
+    }
+    Err(last.expect("a read that never succeeded left an error behind"))
+}
+
+fn respond<R: io::Read>(request: Request, response: Response<R>) {
+    let _ = request.respond(response);
+}
+
+/// A page is never cached: it is the session as it stood a moment ago, and the
+/// stream it names takes it from there.
+fn page_response(page: String) -> Response<io::Cursor<Vec<u8>>> {
+    Response::from_string(page)
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
+}
+
+/// An asset is cached forever, because its URL names its contents: a stylesheet
+/// edited between two runs of the server is a different URL, so no reader can be
+/// left holding the old one (see [`Resource`] on a stale token).
+fn asset_response(asset: Asset) -> Response<io::Cursor<Vec<u8>>> {
+    // The faces are a copy of the fonts, so they carry the copyright notice a
+    // written folio carries as a comment above its markup.
+    let body = match asset.is_faces() {
+        true => format!("{}{}", render::faces_notice(), asset.body()),
+        false => asset.body().to_owned(),
+    };
+    Response::from_string(body)
+        .with_header(header("Content-Type", asset.mime()))
+        .with_header(header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        ))
+}
+
+fn missing() -> Response<io::Cursor<Vec<u8>>> {
+    Response::from_string("not in this codex")
+        .with_status_code(404)
+        .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+}
+
+/// A session that would not parse after every retry. The message is the parse
+/// error, file and line included, because that is what says which line of which
+/// session to look at.
+fn failed(error: &anyhow::Error) -> Response<io::Cursor<Vec<u8>>> {
+    Response::from_string(format!("{error:#}"))
+        .with_status_code(500)
+        .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+}
+
+fn header(field: &str, value: &str) -> Header {
+    Header::from_bytes(field.as_bytes(), value.as_bytes())
+        .expect("a header this crate spells out is valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::Stream;
+
+    fn set(panels: &[(usize, &str)]) -> Vec<(usize, String)> {
+        panels
+            .iter()
+            .map(|(turn, markup)| (*turn, (*markup).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_root_is_the_listing() {
+        assert_eq!(route("/"), Resource::Shelf);
+        assert_eq!(route(""), Resource::Shelf);
+    }
+
+    #[test]
+    fn a_quire_and_a_folio_are_named_by_id() {
+        assert_eq!(
+            route("/quire/-srv-alpha"),
+            Resource::Quire("-srv-alpha".to_owned())
+        );
+        assert_eq!(
+            route("/folio/abc-123"),
+            Resource::Folio("abc-123".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_asset_is_served_only_under_the_token_naming_its_contents() {
+        let url = Asset::Style.url();
+
+        assert_eq!(route(&url), Resource::Asset(Asset::Style));
+        assert_eq!(
+            route("/asset/0000000000000000/illumination.css"),
+            Resource::Missing
+        );
+        assert_eq!(
+            route(&format!("/asset/{}/nothing.css", render::ASSET_TOKEN)),
+            Resource::Missing
+        );
+    }
+
+    /// The renderer spells these URLs and this parses them, so the two are held
+    /// together here rather than trusted to agree.
+    #[test]
+    fn every_stream_a_page_can_name_is_routed_back() {
+        assert_eq!(
+            route(&Stream::Shelf.url()),
+            Resource::Live(Watching::Shelf, None)
+        );
+        assert_eq!(
+            route(&Stream::Quire("-srv-alpha").url()),
+            Resource::Live(Watching::Quire("-srv-alpha".to_owned()), None)
+        );
+        assert_eq!(
+            route(
+                &Stream::Folio {
+                    session: "abc",
+                    from: "17-42"
+                }
+                .url()
+            ),
+            Resource::Live(Watching::Folio("abc".to_owned()), Some("17-42".to_owned()))
+        );
+    }
+
+    #[test]
+    fn nothing_else_is_routed_anywhere() {
+        for url in [
+            "/folio",
+            "/folio/abc/extra",
+            "/../etc/passwd",
+            "/quire",
+            "/live/folio",
+            "/livereload",
+            "/asset",
+        ] {
+            assert_eq!(route(url), Resource::Missing, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_folio_that_gained_a_panel_sends_that_panel_alone() {
+        let before = set(&[(1, "<a>"), (2, "<b>")]);
+        let after = set(&[(1, "<a>"), (2, "<b>"), (5, "<c>")]);
+
+        assert_eq!(
+            patch(&before, &after),
+            Patch {
+                changed: vec![5],
+                gone: Vec::new()
+            }
+        );
+    }
+
+    /// A tool result joins the panel holding its call, so the panel a reader
+    /// already has is set again. Its turn number is unchanged, which is what lets
+    /// the page replace it in place rather than append a second copy.
+    #[test]
+    fn a_panel_set_again_is_sent_again_under_the_same_number() {
+        let before = set(&[(1, "<a>"), (2, "<b>")]);
+        let after = set(&[(1, "<a>"), (2, "<b and its result>")]);
+
+        assert_eq!(
+            patch(&before, &after),
+            Patch {
+                changed: vec![2],
+                gone: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn a_folio_that_did_not_change_says_nothing() {
+        let held = set(&[(1, "<a>"), (2, "<b>")]);
+
+        assert!(patch(&held, &held).is_empty());
+    }
+
+    /// A panel can leave: a turn whose every block the folio drops stops being a
+    /// panel, and a page holding one has to be told rather than left showing it.
+    #[test]
+    fn a_panel_the_folio_no_longer_holds_is_named_as_gone() {
+        let before = set(&[(1, "<a>"), (2, "<b>")]);
+        let after = set(&[(1, "<a>")]);
+
+        assert_eq!(
+            patch(&before, &after),
+            Patch {
+                changed: Vec::new(),
+                gone: vec![2]
+            }
+        );
+    }
+
+    #[test]
+    fn a_frame_carries_its_event_its_data_and_the_state_it_names() {
+        assert_eq!(
+            frame("panels", r#"{"turn":1}"#, Some("17-42")),
+            "id: 17-42\nevent: panels\ndata: {\"turn\":1}\n\n"
+        );
+    }
+
+    /// The format is line-oriented, so a payload holding a newline has to become
+    /// two data lines rather than one broken frame.
+    #[test]
+    fn a_frame_breaks_its_data_across_lines_the_way_the_format_does() {
+        assert_eq!(
+            frame("listing", "one\ntwo", None),
+            "event: listing\ndata: one\ndata: two\n\n"
+        );
+    }
+
+    #[test]
+    fn a_stream_declares_itself_unbuffered_and_chunked() {
+        let head = head();
+
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(head.contains("Content-Type: text/event-stream"));
+        assert!(head.contains("Transfer-Encoding: chunked"));
+        assert!(head.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn a_chunk_states_its_length_in_hex() {
+        let mut written = Vec::new();
+
+        chunk(&mut written, ": hi\n\n").unwrap();
+
+        assert_eq!(String::from_utf8(written).unwrap(), "6\r\n: hi\n\n\r\n");
+    }
+}

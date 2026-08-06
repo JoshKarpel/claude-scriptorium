@@ -194,13 +194,31 @@ profile *args:
     echo "report: target/profile/report.txt" >&2
     echo "flamegraph and timeline: samply load target/profile/profile.json" >&2
 
-[doc("Serve a session with live reload, rebuilding and restarting on source changes")]
+[doc("Serve one session, rebuilding and restarting on source changes")]
 [group("rust")]
 serve *args:
+    @just reserve serve {{ args }}
+
+alias s := serve
+
+[doc("Serve every recorded session, rebuilding and restarting on source changes")]
+[group("rust")]
+codex *args:
+    @just reserve codex {{ args }}
+
+alias cx := codex
+
+# A restart is how a change to the renderer, the stylesheet, or the app script
+# reaches a reader: the server stamps every page with the run that set it, and a
+# page told a different one reloads itself. So rebuilding and restarting here is
+# the whole of the render loop.
+[doc("Run a subcommand of the server, restarting it when sources change")]
+[private]
+reserve subcommand *args:
     #!/usr/bin/env bash
     set -uo pipefail
     if ! command -v fswatch >/dev/null 2>&1; then
-      echo "just serve needs fswatch (apt install fswatch / brew install fswatch)" >&2
+      echo "just {{ subcommand }} needs fswatch (apt install fswatch / brew install fswatch)" >&2
       exit 1
     fi
     bin="target/release/claude-scriptorium"
@@ -208,7 +226,7 @@ serve *args:
     while true; do
       pid=""
       if cargo build --release; then
-        "$bin" serve {{ args }} &
+        "$bin" {{ subcommand }} {{ args }} &
         pid=$!
       else
         echo "build failed; waiting for changes" >&2
@@ -217,8 +235,6 @@ serve *args:
       [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
       [[ -n "$pid" ]] && wait "$pid" 2>/dev/null
     done
-
-alias s := serve
 
 [doc("Rerun a recipe when sources change, e.g. `just watch render <session>`")]
 [group("rust")]
