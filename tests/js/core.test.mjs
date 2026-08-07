@@ -35,6 +35,40 @@ describe("what the reader is remembered by", () => {
   });
 });
 
+describe("what arrives while the folio is open", () => {
+  it("seats a newer panel after everything already on the leaf", () => {
+    assert.equal(core.seatFor([1, 2, 5], 9), 3);
+  });
+
+  it("seats a panel in the middle of what the reader already has", () => {
+    // A folio does not only grow at the end: a gloss the harness wrote is
+    // gathered into the panel it belongs to, which can be several panels back.
+    assert.equal(core.seatFor([1, 2, 9], 5), 2);
+  });
+
+  it("seats the first panel of an empty leaf", () => {
+    assert.equal(core.seatFor([], 4), 0);
+  });
+
+  it("seats a panel ahead of everything when it opens the session", () => {
+    assert.equal(core.seatFor([7, 8], 2), 0);
+  });
+
+  it("takes a second run of the server as reason to reload", () => {
+    assert.equal(core.restarted("17", "42"), true);
+  });
+
+  it("takes the run that set the page as no reason to reload", () => {
+    assert.equal(core.restarted("17", "17"), false);
+  });
+
+  it("takes the first greeting of all as the run that set the page", () => {
+    // The page and its first greeting came from one run, so there is nothing to
+    // compare it against and nothing to do.
+    assert.equal(core.restarted(null, "17"), false);
+  });
+});
+
 describe("the hash, which two hands write", () => {
   it("reads a turn's id out of a permalink", () => {
     assert.equal(core.anchorId("#turn-42"), "turn-42");

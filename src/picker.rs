@@ -14,7 +14,11 @@ use std::{
 use anyhow::{Result, bail};
 use inquire::{InquireError, Select};
 
-use crate::{discovery, transcript::Folio};
+use crate::{
+    catalogue::{ago, condense},
+    discovery,
+    transcript::Folio,
+};
 
 /// Walks the project and session pickers, returning the chosen session file.
 pub fn pick_session(root: &Path, cwd: &Path) -> Result<PathBuf> {
@@ -91,7 +95,7 @@ impl SessionChoice {
         let when = path
             .metadata()
             .and_then(|metadata| metadata.modified())
-            .map(relative_time)
+            .map(|modified| ago(SystemTime::now(), modified))
             .unwrap_or_else(|_| "?".to_owned());
         let title = Folio::peek(&path)
             .title
@@ -119,32 +123,5 @@ fn select<T: fmt::Display>(message: &str, choices: Vec<T>) -> Result<T> {
             bail!("no session selected")
         }
         Err(error) => Err(error.into()),
-    }
-}
-
-/// A single-line label from a title that may contain newlines or run long.
-fn condense(title: &str) -> String {
-    const MAX: usize = 72;
-    let line: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    match line.char_indices().nth(MAX) {
-        Some((cut, _)) => format!("{}…", &line[..cut]),
-        None => line,
-    }
-}
-
-/// A coarse "how long ago" for ordering intuition, not precision.
-fn relative_time(modified: SystemTime) -> String {
-    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
-        return "just now".to_owned();
-    };
-    let seconds = elapsed.as_secs();
-    if seconds < 60 {
-        "just now".to_owned()
-    } else if seconds < 3600 {
-        format!("{}m ago", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h ago", seconds / 3600)
-    } else {
-        format!("{}d ago", seconds / 86_400)
     }
 }

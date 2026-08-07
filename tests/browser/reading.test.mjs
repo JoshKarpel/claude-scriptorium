@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { BAND, browsing, landed, openFolio, render, serve } from "./folio.mjs";
+import { BAND, browsing, codex, landed, openFolio, render, serve } from "./folio.mjs";
 
 const browser = browsing();
 before(() => browser.open());
@@ -206,6 +206,141 @@ describe("the search", () => {
   });
 });
 
+/** Grows the session and waits for the panel to land on the page. */
+const gains = async (page, served, note) => {
+  const before = await page.locator("main.folio .turn").count();
+  served.grow(note);
+  await page.waitForFunction(
+    (count) => document.querySelectorAll("main.folio .turn").length > count,
+    before,
+    { timeout: 20000 },
+  );
+  return before;
+};
+
+describe("a session written under its reader", () => {
+  it("gains the panel without reloading the page", async () => {
+    const page = await browser.page();
+    const served = await serve();
+    try {
+      await openFolio(page, served.url);
+      // A mark only this page's own lifetime carries: a reload would wipe it,
+      // and a reload is what this replaced. It is the whole difference between
+      // adding a panel and rebuilding megabytes of markup to add one.
+      await page.evaluate(() => (window.__sameLeaf = "yes"));
+
+      await gains(page, served, "a panel that arrived in place");
+
+      assert.equal(await page.evaluate(() => window.__sameLeaf), "yes");
+      assert.match(
+        await page.textContent("main.folio .turn:last-child"),
+        /a panel that arrived in place/,
+      );
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("keeps the reader's place, their folds, and their search", async () => {
+    const page = await browser.page();
+    const served = await serve();
+    try {
+      await openFolio(page, served.url);
+      await page.locator("main.folio details").first().evaluate((fold) => (fold.open = true));
+      await page.fill(".search__input", "quire");
+      const hits = await page.locator("mark.search__hit").count();
+      await page.evaluate(() => window.scrollTo(0, 120));
+      const scrolled = await page.evaluate(() => window.scrollY);
+
+      await gains(page, served, "a panel that disturbs nothing");
+
+      assert.equal(await page.evaluate(() => window.scrollY), scrolled);
+      assert.ok(
+        await page.locator("main.folio details").first().evaluate((fold) => fold.open),
+        "a fold the reader opened was shut by a panel arriving",
+      );
+      // The search counts the folio, not what it held when the reader typed, so
+      // it looks again over what arrived.
+      assert.ok((await page.locator("mark.search__hit").count()) >= hits);
+    } finally {
+      served.stop();
+    }
+  });
+
+  /// The reader's place in the hit list is theirs. Looking again over what
+  /// arrived is right; landing on the first hit again is the search deciding
+  /// where the reader should be, and it drags them off the hit they were reading
+  /// and opens the folds around a hit they never asked for.
+  it("keeps the reader's place in the hit list", async () => {
+    const page = await browser.page();
+    const served = await serve();
+    try {
+      await openFolio(page, served.url);
+      await page.fill(".search__input", "the");
+      await page.press(".search__input", "Enter");
+      await page.press(".search__input", "Enter");
+      const place = (await page.textContent(".search__count")).split("/")[0];
+      const opened = await page.locator("main.folio details[open]").count();
+      assert.equal(place, "3");
+
+      await gains(page, served, "a panel with nothing to find in it");
+
+      assert.equal(
+        (await page.textContent(".search__count")).split("/")[0],
+        place,
+        "a panel arriving sent the reader back to the first hit",
+      );
+      assert.equal(
+        await page.locator("main.folio details[open]").count(),
+        opened,
+        "looking again opened a fold the reader never asked to see",
+      );
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("draws a band for the first panel of a session that had none", async () => {
+    const page = await browser.page();
+    const served = await serve("unwritten.jsonl");
+    try {
+      await page.goto(served.url);
+      // The map is wired against a folio with nothing in it yet, which is what
+      // `serve --latest` opens on while a session is being started.
+      await page.waitForSelector(".minimap__track");
+      assert.equal(await page.locator(BAND).count(), 0);
+
+      served.grow("the first thing this session had to say");
+      await page.waitForSelector(BAND, { timeout: 20000 });
+
+      assert.equal(await page.locator(BAND).count(), 1);
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("draws the arriving panel on the map and counts it in the plaque", async () => {
+    const page = await browser.page();
+    const served = await serve();
+    try {
+      await openFolio(page, served.url);
+      const bands = await page.locator(BAND).count();
+
+      const panels = await gains(page, served, "a panel to draw a band for");
+
+      // A map missing a stretch of the document misstates where everything else
+      // in it sits, so a band arrives with its panel.
+      assert.equal(await page.locator(BAND).count(), bands + 1);
+      assert.equal(
+        await page.locator(".plaque__facts dd").nth(1).textContent(),
+        String(panels + 1),
+      );
+    } finally {
+      served.stop();
+    }
+  });
+});
+
 describe("following the end of a live session", () => {
   it("is not offered by a written folio", async () => {
     const page = await browser.page();
@@ -217,7 +352,7 @@ describe("following the end of a live session", () => {
     assert.equal(await page.locator('[data-tail="toggle"]').count(), 0);
   });
 
-  it("holds across the reloads a growing session drives", async () => {
+  it("stays on the end as panel after panel arrives", async () => {
     const page = await browser.page();
     const served = await serve();
     try {
@@ -225,30 +360,24 @@ describe("following the end of a live session", () => {
       await page.click('[data-tail="toggle"]');
 
       for (const note of ["the first turn appended", "the second turn appended"]) {
-        const before = await page.locator("main.folio .turn").count();
-        served.grow(note);
-        await page.waitForFunction(
-          (count) => document.querySelectorAll("main.folio .turn").length > count,
-          before,
-          { timeout: 20000 },
-        );
-        await page.waitForSelector(BAND);
+        await gains(page, served, note);
 
         // Still following, and the permalink has moved on to the new end: the
-        // URL names where the reader is, so the next reload resumes there and a
-        // link copied out of a followed folio names what was on the screen.
+        // URL names where the reader is, so a reload resumes there and a link
+        // copied out of a followed folio names what was on the screen.
         assert.equal(
           await page.getAttribute('[data-tail="toggle"]', "aria-pressed"),
           "true",
-          "following was released by a reload it drove itself",
+          "following was released by a panel arriving",
         );
         const newest = await page.evaluate(
           () => [...document.querySelectorAll("main.folio .turn")].pop().id,
         );
         assert.equal(await page.evaluate(() => location.hash), `#${newest}`);
         assert.equal(await landed(page), newest);
-        // The browser must not restore the position it recorded before the
-        // reload, which lands after this script runs and would undo the snap.
+        // A reload of a followed folio is the folio's to place, not the
+        // browser's: left on "auto" it restores the position it recorded before,
+        // after this script has run, undoing the snap to the end.
         assert.equal(await page.evaluate(() => history.scrollRestoration), "manual");
       }
     } finally {
@@ -290,6 +419,96 @@ describe("following the end of a live session", () => {
         localStorage.getItem("scriptorium-tail:" + document.body.dataset.folio),
       );
       assert.equal(remembered, null, "a released follow would snap back on the next reload");
+    } finally {
+      served.stop();
+    }
+  });
+});
+
+describe("the codex", () => {
+  it("lists a quire's sessions and opens one as a folio", async () => {
+    const page = await browser.page();
+    const served = await codex();
+    try {
+      await page.goto(served.url);
+      await page.waitForSelector(".listed");
+
+      await page.click(".listed__title");
+      await page.waitForSelector(BAND);
+
+      // A folio reached from a codex is one leaf of it, so it offers the way
+      // back rather than being a dead end.
+      assert.match(await page.title(), /^folio /);
+      assert.equal(await page.locator(".rail__up").count(), 1);
+      await page.click(".rail__up");
+      await page.waitForSelector(".listed");
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("shows a session being written, and keeps the listing current in place", async () => {
+    const page = await browser.page();
+    const served = await codex();
+    try {
+      await page.goto(served.quire);
+      await page.waitForSelector(".listed");
+      await page.evaluate(() => (window.__sameLeaf = "yes"));
+      const size = await page.textContent(".listed__size");
+
+      served.grow("a turn that changes the listing");
+      await page.waitForFunction(
+        (was) => document.querySelector(".listed__size")?.textContent !== was,
+        size,
+        { timeout: 20000 },
+      );
+
+      assert.equal(await page.evaluate(() => window.__sameLeaf), "yes");
+      assert.equal(await page.locator(".listed[data-live]").count(), 1);
+      assert.equal(await page.textContent(".listed__live"), "being written");
+    } finally {
+      served.stop();
+    }
+  });
+
+  /**
+   * Serving a page gathers a listing of its own, and what the server holds as
+   * *sent* has to stay what every open page is actually holding. Recording that
+   * gathering as though everyone had been told it leaves the readers already on
+   * the page an update behind, and the next tick then finds nothing new to say.
+   *
+   * The new session is filed and the second reader's load issued in the same
+   * breath, so it is that load rather than the tick which first gathers it.
+   */
+  it("keeps a reader current when somebody else loads the same listing", async () => {
+    const page = await browser.page();
+    const served = await codex();
+    try {
+      await page.goto(served.url);
+      await page.waitForSelector(".listed");
+      assert.equal(await page.locator(".listed").count(), 1);
+
+      served.add("second");
+      await fetch(served.url);
+
+      await page.waitForFunction(() => document.querySelectorAll(".listed").length === 2, null, {
+        timeout: 20000,
+      });
+    } finally {
+      served.stop();
+    }
+  });
+
+  it("answers for nothing it does not hold", async () => {
+    const page = await browser.page();
+    const served = await codex();
+    try {
+      // A session is named by an id looked up in the listing, so a name that is
+      // not in it has no path at all rather than a path to refuse.
+      for (const url of ["folio/nowhere", "quire/-srv-nothing", "asset/000/illumination.css"]) {
+        const answer = await page.goto(`${served.url}${url}`);
+        assert.equal(answer.status(), 404, url);
+      }
     } finally {
       served.stop();
     }

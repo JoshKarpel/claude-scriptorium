@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use claude_scriptorium::{
-    gloss,
+    catalogue, gloss,
     gloss::GlossKind,
     render,
     render::{Colophon, Delivery, Fonts, Labour, Scribe},
@@ -25,12 +25,25 @@ fn render(folio: &Folio, highlighter: &SyntectAdapter) -> String {
 }
 
 /// Sets a folio, handing back both the markup and the characters that drove it
-/// onto the whole faces.
+/// onto the whole faces. Nothing here is followed: a page that names a stream is
+/// exercised in `served` below, and in the browser suite where a stream can
+/// actually say something.
 fn set(
     folio: &Folio,
     highlighter: &SyntectAdapter,
     fonts: Fonts,
     delivery: Delivery,
+) -> (String, BTreeMap<char, usize>) {
+    set_from(folio, highlighter, fonts, delivery, None)
+}
+
+/// The same, for a folio being followed from the state `from` names.
+fn set_from(
+    folio: &Folio,
+    highlighter: &SyntectAdapter,
+    fonts: Fonts,
+    delivery: Delivery,
+    from: Option<&str>,
 ) -> (String, BTreeMap<char, usize>) {
     let scribe = Scribe::new(highlighter, TimeZone::UTC, fonts, delivery);
     let colophon = Colophon {
@@ -45,7 +58,7 @@ fn set(
         took: Duration::from_millis(412),
         bytes: 2_947_312,
     };
-    let (markup, reached) = scribe.folio(folio, &colophon);
+    let (markup, reached) = scribe.folio(folio, &colophon, from);
     (render::inscribe(markup.into_string(), &labour), reached)
 }
 
@@ -628,20 +641,98 @@ fn the_reset_is_offered_only_once_a_light_has_been_chosen() {
 }
 
 #[test]
-fn only_a_served_folio_offers_to_follow_the_session() {
+fn only_a_followed_folio_offers_to_follow_the_session() {
     let highlighter = highlighter();
     let (statik, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);
-    let (served, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Served);
+    let (followed, _) = set_from(
+        &fixture(),
+        &highlighter,
+        Fonts::Fitted,
+        Delivery::Served,
+        Some("17-42"),
+    );
 
     // The button itself, not `data-tail`: the app script carries that as a
     // selector, so a looser match finds the folio's own JS in either folio.
     const TAIL: &str = r#"<button class="dock__btn dock__btn--tail""#;
-    // Only `serve` re-reads the session, so only a served folio can gain a
-    // message to follow. Both still jump to the end, which is just a jump.
+    // Only a folio that names a stream is told when the session grows, so only it
+    // can follow. Both still jump to the end, which is just a jump.
     assert!(!statik.contains(TAIL));
-    assert!(served.contains(TAIL));
+    assert!(followed.contains(TAIL));
     assert!(statik.contains(r#"data-nav="end""#));
-    assert!(served.contains(r#"data-nav="end""#));
+    assert!(followed.contains(r#"data-nav="end""#));
+}
+
+/// The stream is named in the markup rather than worked out by the app script, so
+/// one thing decides whether a page is followed and what it follows.
+#[test]
+fn a_followed_folio_names_the_stream_and_the_state_it_was_set_from() {
+    let highlighter = highlighter();
+    let (statik, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);
+    let (followed, _) = set_from(
+        &fixture(),
+        &highlighter,
+        Fonts::Fitted,
+        Delivery::Served,
+        Some("17-42"),
+    );
+
+    assert!(followed.contains(r#"data-live="/live/folio/session?from=17-42""#));
+    // The body tag rather than the document: the stylesheet dresses a listing's
+    // own `[data-live]` rows, so a looser match finds those in either folio.
+    assert!(statik.contains(r#"<body data-folio="session">"#));
+}
+
+/// A written folio is one file, and a served one is read over a connection that
+/// can cache: the faces alone are most of a folio, so browsing a codex must not
+/// fetch them once per session opened.
+#[test]
+fn a_served_folio_links_what_a_written_one_inlines() {
+    let highlighter = highlighter();
+    let (statik, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Static);
+    let (served, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Served);
+
+    assert!(statik.contains("<style>"));
+    assert!(statik.contains("@font-face"));
+    assert!(statik.contains(".ink-keyword"));
+    assert!(!statik.contains("<link"));
+
+    assert!(!served.contains("<style>"));
+    assert!(!served.contains("@font-face"));
+    assert!(served.contains(&format!(
+        r#"<link rel="stylesheet" data-faces href="{}">"#,
+        render::Asset::FacesCut.url()
+    )));
+    assert!(served.contains(&format!(r#"<script src="{}">"#, render::Asset::Shell.url())));
+    // A served folio is a fraction of a written one, which is the whole point.
+    assert!(served.len() * 4 < statik.len(), "{}", served.len());
+}
+
+/// Every asset URL carries a token naming its contents, so it can be cached
+/// forever: an edited stylesheet is a different URL rather than a stale entry in
+/// a reader's cache.
+#[test]
+fn an_assets_url_names_its_contents() {
+    for asset in render::Asset::EVERY {
+        let url = asset.url();
+
+        assert!(url.starts_with("/asset/"), "{url}");
+        assert!(url.ends_with(asset.filename()), "{url}");
+        assert_eq!(render::Asset::named(asset.filename()), Some(asset));
+    }
+    assert_eq!(render::Asset::named("../../etc/passwd"), None);
+}
+
+/// The whole faces are carried by the folio that needs them under either
+/// delivery: linking them is about how they travel, not about which are chosen.
+#[test]
+fn a_served_folio_links_the_whole_faces_when_its_text_reaches_beyond_the_cut() {
+    let highlighter = highlighter();
+    let (served, reached) = set(&beyond_cut(), &highlighter, Fonts::Fitted, Delivery::Served);
+
+    assert!(!reached.is_empty());
+    assert!(served.contains(&render::Asset::FacesWhole.url()));
+    assert!(!served.contains(&render::Asset::FacesCut.url()));
 }
 
 #[test]
@@ -1010,15 +1101,6 @@ fn every_kind_of_panel_is_pigmented_wherever_it_is_stood_for() {
             "{label} has no pigment of its own in the key or the minimap"
         );
     }
-}
-
-#[test]
-fn the_stylesheet_is_inlined_not_linked() {
-    let html = render(&fixture(), &highlighter());
-
-    assert!(html.contains("<style>"));
-    assert!(html.contains(".ink-keyword"));
-    assert!(!html.contains("<link"));
 }
 
 #[test]
@@ -1586,4 +1668,150 @@ fn each_result_joins_the_panel_holding_the_call_it_answers() {
         .collect();
 
     assert_eq!(paired, [(1, 1), (1, 1)], "each call keeps its own result");
+}
+
+// --- The codex's own leaves -----------------------------------------------
+
+/// A listing with one quire of two sessions, one of them still being written.
+fn shelf() -> catalogue::Shelf {
+    catalogue::Shelf {
+        quires: vec![catalogue::Shelved {
+            id: "-srv-alpha".to_owned(),
+            project: "/srv/alpha".to_owned(),
+            when: "3m ago".to_owned(),
+            sessions: vec![
+                catalogue::Leaf {
+                    id: "abc-123".to_owned(),
+                    title: "Rebind the quire".to_owned(),
+                    when: "3m ago".to_owned(),
+                    bytes: 1_400_000,
+                    is_live: true,
+                },
+                catalogue::Leaf {
+                    id: "def-456".to_owned(),
+                    title: "(untitled)".to_owned(),
+                    when: "2d ago".to_owned(),
+                    bytes: 4_000,
+                    is_live: false,
+                },
+            ],
+            more: 7,
+        }],
+    }
+}
+
+fn listing(scribe: &Scribe) -> String {
+    scribe.codex(&shelf()).into_string()
+}
+
+#[test]
+fn the_codex_lists_every_quire_and_links_each_session() {
+    let highlighter = highlighter();
+    let scribe = Scribe::new(&highlighter, TimeZone::UTC, Fonts::Fitted, Delivery::Codex);
+
+    let html = listing(&scribe);
+
+    assert!(html.contains(r#"<a class="quire__project" href="/quire/-srv-alpha">/srv/alpha</a>"#));
+    assert!(
+        html.contains(r#"<a class="listed__title" href="/folio/abc-123">Rebind the quire</a>"#)
+    );
+    assert!(html.contains(r#"<a class="listed__title" href="/folio/def-456">(untitled)</a>"#));
+    // A session's size is stated the way every other size in a folio is.
+    assert!(html.contains("1.4 MB"));
+    assert!(html.contains("4 kB"));
+    // What the front page left out is one link away rather than lost.
+    assert!(html.contains(r#"<a class="quire__more" href="/quire/-srv-alpha">and 7 more"#));
+}
+
+/// The session being written is the one a reader has usually come for, so it is
+/// marked rather than merely being at the top.
+#[test]
+fn a_session_still_being_written_says_so() {
+    let highlighter = highlighter();
+    let scribe = Scribe::new(&highlighter, TimeZone::UTC, Fonts::Fitted, Delivery::Codex);
+
+    let html = listing(&scribe);
+
+    assert!(html.contains(r#"<li class="listed" data-live>"#));
+    assert!(html.contains(r#"<span class="listed__live">being written</span>"#));
+    // The quiet session is not marked, or the mark would say nothing.
+    assert!(html.contains(r#"<li class="listed">"#));
+}
+
+/// A listing is a leaf of the same volume: read inside the same parchment, by the
+/// same lights, between the same illuminated margins, and dressed the same way.
+#[test]
+fn a_listing_is_illuminated_like_a_folio() {
+    let highlighter = highlighter();
+    let scribe = Scribe::new(&highlighter, TimeZone::UTC, Fonts::Fitted, Delivery::Codex);
+
+    let html = listing(&scribe);
+
+    assert!(html.contains(r#"class="margin margin--left""#));
+    assert!(html.contains(r#"class="luminaries""#));
+    assert!(html.contains(&render::Asset::Style.url()));
+    // No folio, so nothing about one folio's stored state is scoped to a page
+    // that holds none of it.
+    assert!(!html.contains("data-folio"));
+}
+
+/// The part that changes is marked as the part that is replaced, and the page
+/// names the stream that replaces it.
+#[test]
+fn a_listing_names_the_stream_that_keeps_it_current() {
+    let highlighter = highlighter();
+    let scribe = Scribe::new(&highlighter, TimeZone::UTC, Fonts::Fitted, Delivery::Codex);
+
+    let codex = listing(&scribe);
+    let quire = scribe.quire(&shelf().quires[0]).into_string();
+
+    assert!(codex.contains(r#"data-live="/live""#));
+    assert!(quire.contains(r#"data-live="/live/quire/-srv-alpha""#));
+    for page in [&codex, &quire] {
+        assert!(page.contains(r#"<div class="codex__shelf" data-listing>"#));
+    }
+}
+
+/// A quire's own page is titled by the project, so the listing under it does not
+/// name the project again.
+#[test]
+fn a_quires_own_page_shows_every_session_without_repeating_itself() {
+    let highlighter = highlighter();
+    let scribe = Scribe::new(&highlighter, TimeZone::UTC, Fonts::Fitted, Delivery::Codex);
+
+    let html = scribe.quire(&shelf().quires[0]).into_string();
+
+    assert!(html.contains(r#"<a class="codex__up" href="/">"#));
+    assert!(html.contains(r#"class="codex__title codex__title--path">/srv/alpha</h1>"#));
+    assert!(!html.contains("quire__head"));
+    assert!(!html.contains("quire__more"));
+}
+
+/// Only a folio reached from a codex has somewhere to go up to.
+#[test]
+fn only_a_folio_reached_from_a_codex_offers_the_way_back() {
+    let highlighter = highlighter();
+    let (alone, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Served);
+    let (in_codex, _) = set(&fixture(), &highlighter, Fonts::Fitted, Delivery::Codex);
+
+    assert!(!alone.contains("rail__up"));
+    assert!(in_codex.contains(r#"<a class="rail__up" href="/""#));
+}
+
+/// Every kind of panel a folio can draw takes a pigment, and so does every band
+/// and chip that stands for one; a listing's rows are a third such thing, so the
+/// stylesheet has to dress them too.
+#[test]
+fn the_stylesheet_dresses_the_codex_it_serves() {
+    for rule in [
+        ".codex__title",
+        ".quire__project",
+        ".listed__live",
+        ".rail__up",
+    ] {
+        assert!(
+            include_str!("../src/illumination.css").contains(rule),
+            "{rule} is set in the markup and dressed nowhere"
+        );
+    }
 }

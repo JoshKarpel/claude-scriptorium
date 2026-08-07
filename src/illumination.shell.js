@@ -1,9 +1,10 @@
-// illumination: the folio's own behaviour, inlined into every written file.
+// illumination: the folio's own behaviour, inlined into every written file and
+// linked by every served one.
 //
-// This is the trusted app script (distinct from the dev-only live-reload
-// snippet `serve` injects). Transcript content is always escaped, never run;
-// this code is the one script the artifact carries deliberately. Keep it small
-// and dependency-free so a folio stays a single portable file.
+// This is the folio's one script, and it is trusted: transcript content is always
+// escaped, never run, and so is the markup that arrives while a served folio is
+// open. Keep it small and dependency-free so a written folio stays a single
+// portable file.
 //
 // The imperative shell: everything that reads the document, listens for the
 // reader, or writes to storage. The core it stands on is
@@ -255,7 +256,7 @@
   const wireSearch = () => {
     const search = document.querySelector(".search");
     const container = document.querySelector("main.folio");
-    if (!search || !container) return;
+    if (!search || !container) return null;
     const input = search.querySelector(".search__input");
     const count = search.querySelector(".search__count");
     const prev = search.querySelector('[data-search-nav="prev"]');
@@ -265,7 +266,11 @@
     let hits = [];
     let index = -1;
 
-    const paint = () => {
+    // `land` is what separates a reader asking for a hit from the folio noticing
+    // one. Going to a hit opens the folds around it and scrolls it into view;
+    // merely re-counting must do neither, or a panel arriving would drag a
+    // reader who is halfway down the hit list back to the first one.
+    const paint = (land) => {
       hits.forEach((hit) => hit.classList.remove(CURRENT));
       const nav = hits.length > 0;
       prev.disabled = !nav;
@@ -280,23 +285,29 @@
       }
       const hit = hits[index];
       hit.classList.add(CURRENT);
-      revealHit(hit);
-      hit.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (land) {
+        revealHit(hit);
+        hit.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
       count.textContent = index + 1 + "/" + hits.length;
     };
 
-    const run = () => {
+    const mark = () => {
       clearHits(container);
       const query = input.value;
       hits = query ? markHits(container, query, enabledKinds()) : [];
+    };
+
+    const run = () => {
+      mark();
       index = hits.length ? 0 : -1;
-      paint();
+      paint(true);
     };
 
     const step = (delta) => {
       if (!hits.length) return;
       index = (index + delta + hits.length) % hits.length;
-      paint();
+      paint(true);
     };
 
     input.addEventListener("input", run);
@@ -310,6 +321,28 @@
     // The chip's own state is the key's to flip (see `wireKey`); the search only
     // looks again once it has.
     chips.forEach((button) => button.addEventListener("click", run));
+
+    // A panel that arrives while a search is running has to be searched too, and
+    // one that was set again has had its marks replaced along with its markup.
+    // Looking again over the whole column is both the simplest way to be right
+    // and what a reader would do: the count is of the folio, not of what it held
+    // when they typed.
+    //
+    // The reader's *place* in that count is theirs, though, so it is kept rather
+    // than reset: a session grows at its end, so the hit they were on is the hit
+    // at the same ordinal, and a folio that shrank below it lands them on the
+    // last one. Nothing here scrolls or opens a fold, because nobody asked it to.
+    return {
+      again() {
+        if (!input.value) return;
+        const held = index;
+        mark();
+        index = hits.length
+          ? Math.min(Math.max(held, 0), hits.length - 1)
+          : -1;
+        paint(false);
+      },
+    };
   };
 
   // --- The nib: a quill's scratch as a copy is taken ---------------------
@@ -472,9 +505,13 @@
     return button;
   };
 
-  const wireCopy = () => {
-    const container = document.querySelector("main.folio");
-    if (!container) return;
+  // Seats a copy button on everything within `root` that can be copied. Called
+  // once over the whole column, and again over each panel that arrives while the
+  // folio is open, so a pushed panel is as copyable as one that was there from
+  // the start.
+  const wireCopy = (root) => {
+    const container = root || document.querySelector("main.folio");
+    if (!container) return null;
 
     // Every code / diff / JSON / output block copies its own text.
     container.querySelectorAll("pre").forEach((pre) => {
@@ -493,7 +530,12 @@
     });
 
     // Every turn copies its readable prose (text and thinking, not tool JSON).
-    container.querySelectorAll(".turn").forEach((turn) => {
+    // The root itself when it is a panel that just arrived, since `querySelectorAll`
+    // looks below a node and never at it.
+    const turns = container.matches(".turn")
+      ? [container]
+      : container.querySelectorAll(".turn");
+    turns.forEach((turn) => {
       const prose = turn.querySelectorAll(".block--text, .block--thinking");
       if (!prose.length) return;
       const meta = turn.querySelector(".turn__meta");
@@ -507,6 +549,7 @@
       button.classList.add("copy-button--meta");
       meta.appendChild(button);
     });
+    return { adopt: wireCopy };
   };
 
   // --- Dock: jump between messages, fold every marginalia ---------------
@@ -519,7 +562,7 @@
   const wireDock = () => {
     const dock = document.querySelector(".dock");
     const container = document.querySelector("main.folio");
-    if (!dock || !container) return;
+    if (!dock || !container) return null;
     // The unscoped stores these replaced imposed one folio's state on every
     // other; drop them rather than leave them to sit unread forever.
     try {
@@ -594,11 +637,11 @@
       const target = panels[core.stepIndex(tops, direction, THRESHOLD)];
       if (!target) return;
       // Step by the turn's own permalink, and land at once rather than gliding.
-      // Both follow from the same thing: `serve` re-renders under the reader, so
-      // a smooth scroll still in flight is simply lost when it does, and the
-      // scroll position it was heading for is not recorded anywhere. Writing the
-      // hash makes the URL name where the reader is, which the deep-link handler
-      // below already restores on the next load, and an instant landing is what
+      // Both follow from the same thing: a served folio changes under the reader,
+      // so a smooth scroll still in flight can be left heading somewhere that has
+      // moved, and where it was heading is not recorded anywhere. Writing the hash
+      // makes the URL name where the reader is, which the deep-link handler below
+      // already restores on the next load, and an instant landing is what
       // stepping through a folio wants in any case: an animation is a thing to
       // wait out when the reader means to press the button again.
       landOn(target);
@@ -610,10 +653,10 @@
       });
     };
 
-    // --- Follow (tail -f): keep the newest message's start pinned across the
-    // reloads a live session drives, until the reader scrolls away.
+    // --- Follow (tail -f): keep the newest message's start pinned as panels
+    // arrive, and across a reload, until the reader scrolls away.
     //
-    // Only a served folio can gain a message, so only a served folio carries
+    // Only a followed folio is told when its session grows, so only it carries
     // the toggle, and its presence is what says following is possible here. A
     // written one is a snapshot of a session that may have ended long ago:
     // there is nothing to follow, so jumping to its end is just a jump.
@@ -636,8 +679,8 @@
     // the mode and where it had reached, in one value rather than two that could
     // disagree. The pin is what tells a hash the folio wrote itself apart from
     // one the reader arrived with, which a flag alone cannot do: a live session
-    // grows between loads, so by the time a followed folio is reloaded the hash
-    // it wrote no longer names the end.
+    // grows, so by the time a followed folio is reloaded the hash it wrote no
+    // longer names the end.
     let pinned = canFollow ? stored(perFolio(TAIL)) : null;
     let tailing = Boolean(pinned);
 
@@ -647,19 +690,18 @@
 
     // Following is a mode, not a jump: while it is on, the newest panel's
     // permalink is the folio's to write, and it is rewritten every time the end
-    // moves. `serve` re-renders under the reader, so the end moves on every
-    // reload of a live session and again whenever the leaf reflows beneath them
-    // (a fold opening, the web fonts landing). The URL therefore keeps naming
-    // the turn the reader is actually on, so a reload resumes at the end and a
-    // link copied out of a followed folio names what was on the screen.
+    // moves. It moves whenever a panel arrives and whenever the leaf reflows
+    // beneath the reader (a fold opening, the web fonts landing). The URL
+    // therefore keeps naming the turn the reader is actually on, so a reload
+    // resumes at the end and a link copied out of a followed folio names what was
+    // on the screen.
     // Every landing the dock makes is instant, the leaps to either end
     // included: a folio is megabytes tall, so a glide from one end to the other
-    // is an animation to sit through rather than a sense of where you went, and
-    // `serve` can re-render under a scroll still in flight and lose it with
-    // nothing recording where it was headed. (Stepping between search hits
-    // still glides, deliberately: those are short hops within a page the reader
-    // is already looking at, where the movement is what shows the next match is
-    // near.)
+    // is an animation to sit through rather than a sense of where you went, and a
+    // panel arriving under a scroll still in flight moves what it was heading
+    // for. (Stepping between search hits still glides, deliberately: those are
+    // short hops within a page the reader is already looking at, where the
+    // movement is what shows the next match is near.)
     const scrollToEnd = () => {
       const target = lastMessage();
       if (!target) return;
@@ -683,8 +725,9 @@
     // While following, the folio decides where a reload lands, so the browser
     // must not: left on "auto" it restores the scroll position it recorded
     // before the reload, asynchronously and after this script has run, quietly
-    // undoing the snap to the end. `serve` reloads the page every time the
-    // session grows, which is exactly when the two disagree.
+    // undoing the snap to the end. A followed folio is reloaded whenever the
+    // server restarts under it, and a live session has moved on by then, which is
+    // exactly when the two disagree.
     const holdScroll = () => {
       try {
         history.scrollRestoration = tailing ? "manual" : "auto";
@@ -722,8 +765,8 @@
     // A deep link (#turn-N) names the panel the reader came for, so it releases
     // follow like a wheel or arrow key does, rather than losing the landing to
     // a snap to the end. Releasing (not just skipping this load's snap) because
-    // the hash survives the reloads a live session drives, and a suppression
-    // that didn't persist would fight the anchor on every one.
+    // the hash survives a reload, and a suppression that didn't persist would
+    // fight the anchor on every one.
     //
     // Unless it is the hash following itself last wrote, which is the folio
     // naming where the reader is rather than the reader naming where they want
@@ -761,10 +804,10 @@
     // anchor scroll happens before the fonts land.
     paintTail();
     holdScroll();
-    // Keep the end pinned as the leaf changes height under the reader: the
-    // fonts land, an image decodes, a fold is opened. Each moves the newest
-    // panel's start, and following means being there rather than where it used
-    // to be. Watching whether or not this load began by following, since the
+    // Keep the end pinned as the leaf changes height under the reader: a panel
+    // arrives, the fonts land, an image decodes, a fold is opened. Each moves the
+    // newest panel's start, and following means being there rather than where it
+    // used to be. Watching whether or not this load began by following, since the
     // reader can turn it on at any point after.
     if (canFollow) {
       new ResizeObserver(() => {
@@ -795,8 +838,8 @@
       if (nav === "prev") jump(-1, side);
       else if (nav === "next") jump(1, side);
       // Leaping to the top is the reader taking control, so it releases follow
-      // the way a wheel or arrow key does: otherwise the next reload of a live
-      // session would snap straight back to the end.
+      // the way a wheel or arrow key does: otherwise the next panel to arrive
+      // would snap them straight back to the end.
       else if (nav === "top") {
         releaseTail();
         scrollToTop();
@@ -806,11 +849,12 @@
       else if (foldTo === "collapse") fold(false);
     });
 
-    // Remember each marginalia's open/closed state across reloads, keyed per
-    // message so a live session that grows keeps the folds a reader set: the
-    // raw stream is append-only, so a panel's turn number and a marginalia's
-    // index within it stay stable as new turns arrive. Only open keys are
-    // stored; the markup default is collapsed.
+    // Remember each marginalia's open/closed state, keyed per message so a live
+    // session that grows keeps the folds a reader set: the raw stream is
+    // append-only, so a panel's turn number and a marginalia's index within it
+    // stay stable as new turns arrive. That is what lets a fold survive both a
+    // reload and its own panel being set again when a tool result joins it. Only
+    // open keys are stored; the markup default is collapsed.
     const foldKey = (details) => {
       const turn = details.closest(".turn");
       const marginalia = turn ? turn.querySelectorAll("details") : [details];
@@ -827,10 +871,17 @@
       }
     };
 
-    const open = readOpenFolds();
-    container.querySelectorAll("details").forEach((details) => {
-      if (open.has(foldKey(details))) details.open = true;
-    });
+    // A panel that arrives while the folio is open is restored the same way, so a
+    // fold the reader opened in a panel that is then set again (a tool result
+    // joining its call does exactly that) comes back open rather than shut.
+    const restoreFolds = (root) => {
+      const open = readOpenFolds();
+      root.querySelectorAll("details").forEach((details) => {
+        if (open.has(foldKey(details))) details.open = true;
+      });
+    };
+
+    restoreFolds(container);
 
     // `toggle` fires on both a reader's click and the fold-all buttons, and does
     // not bubble, so listen in the capture phase.
@@ -849,11 +900,23 @@
       true,
     );
 
-    // Handed to the minimap, which is another way of arriving at a panel and so
-    // must arrive the same way: releasing follow, naming the turn, landing at
-    // its start. Passed rather than reached for, so the two agree by
+    // `landOn` is handed to the minimap, which is another way of arriving at a
+    // panel and so must arrive the same way: releasing follow, naming the turn,
+    // landing at its start. Passed rather than reached for, so the two agree by
     // construction instead of by a second copy of this.
-    return { landOn };
+    //
+    // The rest is what a panel arriving on a followed folio needs: its folds
+    // restored, and the end pinned again if the reader is there. The end moves
+    // whenever the leaf does, which the ResizeObserver above already catches, but
+    // saying so here means the landing happens with the panel rather than a frame
+    // after it.
+    return {
+      landOn,
+      adopt: restoreFolds,
+      toEnd() {
+        if (tailing) scrollToEnd();
+      },
+    };
   };
 
   // --- Minimap: the whole folio at a glance, and a place to scrub it -----
@@ -874,26 +937,39 @@
   const wireMinimap = (dock) => {
     const minimap = document.querySelector(".minimap");
     const container = document.querySelector("main.folio");
-    if (!minimap || !container || !dock) return;
+    if (!minimap || !container || !dock) return null;
     const track = minimap.querySelector(".minimap__track");
     const view = minimap.querySelector(".minimap__view");
-    const panels = Array.from(container.querySelectorAll(".turn"));
-    if (!track || !view || !panels.length) return;
+    // No test for a panel: a folio that has none yet is exactly the one that is
+    // about to be sent some (`serve` on a session in its first seconds), and a
+    // map that was never wired can never adopt them. An empty map simply draws
+    // no bands.
+    if (!track || !view) return null;
 
     // A band per panel, in the panel's own pigment. Drawn from the panels
     // themselves rather than written into the markup: what a band states is the
     // share of the document its panel takes, which only the browser knows and
     // which changes every time a fold opens.
-    const bands = panels.map((panel) => {
-      const band = document.createElement("div");
-      band.className = "minimap__band";
-      band.dataset.kind = panel.dataset.kind || "";
-      band.dataset.turn = panel.dataset.turn || "";
-      if (panel.dataset.sidechain !== undefined) band.dataset.sidechain = "";
-      band.title = `#${panel.dataset.turn} ${panel.dataset.kind}`;
-      track.insertBefore(band, view);
-      return { band, panel };
-    });
+    //
+    // Drawn again from scratch whenever the panels change, for the same reason:
+    // a band stands for a panel, so a folio that gained one has a map that is
+    // missing it, and a map missing a stretch of the document misstates where
+    // everything else in it sits.
+    let bands = [];
+    const draw = () => {
+      track.querySelectorAll(".minimap__band").forEach((band) => band.remove());
+      bands = Array.from(container.querySelectorAll(".turn")).map((panel) => {
+        const band = document.createElement("div");
+        band.className = "minimap__band";
+        band.dataset.kind = panel.dataset.kind || "";
+        band.dataset.turn = panel.dataset.turn || "";
+        if (panel.dataset.sidechain !== undefined) band.dataset.sidechain = "";
+        band.title = `#${panel.dataset.turn} ${panel.dataset.kind}`;
+        track.insertBefore(band, view);
+        return { band, panel };
+      });
+    };
+    draw();
 
     // The whole scrollable page rather than the folio's own extent, so the
     // reader's view sits on the map where it sits on the document.
@@ -905,8 +981,8 @@
     // pixels is a mark rather than a target.
     //
     // How it was last framed is a fact about this folio, so it is remembered
-    // under this folio, and survives the reload a live session drives: a reader
-    // who has opened up the stretch they are working through keeps it.
+    // under this folio and survives a reload: a reader who has opened up the
+    // stretch they are working through keeps it.
     const framed = core.framing(stored(perFolio(MAP)));
     let lens = core.lens({
       leaf: leaf(),
@@ -1084,6 +1160,114 @@
     if (key) key.addEventListener("click", paintKinds);
     paintKinds();
     redraw(true);
+
+    return {
+      adopt() {
+        draw();
+        paintKinds();
+        redraw(false);
+      },
+    };
+  };
+
+  // --- Following a session as it is written ------------------------------
+  //
+  // A served page names the stream it is told changes on (`data-live`), and its
+  // presence is the whole of what says this page can be told: a written folio
+  // names none, so nothing here runs and nothing waits.
+  //
+  // What arrives is markup, panel by panel, keyed by the turn number the panel
+  // carries as its id. So a change is applied by replacing that panel and nothing
+  // else: the reader keeps their scroll position, their open folds, their search,
+  // their theme, and their place in the conversation, none of which survives the
+  // reload this replaced.
+  //
+  // The markup is the scribe's own, escaped as everything it writes is, and it
+  // arrives over the same connection the page did. `insertAdjacentHTML` and
+  // `template` both refuse to run a script in it, so a panel is set exactly as it
+  // would have been had the page been loaded with it.
+
+  const parsePanel = (html) => {
+    const held = document.createElement("template");
+    held.innerHTML = html;
+    return held.content.firstElementChild;
+  };
+
+  // Markup that arrives can set a character the cut faces dropped, whether it is
+  // a panel of transcript or a session title in a listing, so what arrives says
+  // which faces it needs and the page is re-dressed before it is seated: swapped
+  // after, the text is drawn once in a face that lacks it.
+  const dress = (href) => {
+    if (!href) return;
+    const link = document.querySelector("link[data-faces]");
+    if (link && !link.href.endsWith(href)) link.href = href;
+  };
+
+  const wireLive = (parts) => {
+    const stream = document.body.dataset.live;
+    const container = document.querySelector("main.folio");
+    if (!stream) return;
+
+    let boot = null;
+
+    const seatPanel = (turn, html) => {
+      const arriving = parsePanel(html);
+      if (!arriving) return;
+      const standing = Array.from(container.querySelectorAll(".turn"));
+      const held = standing.find((panel) => panel.dataset.turn === String(turn));
+      if (held) {
+        held.replaceWith(arriving);
+      } else {
+        const turns = standing.map((panel) => Number(panel.dataset.turn));
+        const at = core.seatFor(turns, Number(turn));
+        container.insertBefore(arriving, standing[at] || null);
+      }
+      parts.copy?.adopt(arriving);
+      parts.dock?.adopt(arriving);
+    };
+
+    const applyPanels = (told) => {
+      if (!container) return;
+      dress(told.faces);
+      (told.gone || []).forEach((turn) => {
+        const held = container.querySelector(`.turn[data-turn="${turn}"]`);
+        if (held) held.remove();
+      });
+      (told.panels || []).forEach(({ turn, html }) => seatPanel(turn, html));
+      if (told.facts) {
+        const facts = document.querySelector(".plaque__facts");
+        if (facts) facts.replaceWith(parsePanel(told.facts));
+      }
+      // The map stands for the panels, and the search counts them, so both look
+      // again once the leaf is settled rather than once per panel.
+      parts.minimap?.adopt();
+      parts.search?.again();
+      parts.dock?.toEnd();
+    };
+
+    const source = new EventSource(stream);
+
+    source.addEventListener("hello", (event) => {
+      const said = JSON.parse(event.data).boot;
+      if (core.restarted(boot, said)) {
+        location.reload();
+        return;
+      }
+      boot = said;
+    });
+
+    source.addEventListener("panels", (event) => {
+      applyPanels(JSON.parse(event.data));
+    });
+
+    // A listing is a few kilobytes and every row of it moves as time passes, so
+    // it is replaced whole rather than picked apart.
+    source.addEventListener("listing", (event) => {
+      const told = JSON.parse(event.data);
+      dress(told.faces);
+      const shelf = document.querySelector("[data-listing]");
+      if (shelf) shelf.innerHTML = told.html;
+    });
   };
 
   const onReady = (fn) => {
@@ -1099,8 +1283,12 @@
     // reads that as it wires itself.
     wireKey();
     wireThemeToggle();
-    wireSearch();
-    wireCopy();
-    wireMinimap(wireDock());
+    const search = wireSearch();
+    const copy = wireCopy();
+    const dock = wireDock();
+    const minimap = wireMinimap(dock);
+    // Last, because what arrives has to be handed to every part that has already
+    // wired itself against the panels.
+    wireLive({ search, copy, dock, minimap });
   });
 })();

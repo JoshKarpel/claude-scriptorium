@@ -4,7 +4,8 @@ Render Claude Code sessions as self-contained HTML.
 
 Each session becomes one **folio**: a single `.html` file with its markup,
 styles, and images inlined. It can be mailed, gisted, or opened offline as one
-file.
+file. Or read the whole **codex** in a browser, every session the machine has
+recorded, with the live ones filling in as they are written.
 
 ## Install
 
@@ -46,17 +47,75 @@ claude-scriptorium render ~/.claude/projects/-home-me-work/<session-id>.jsonl -o
 claude-scriptorium render --latest -o folios/
 ```
 
-Locally serve a session over HTTP with live reload, for watching a session
-(the same session selection applies, so `serve --latest` or a bare `serve` picker both work):
+Serve one session over HTTP and watch it as it is written (the same session
+selection applies, so `serve --latest` or a bare `serve` picker both work):
 
 ```bash
 claude-scriptorium serve <session-id>.jsonl
 ```
 
-A served folio re-renders as the session is written, so its dock carries a
-follow control that keeps the newest message pinned, like `tail -f`. A written
-or published folio is a snapshot and never gains a message, so it offers no
-such control.
+A served folio gains each panel in place as the session is written, so nothing
+about the page you are reading is disturbed to add to it: your scroll position,
+your open folds, and your search all stay put. Its dock therefore carries a
+follow control that keeps the newest message pinned, like `tail -f`. A written or
+published folio is a snapshot and never gains a message, so it offers no such
+control.
+
+### Browsing every session
+
+`codex` serves the whole scriptorium: every project the machine has recorded, the
+sessions in each, and any of them one click away as a folio. The session being
+written right now is marked as such, so the one you are working in is on the
+front page.
+
+```bash
+claude-scriptorium codex --open
+```
+
+It answers only this machine by default. To read it from elsewhere, bind it wider
+and put something in front of it that says who may:
+
+```bash
+claude-scriptorium codex --host 0.0.0.0
+```
+
+Anything that can route to the machine can then read every session on it, so this
+belongs behind an authenticating reverse proxy. On an
+[exe.dev](https://exe.dev/docs/proxy) VM, for instance, the HTTPS proxy is private
+by default and sends anyone without access to the VM to log in first, and it
+forwards ports 3000 to 9999, so the codex above is at
+`https://<vm>.exe.xyz:8000/` and nobody else's business.
+
+`--root` lists a projects root other than Claude Code's own, and `--port`
+chooses the port for either server, which defaults to 8000.
+
+### Keeping a codex served
+
+`cloister install` writes a systemd user service and starts it, so a machine
+that records sessions serves them from the moment it boots, with nobody
+attending it:
+
+```bash
+claude-scriptorium cloister install
+```
+
+It takes the same `--host`, `--port`, and `--root` as `codex`, and writes each
+of them into the unit: a user service inherits nothing from the shell that
+installed it, so a `CLAUDE_CONFIG_DIR` set in your session would otherwise mean
+the service quietly served a different root than the one you asked for. The
+`ExecStart` names the binary by absolute path, so install from a stable location
+(`cargo install` puts it in `~/.cargo/bin`) rather than from a build tree that a
+`cargo clean` will empty.
+
+It is a *user* service rather than a system one, so it needs no root, and it
+enables [lingering](https://www.freedesktop.org/software/systemd/man/loginctl.html)
+so it outlives the session that installed it.
+
+Re-running converges rather than starting over: the unit is rewritten only if it
+differs, and only a changed unit restarts the service, so a re-run that changes
+nothing leaves a reader's open folio and its event stream alone. `cloister
+status` reports where it stands and what it binds, `cloister remove` undoes it,
+and `--name` runs a second codex beside the first.
 
 ### Sharing a folio
 
@@ -311,6 +370,8 @@ The code names things after the scriptorium that produced manuscripts by hand:
 | --- | --- |
 | folio | One rendered session |
 | quire | The gathering of folios belonging to one project |
+| codex | The bound volume of every quire, which `codex` serves |
+| cloister | The enclosure a codex is served from unattended, as a service |
 | caveat | The folio's own note to its reader, at the head of the column |
 | marginalia | A collapsible tool call or result |
 | gloss | A note the harness wrote into the session, set as its own panel |
@@ -336,6 +397,8 @@ just test
 just test-js      # the folio's own script, without a browser
 just test-browser # a rendered folio, driven in a headless Chromium
 just render <session>
+just serve <session>  # one folio, rebuilding and restarting as you edit
+just codex            # every folio, the same way
 just bench        # time rendering the fixtures, with hyperfine
 just bench-huge   # the same, over generated sessions of megabytes
 just profile      # sample a render and report where the time went, with perf and samply

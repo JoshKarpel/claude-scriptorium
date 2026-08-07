@@ -4,6 +4,56 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7]
+
+### Added
+
+- **`codex`**, a server for every session the machine has recorded: a listing of
+  each project and the sessions in it, most recently worked in first, with the
+  session being written right now marked as such, and any of them one click away
+  as a folio. `--host` binds it somewhere other than localhost, for a machine
+  that has something in front of it to say who may read (a reverse proxy that
+  authenticates); `--root` lists a projects root other than Claude Code's own.
+- **`cloister install`**, which keeps a codex served by a systemd user service,
+  so a machine that records sessions serves them from the moment it boots with
+  nobody attending it. It takes the same `--host`, `--port`, and `--root` as
+  `codex`, and it converges: re-running writes the unit, reloads, enables, and
+  starts, from whatever state the machine was already in, and a run that changes
+  nothing does not restart the service, so a reader with a folio open keeps their
+  stream. Upgrading the binary in place counts as a change, so a re-run after
+  `cargo install` restarts the service onto the new build rather than leaving the
+  replaced code serving. `cloister status` reports whether the service is
+  installed, enabled, and running, and what it binds; `cloister remove` undoes
+  it. `--name` runs a second codex beside the first.
+
+### Changed
+
+- **A served folio gains a panel in place rather than reloading.** A panel's id
+  is its turn number, which counts a session file's raw records and so never
+  changes, and the server compares the panels it has just set with the ones it
+  last sent and pushes only those that differ. So a reader keeps their scroll
+  position, their open folds, their search and its count, and their place in the
+  conversation, where the reload this replaced rebuilt megabytes of markup to add
+  one panel and threw all of that away. A listing keeps itself current the same
+  way. Both listen on one server-sent event stream, named in the page itself.
+- **A served folio links its stylesheet, script, and fonts instead of inlining
+  them**, under URLs that name their contents so they can be cached forever. The
+  faces are most of a folio, so a session opened out of a codex is now a fraction
+  of what it was: browsing no longer re-downloads a megabyte of fonts per session.
+  A folio *written* to a file or published as a gist is unchanged, still carrying
+  every byte it needs.
+- `serve` is the same server as `codex` with one session in scope, so the render
+  loop gains the push and neither can drift from the other. It keeps `--port` and
+  gains `--host`; a change to the renderer, the stylesheet, or the app script
+  still reaches the page, by the page noticing the server restarted and reloading
+  itself.
+- Both servers default to port 8000, which is what a proxy in front of a
+  development machine is most likely to be expecting already: exe.dev's HTTPS
+  proxy, for one, forwards it without being told to.
+- A session caught mid-write no longer shows the reader a parse failure: the read
+  is retried, and a followed folio simply is not told anything until a whole
+  setting succeeds.
+
 ## [0.1.6]
 
 ### Fixed
