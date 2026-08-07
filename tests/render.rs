@@ -1053,6 +1053,36 @@ fn the_dock_leaps_to_either_end_of_the_folio() {
     assert!(html.contains(r#"data-nav="end" aria-label="jump to end""#));
 }
 
+/// The clasp governs whether the rail is there at all, so it leads it: a reader
+/// tabbing into the column reaches the press before the cards it lets out, and a
+/// leaf too narrow to stand the rail beside its reading column shows the press
+/// where the cards' head was.
+#[test]
+fn the_clasp_leads_the_rail() {
+    let html = render(&fixture(), &highlighter());
+
+    let rail = html
+        .split(r#"<div class="rail">"#)
+        .nth(1)
+        .expect("the rail holds the cards the clasp lets out");
+    let clasp = rail
+        .find(r#"<button class="rail__clasp""#)
+        .expect("the clasp is in the rail");
+    let key = rail
+        .find(r#"<div class="key""#)
+        .expect("the key is in the rail");
+    assert!(
+        clasp < key,
+        "the clasp stands ahead of the cards it governs"
+    );
+    // Shut is the state the markup is written in: a folio wide enough for the
+    // rail simply never draws the press, so nothing has to be said there.
+    assert!(
+        rail[clasp..]
+            .starts_with(r#"<button class="rail__clasp" type="button" aria-expanded="false""#)
+    );
+}
+
 #[test]
 fn the_minimap_is_the_last_card_in_the_rail() {
     let html = render(&fixture(), &highlighter());
@@ -1293,9 +1323,14 @@ fn nothing_below_the_ascii_boundary_is_ever_dropped() {
 #[test]
 fn the_folios_own_chrome_stays_inside_the_cut_faces() {
     // The scan weighs the transcript and the source path, not this crate's own
-    // markup, so a glyph added to the stylesheet or app script could otherwise
-    // go quietly missing in every folio.
+    // markup, so a glyph added to the stylesheet, the app script, or the marks
+    // the renderer writes into a folio's chrome could otherwise go quietly
+    // missing in every folio. `render.rs` is weighed whole, prose comments
+    // included: a character this crate is willing to write about is one it may
+    // one day set, so holding the file to the cut costs nothing and catches the
+    // mark before it reaches a folio.
     for (name, source) in [
+        ("render.rs", include_str!("../src/render.rs")),
         ("illumination.css", include_str!("../src/illumination.css")),
         (
             "illumination.core.js",

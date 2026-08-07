@@ -106,6 +106,41 @@
     });
   };
 
+  // --- The clasp: the rail, on a leaf with no room to stand it beside the
+  // reading column ---------------------------------------------------------
+  //
+  // Where there is room, the rail stands and the clasp is not drawn at all; where
+  // there is not, it would lie over the very text it exists to navigate, so it is
+  // held shut and this is the press that lets it out. Which width that is stays
+  // the stylesheet's to say. Nothing here measures the leaf, so the two cannot
+  // disagree about where the rail fits, and the press is wired on every folio
+  // whether or not this reader's screen will ever show it.
+  //
+  // What it holds is a fact about neither the reader nor the folio: it is where
+  // the chrome stands this minute. So it is not stored, and a reload opens on a
+  // clean leaf.
+  const wireClasp = () => {
+    const rail = document.querySelector(".rail");
+    const clasp = rail && rail.querySelector(".rail__clasp");
+    if (!rail || !clasp) return;
+
+    const unclasp = (open) => {
+      if (open) rail.dataset.open = "";
+      else delete rail.dataset.open;
+      clasp.setAttribute("aria-expanded", String(open));
+    };
+
+    clasp.addEventListener("click", () => {
+      unclasp(clasp.getAttribute("aria-expanded") !== "true");
+    });
+
+    // Escape puts back whatever was laid over the reading column, which is what
+    // a reader will try first and the only way out that needs no aiming.
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") unclasp(false);
+    });
+  };
+
   // --- Search: highlight every match, step through with next / prev -------
   //
   // Non-destructive to the layout: nothing is hidden. Each query marks all
@@ -1282,6 +1317,7 @@
     // The key first: it restores which kinds are in play, and everything below
     // reads that as it wires itself.
     wireKey();
+    wireClasp();
     wireThemeToggle();
     const search = wireSearch();
     const copy = wireCopy();

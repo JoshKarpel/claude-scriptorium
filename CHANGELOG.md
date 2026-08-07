@@ -54,6 +54,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is retried, and a followed folio simply is not told anything until a whole
   setting succeeds.
 
+### Fixed
+
+- **The reading rail no longer stands over what it is there to navigate.** On a
+  leaf too narrow to hold the rail beside the reading column it stood on top of
+  it instead, covering half a phone's screen with controls that could not be put
+  away. It is now held shut on such a leaf behind a clasp in the corner opposite
+  the plaque: a press brings the column out, a press or Escape puts it back, and
+  where there is room for the rail to stand beside the text nothing changes and
+  no clasp is drawn. The gaps between its cards no longer swallow a press meant
+  for the leaf underneath.
+- The folio's search field is set large enough that focusing it no longer makes a
+  phone zoom the leaf, and it takes the width of the card it sits in rather than
+  half of it, so the placeholder is legible again.
+- A panel's copy button rides the facts above it rather than a fixed distance
+  down the panel, so a line of facts wrapped onto two no longer leaves the button
+  sitting across the timestamp.
+- The lights in the appearance corner sit on parchment where the leaf runs the
+  full width of the screen, rather than over the line of text passing under them.
+
 ## [0.1.6]
 
 ### Fixed

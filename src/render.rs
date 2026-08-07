@@ -615,6 +615,22 @@ impl<'a> Scribe<'a> {
                     // Standing them in one column is what says they are tied
                     // together, without a word of explanation.
                     div .rail {
+                        // The clasp, which leads the rail because it governs
+                        // whether the rail is there at all. A leaf narrow enough
+                        // that the column would stand *over* the reading measure
+                        // rather than beside it is one the rail is drawn shut on,
+                        // and this is the press that opens it; on a leaf with the
+                        // room, it is not shown and the rail simply stands. Which
+                        // width that is stays the stylesheet's to say, so nothing
+                        // else has to measure the leaf and disagree with it.
+                        //
+                        // It mirrors the plaque's seal in the opposite corner, and
+                        // takes the fleuron's mirror to say so: one press for what
+                        // the folio is, one for how it is read. Leading the rail
+                        // is also what puts it ahead of the cards in the tab
+                        // order, so the control comes before what it controls.
+                        button .rail__clasp type="button" aria-expanded="false"
+                            aria-label="reading controls" title="reading controls" { "☙" }
                         // The way back out, at the head of the rail: a card like
                         // the ones under it, since it is reached the same way and
                         // pressed the same way, but standing above them because
