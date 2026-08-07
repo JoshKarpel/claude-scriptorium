@@ -103,6 +103,12 @@
   --measure: 44rem;
   --radius: 4px;
 
+  /* How far the leading block of a panel stands off the facts above it, which is
+   * also how far the copy button hangs below them: the button is centred on that
+   * block's top edge, so the clearance and the drop are one length and are
+   * declared once here rather than measured against each other. */
+  --meta-clearance: 1rem;
+
   /* Junicode, Fira Code, and UnifrakturCook are embedded as @font-face rules
    * (see render.rs); the stacks behind them are fallbacks for glyphs the
    * bundled faces lack, since transcripts carry arbitrary Unicode. */
@@ -248,8 +254,13 @@ body {
   }
 }
 
+/* A leaf as wide as the reader's whole screen shows the page it lies on at its
+ * head and foot alone, so the deep bands there are all that is left of the desk
+ * and they are cut back to a hand's breadth. A phone has a screenful to spare
+ * and the folio starts an inch down it otherwise. */
 @media (max-width: 34rem) {
   body {
+    margin: 1rem auto 1.5rem;
     padding: 1.75rem 1.25rem;
   }
 }
@@ -437,6 +448,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  /* The cards are what a reader presses; the column between and around them is
+   * nothing, and a fixed box with no background still swallows every click over
+   * it. Left to itself the rail takes the gaps between its cards, the slack
+   * under them, and, on a leaf narrow enough for it to lie over the reading
+   * measure, the whole of the column it is drawn shut on. */
+  pointer-events: none;
 }
 
 /* Every card in the rail is cut the same way, so each rule below carries only
@@ -446,6 +463,7 @@ body {
  * natural height however tall the rail is; the minimap alone asks for the
  * slack, and asks for it there too. */
 .rail > * {
+  pointer-events: auto;
   flex: none;
   padding: 0.34rem 0.5rem;
   background: var(--leaf);
@@ -454,6 +472,95 @@ body {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   font-family: var(--mono);
   font-size: 0.7rem;
+}
+
+/* The clasp: what holds the rail shut on a leaf too narrow to stand it beside
+ * the reading column, and what opens it again. It is a seal rather than a card,
+ * after the plaque's in the opposite corner, because the two are the same offer
+ * made twice: one press for what the folio is, one for how it is read. It is
+ * drawn larger than that seal, being a target a thumb reaches for on a leaf this
+ * narrow rather than one a pointer does.
+ *
+ * It is drawn only where it is needed. Where the rail has room to stand beside
+ * the column there is nothing to unclasp, so the press is not shown and the rail
+ * is simply there. */
+.rail__clasp {
+  display: none;
+  place-items: center;
+  align-self: flex-end;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border-radius: 50%;
+  /* The fleuron is Junicode's; the mono face the cards are set in has no such
+   * glyph, and would fall through to whatever the reader's system offers. */
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  line-height: 1;
+  color: var(--gold);
+  cursor: pointer;
+}
+
+.rail__clasp:hover,
+.rail__clasp:focus-visible {
+  color: var(--rubric);
+}
+
+/* Unclasped, it reads as pressed the way the follow toggle does: sunk into the
+ * leaf and rubricated. The column standing beside it already says the rail is
+ * out, so this needs only to say which press let it out. */
+.rail__clasp[aria-expanded="true"] {
+  background: var(--leaf-sunk);
+  color: var(--rubric);
+}
+
+/* Below the width at which the rail can stand beside the reading measure, it
+ * would stand over it instead, which is the one place a reading control must
+ * never be. So it is drawn shut: the cards slide off the leaf and the clasp is
+ * left standing where their head was.
+ *
+ * The threshold is where the rail begins to cover text rather than the leaf's
+ * own padding. The column is `--measure` wide and centred, so its text reaches
+ * 22rem less its 3.25rem padding either side of the centre, and the rail reaches
+ * 10.5rem plus its 0.8rem offset in from the edge: they meet at 1082px, and this
+ * clears that by a gutter rather than sitting on it.
+ *
+ * **A `rem` in a media query is not the folio's `rem`.** The query is resolved
+ * against the initial font size, 16px, never against the `18px` this leaf is set
+ * from, so the width above is 68.75 of these and not 60. Every other breakpoint
+ * in this sheet is in the same unit and reads the same way. It stays `rem` all
+ * the same, since that is what follows a reader who has scaled their browser's
+ * own base size.
+ *
+ * Each card is moved by its own width rather than the rail being moved as one,
+ * because the clasp is a child of the rail too and has to stay put. They are all
+ * the rail's width, so one length moves them all together. */
+@media (max-width: 69rem) {
+  .rail__clasp {
+    display: grid;
+  }
+
+  .rail > :not(.rail__clasp) {
+    visibility: hidden;
+    transform: translateX(calc(100% + 1.6rem));
+    transition:
+      transform 0.22s ease,
+      visibility 0.22s;
+  }
+
+  .rail[data-open] > :not(.rail__clasp) {
+    visibility: visible;
+    transform: none;
+  }
+
+  /* A field set below 16px is what makes a phone zoom the leaf as the reader
+   * focuses it, and a zoomed leaf is one they have to pinch back by hand. Only a
+   * field a reader types into is treated this way; the rest of the rail keeps
+   * its own size. Named by its card as well as itself, so it outweighs the
+   * `font: inherit` below rather than depending on standing after it. */
+  .search .search__input {
+    font-size: 16px;
+  }
 }
 
 .search {
@@ -636,13 +743,6 @@ mark.search__hit {
 mark.search__hit.is-current {
   background: color-mix(in srgb, var(--gold) 68%, transparent);
   outline: 1px solid var(--gold);
-}
-
-/* On narrow screens the widget would crowd the leaf; let it shrink. */
-@media (max-width: 34rem) {
-  .search__input {
-    width: 6rem;
-  }
 }
 
 /* --- Dock: fixed jump / fold controls -------------------------------- */
@@ -1120,12 +1220,6 @@ mark.search__hit.is-current {
   margin-right: -1.1rem;
 }
 
-/* Hold the copy button on the turn number as the wash widens the box. */
-.turn:target .copy-button--meta,
-.turn[data-landed] .copy-button--meta {
-  right: 1.1rem;
-}
-
 .turn--user {
   border-left-color: var(--user-edge);
 }
@@ -1223,6 +1317,23 @@ mark.search__hit.is-current {
   display: flex;
   align-items: flex-end;
   gap: 0.1rem;
+}
+
+/* On a leaf as wide as the reader's screen the figures stand over the text
+ * rather than over the page beside it, and bare figures over prose read as a
+ * smudge on the last line rather than as the corner's own light. So they are set
+ * on parchment here, cut as the seal in each of the other corners is: the same
+ * thing said the same way, that this is chrome laid over the leaf. Where the
+ * leaf is narrower than the window they keep their bare form, having nothing but
+ * the page under them. */
+@media (max-width: 34rem) {
+  .luminaries {
+    padding: 0.1rem 0.4rem;
+    background: var(--leaf);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  }
 }
 
 .luminary {
@@ -1516,6 +1627,12 @@ mark.search__hit.is-current {
   .luminary__radiance {
     animation: none;
   }
+
+  /* The rail arrives and leaves at once rather than sliding. Where it ends up is
+   * the whole of what the clasp says; the travel is only how it gets there. */
+  .rail > :not(.rail__clasp) {
+    transition: none;
+  }
 }
 
 /* Hand the choice back to the reader's system. It is shown only once a light has
@@ -1557,7 +1674,14 @@ mark.search__hit.is-current {
   stroke-linejoin: round;
 }
 
+/* Positioned, so the copy button seated in it measures from the facts rather
+ * than from the panel. The two agreed while the facts were one line and parted
+ * on a leaf narrow enough to wrap them onto two, where a button placed a fixed
+ * distance down the panel landed on the second line and sat over the timestamp.
+ * Measuring from the facts also settles the button's right edge, which the gilt
+ * landing wash used to move out from under it. */
 .turn__meta {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -2259,12 +2383,17 @@ mark.search__hit.is-current {
   opacity: 1;
 }
 
-/* The turn's copy button rides the panel's top edge, flush-right under the turn
- * number (which keeps the corner). It stays visible for discovery, muted until
- * the panel is hovered. The leading block's clearance below keeps it off text. */
+/* The turn's copy button rides the leading block's top edge, flush-right under
+ * the turn number (which keeps the corner). It stays visible for discovery,
+ * muted until the panel is hovered.
+ *
+ * That edge is stated rather than measured to: the button hangs the panel's own
+ * facts by exactly the clearance the block below them takes, so the two are one
+ * number and a wrapped line of facts carries the button down with it instead of
+ * leaving it stranded across them. */
 .copy-button--meta {
   position: absolute;
-  top: 2.3rem;
+  top: calc(100% + var(--meta-clearance));
   right: 0;
   z-index: 2;
   opacity: 0.6;
@@ -2284,7 +2413,7 @@ mark.search__hit.is-current {
  * padding a thinking block has, so its first line lands where thinking text
  * would and never runs under the button. */
 .turn:has(.copy-button--meta) > .turn__meta + * {
-  margin-top: 1rem;
+  margin-top: var(--meta-clearance);
 }
 
 .turn:has(.copy-button--meta) > .turn__meta + .block--text {
@@ -2577,12 +2706,18 @@ pre.syntax-highlighting {
   margin-bottom: 0.45rem;
 }
 
+/* `anywhere` rather than `break-word`, and the difference is the whole of why
+ * the row held together: only `anywhere` counts the break as available when the
+ * browser measures how narrow the element *can* be. A path is one unbroken word,
+ * so under `break-word` this asked for its full length as a minimum, refused to
+ * shrink to its share of the row, and drove the "how long ago" beside it clean
+ * off the leaf, all while wrapping onto four lines as though it had shrunk. */
 .quire__project {
   font-family: var(--mono);
   font-size: 0.86rem;
   color: var(--ink);
   text-decoration: none;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 a.quire__project:hover,
@@ -2660,6 +2795,26 @@ a.quire__project:focus-visible {
 
 .listed[data-live] .listed__title {
   color: var(--rubric);
+}
+
+/* A row of the listing is a label and the facts about it, set on one line with
+ * the facts held to the right. That wants a line wide enough for both, and a
+ * narrow leaf has none: the facts never shrink (they are one short string in the
+ * mono face), so it is the label that gives, down to a word a line while the
+ * facts sit beside it in comfort. The label is what a reader is choosing by, so
+ * on such a leaf it takes the whole line and the facts drop under it, still
+ * ranged right against the edge they were ranged against before. */
+@media (max-width: 34rem) {
+  .quire__head,
+  .listed {
+    flex-wrap: wrap;
+    gap: 0.1rem 0.6rem;
+  }
+
+  .quire__project,
+  .listed__title {
+    flex: 1 1 100%;
+  }
 }
 
 /* The way out of a folio, at the head of the rail. A card like the ones under

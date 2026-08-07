@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { BAND, browsing, codex, landed, openFolio, render, serve } from "./folio.mjs";
+import { BAND, browsing, codex, landed, NARROW, openFolio, render, serve } from "./folio.mjs";
 
 const browser = browsing();
 before(() => browser.open());
@@ -203,6 +203,43 @@ describe("the search", () => {
     await page.click('.key__chip[data-scope="rule"]');
 
     assert.equal(await page.locator("mark.search__hit").count(), 0);
+  });
+});
+
+describe("the clasp", () => {
+  it("holds the rail off a leaf too narrow to stand it beside the column", async () => {
+    const page = await browser.page(NARROW);
+    await openFolio(page, playground);
+    const field = page.locator(".search__input");
+
+    await field.waitFor({ state: "hidden" });
+    // Out of sight is not enough: a control the reader cannot see must not take
+    // their press either, or half the leaf answers to something invisible. The
+    // rail is a fixed box with no background, and such a box swallows every
+    // click over it unless it is told not to.
+    const under = await page.evaluate(() => {
+      const at = document.elementFromPoint(
+        window.innerWidth - 40,
+        window.innerHeight / 2,
+      );
+      return at.closest(".rail") ? "the rail" : "the leaf";
+    });
+    assert.equal(under, "the leaf");
+
+    await page.click(".rail__clasp");
+    await field.waitFor({ state: "visible" });
+
+    // Escape puts back whatever was laid over the reading column.
+    await page.keyboard.press("Escape");
+    await field.waitFor({ state: "hidden" });
+  });
+
+  it("is not offered where the rail has room to stand beside the column", async () => {
+    const page = await browser.page();
+    await openFolio(page, playground);
+
+    await page.locator(".search__input").waitFor({ state: "visible" });
+    assert.equal(await page.locator(".rail__clasp").isVisible(), false);
   });
 });
 

@@ -147,6 +147,13 @@ const reachable = async (port, attempts = 400) => {
   throw new Error(`nothing came up on port ${port}`);
 };
 
+/**
+ * A leaf narrow enough that the rail cannot stand beside the reading column, so
+ * the stylesheet holds it shut behind the clasp. A phone's, since that is where
+ * a reader meets it.
+ */
+export const NARROW = { width: 390, height: 844 };
+
 /** One browser for the whole file, one page per test. */
 export const browsing = () => {
   const state = {};
@@ -157,11 +164,9 @@ export const browsing = () => {
     async close() {
       await state.browser?.close();
     },
-    async page() {
+    async page(viewport = { width: 1400, height: 900 }) {
       await state.page?.close();
-      state.page = await state.browser.newPage({
-        viewport: { width: 1400, height: 900 },
-      });
+      state.page = await state.browser.newPage({ viewport });
       return state.page;
     },
   };
@@ -171,9 +176,13 @@ export const browsing = () => {
 // band rather than on `load`: by the time one exists, the script has run.
 export const BAND = ".minimap__band";
 
+// Attached rather than visible, which is what "by the time one exists" means:
+// on a leaf too narrow to stand the rail beside the reading column the map is
+// drawn and then held shut with it, so a band there is never visible and waiting
+// for one to be would be waiting for the reader to press the clasp.
 export const openFolio = async (page, url) => {
   await page.goto(url);
-  await page.waitForSelector(BAND);
+  await page.waitForSelector(BAND, { state: "attached" });
 };
 
 /** Where the folio says the reader landed, however they got there. */

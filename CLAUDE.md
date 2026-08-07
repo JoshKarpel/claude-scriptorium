@@ -927,8 +927,12 @@ tell each other apart. Keep it that way when adding a kind.
 
   `render::beyond_cut` skips runs of bytes under `0x80` without decoding them,
   which is only sound while nothing below that can be dropped; the tests hold
-  that, and hold the stylesheet and app script inside the cut faces too, since
-  the scan weighs the transcript rather than this crate's own markup. Widening
+  that, and hold the stylesheet, the app script, and `render.rs` inside the cut
+  faces too, since the scan weighs the transcript rather than this crate's own
+  markup. `render.rs` is weighed whole, prose comments included, so a mark added
+  to a folio's chrome (the plaque's seal, the clasp's fleuron, the dock's arrows)
+  is caught before it reaches a folio and falls back to a reader's own font.
+  Widening
   the cut means editing `KEEP` in `scripts/subset_fonts.py` and re-running `just
   fonts`; it is safe, since a codepoint a face never had is simply not kept, but
   it is only *cheap* for some blocks, so **price a block before adding it** by
@@ -1087,6 +1091,24 @@ what says so;
 appearance sits on the left (a metadata plaque in the top corner revealing the
 title, facts, and colophon on hover or focus; and the luminaries bottom). There
 is no in-column header or footer.
+
+**The rail is drawn shut on a leaf it would stand over rather than beside**, and
+the **clasp** at its head is the press that lets it out. The threshold is the
+width at which the rail begins to cover text rather than the leaf's own padding,
+which is `--measure` and the rail's own width and offset put together, and it is
+the *stylesheet's* to say: nothing in the app script measures the leaf, so the two
+cannot disagree about where the rail fits. What the clasp holds is neither the
+reader's nor the folio's (it is where the chrome stands this minute), so it is not
+stored and a reload opens on a clean leaf. The cards are slid off one by one
+rather than the rail as a whole, since the clasp is a child of the rail too and
+has to stay put; they are all the rail's width, so one length moves them together.
+
+Two things about the shut state are load-bearing. The cards are `visibility:
+hidden`, which is what takes them out of the tab order as well as out of sight: a
+control a reader cannot see must not take their press. And `.rail` itself is
+`pointer-events: none` with its cards `auto`, because a fixed box with no
+background still swallows every click over it, which on such a leaf is half the
+reading column.
 
 **The key is a control in its own right, not the search's.** It is a chip per
 `PanelKind::EVERY`, each carrying its own kind's pigment so it doubles as the
@@ -1335,9 +1357,10 @@ classes continue it with
 `marginalia` (a collapsible tool call or result), `drollery` (a marginal
 creature), `versal` (the dropped initial that opens a speaker's paragraph),
 `key` (which kinds of panel are in play, and what each edge's pigment means),
-`rail` (the column of cards the key leads), `luminary` (a light the folio is
-read by, which is also the control that chooses it, and its `radiance` over the
-leaf), and `illumination` (the theme layer).
+`rail` (the column of cards the key leads), `clasp` (what holds the rail shut on
+a leaf with no room to stand it beside the reading column), `luminary` (a light
+the folio is read by, which is also the control that chooses it, and its
+`radiance` over the leaf), and `illumination` (the theme layer).
 
 ## Testing against real data
 
@@ -1378,6 +1401,17 @@ Read the PNG back to check the illumination. For an interactive loop, `just serv
 does the same for the listing pages (whose markup is `Scribe::codex` and
 `Scribe::quire`, and whose stylesheet section is `.codex`/`.quire`/`.listed`).
 
+Shoot a phone's viewport too (390x844 is a fair one), and the listing as well as a
+folio: the leaf runs edge to edge there, so the fixed chrome in the four corners
+lies over the transcript rather than over the page beside it, and a row that fits
+a wide leaf by shrinking one of its two halves has nothing left to shrink.
+
+**A breakpoint has to be measured rather than reasoned about**, because a `rem` in
+a media query is resolved against the initial font size, 16px, and never against
+the `18px` the leaf is set from: `@media (max-width: 60rem)` fires at 960px, not
+1080. Ask the browser where two boxes actually meet (`getBoundingClientRect` on
+either side of the threshold) rather than working it out from the tokens.
+
 Behaviour is a different question from appearance, and has its own two suites:
 `just test-js` for the script's core (values in, values out, no browser) and
 `just test-browser` for what it does to a real folio in a real Chromium, both
@@ -1386,6 +1420,10 @@ run by `just check`. A change to `illumination.*.js` belongs in one of them:
 reader (`serve()`) and a whole codex over a throwaway projects root (`codex()`),
 so following, the dock, the minimap, what a folio remembers across a reload, and
 what arrives while the reader is reading are all exercised as a reader meets them.
+A page is 1400x900 unless a test asks otherwise; `NARROW` is the leaf a phone
+gives, which is the only width the clasp exists at. `openFolio` waits for a
+minimap band to be *attached* rather than visible, since on such a leaf the map is
+drawn and then held shut with the rest of the rail.
 
 **A pushed change is proved by what survived it.** The test sets a mark on
 `window`, grows the session, waits for the panel, and asserts the mark is still
