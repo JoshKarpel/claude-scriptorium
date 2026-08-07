@@ -471,6 +471,34 @@ describe("the codex", () => {
     }
   });
 
+  /**
+   * Serving a page gathers a listing of its own, and what the server holds as
+   * *sent* has to stay what every open page is actually holding. Recording that
+   * gathering as though everyone had been told it leaves the readers already on
+   * the page an update behind, and the next tick then finds nothing new to say.
+   *
+   * The new session is filed and the second reader's load issued in the same
+   * breath, so it is that load rather than the tick which first gathers it.
+   */
+  it("keeps a reader current when somebody else loads the same listing", async () => {
+    const page = await browser.page();
+    const served = await codex();
+    try {
+      await page.goto(served.url);
+      await page.waitForSelector(".listed");
+      assert.equal(await page.locator(".listed").count(), 1);
+
+      served.add("second");
+      await fetch(served.url);
+
+      await page.waitForFunction(() => document.querySelectorAll(".listed").length === 2, null, {
+        timeout: 20000,
+      });
+    } finally {
+      served.stop();
+    }
+  });
+
   it("answers for nothing it does not hold", async () => {
     const page = await browser.page();
     const served = await codex();

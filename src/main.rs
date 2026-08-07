@@ -107,10 +107,15 @@ struct RenderArgs {
     open: bool,
 }
 
-/// Where a server listens. Shared by `codex` and `serve`, so a folio is reached
-/// the same way whichever of them is serving it.
+/// What a server binds.
+///
+/// One declaration, flattened by the subcommands that serve and by the one that
+/// installs a service to serve. `cloister install` resolves every argument and
+/// writes it into the unit, so a default restated here for the service's sake is
+/// one that can be changed for `codex` and quietly left behind in a unit file,
+/// with nothing failing to say so.
 #[derive(Args)]
-struct Listen {
+struct Bind {
     /// Port to serve on.
     #[arg(long, default_value_t = 8000)]
     port: u16,
@@ -121,16 +126,24 @@ struct Listen {
     /// session on it, so bind it wide only behind something that says who may.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
+}
+
+impl Bind {
+    fn address(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+/// Where a server listens for the subcommands somebody is watching start: what
+/// it binds, and whether to point a browser at it.
+#[derive(Args)]
+struct Listen {
+    #[command(flatten)]
+    bind: Bind,
 
     /// Open the server in the default browser once it is up.
     #[arg(long)]
     open: bool,
-}
-
-impl Listen {
-    fn address(&self) -> String {
-        format!("{}:{}", self.host, self.port)
-    }
 }
 
 #[derive(Args)]
@@ -176,8 +189,11 @@ struct CloisterInstallArgs {
     #[command(flatten)]
     unit: CloisterArgs,
 
+    /// Where the service listens. [`Listen`]'s `--open` is deliberately absent:
+    /// nothing is watching a service start, so there is no browser to point at
+    /// it.
     #[command(flatten)]
-    listen: ServiceListen,
+    bind: Bind,
 
     #[command(flatten)]
     faces: Faces,
@@ -188,23 +204,6 @@ struct CloisterInstallArgs {
     /// environment.
     #[arg(long, value_name = "DIR")]
     root: Option<PathBuf>,
-}
-
-/// Where the service listens. The same defaults as [`Listen`], without its
-/// `--open`: nothing is watching a service start, so there is no browser to
-/// point at it.
-#[derive(Args)]
-struct ServiceListen {
-    /// Port to serve on.
-    #[arg(long, default_value_t = 8000)]
-    port: u16,
-
-    /// Address to bind. The default answers only this machine, which is what a
-    /// proxy in front of it reaches; pass `0.0.0.0` only where something else
-    /// says who may read, since anything that can route to the machine can then
-    /// read every session on it.
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
 }
 
 #[derive(Args)]
@@ -344,7 +343,7 @@ fn codex(args: CodexArgs) -> Result<()> {
     );
 
     codex::run(
-        &args.listen.address(),
+        &args.listen.bind.address(),
         codex::Scope::Codex { root },
         args.listen.open,
         &scribe,
@@ -364,7 +363,7 @@ fn serve(args: ServeArgs) -> Result<()> {
     );
 
     codex::run(
-        &args.listen.address(),
+        &args.listen.bind.address(),
         codex::Scope::Folio { session },
         args.listen.open,
         &scribe,
@@ -397,9 +396,9 @@ fn cloister_install(args: CloisterInstallArgs) -> Result<()> {
     let mut arguments = vec![
         "codex".to_owned(),
         "--host".to_owned(),
-        args.listen.host.clone(),
+        args.bind.host.clone(),
         "--port".to_owned(),
-        args.listen.port.to_string(),
+        args.bind.port.to_string(),
         "--root".to_owned(),
         root.display().to_string(),
     ];
@@ -438,7 +437,7 @@ fn cloister_install(args: CloisterInstallArgs) -> Result<()> {
     }
 
     println!();
-    println!("Serving http://{}:{}/", args.listen.host, args.listen.port);
+    println!("Serving http://{}/", args.bind.address());
     Ok(())
 }
 

@@ -28,7 +28,7 @@ use std::{
     sync::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -60,6 +60,21 @@ const HEARTBEAT: Duration = Duration::from_secs(15);
 /// cost half a second.
 const PATIENCE: usize = 12;
 const BREATH: Duration = Duration::from_millis(40);
+
+/// How many frames may be waiting for one page before that page is let go.
+///
+/// A frame is written to a socket with no deadline, so a reader whose machine
+/// has suspended (or whose receive window has simply stopped moving) leaves its
+/// own thread blocked in a write while the watcher goes on producing patches for
+/// it. Queueing those without limit is a folio's worth of markup accumulating per
+/// tick for a page that will never read any of it.
+///
+/// Letting the page go is the honest answer rather than a lossy one: the stream
+/// ends, the browser reconnects on its own, and it reports what it holds in
+/// `Last-Event-ID`, which is exactly the catch-up a dropped connection already
+/// takes. Small, because a page that is this far behind is not going to catch up
+/// by being queued for.
+const BACKLOG: usize = 8;
 
 /// What a codex is serving.
 pub enum Scope {
@@ -134,8 +149,15 @@ struct State {
     peeks: Peeks,
     /// The last setting of each folio someone has open, by session id.
     folios: HashMap<String, Set>,
-    /// The last listing markup sent for each kind of listing page open.
-    listings: HashMap<Watching, String>,
+    /// The last listing *sent* for each kind of listing page open, which is what
+    /// every page watching that listing is holding.
+    ///
+    /// Only [`Codex::relist`] writes here, and only along with telling everyone
+    /// watching. A page load gathers a listing of its own and stores none of it:
+    /// storing markup only the one page ever saw would leave every other page
+    /// holding an earlier listing that the next tick then measures as unchanged
+    /// and says nothing about, which for a quiet codex is forever.
+    listings: HashMap<Watching, Listing>,
     listeners: Vec<Listener>,
 }
 
@@ -143,7 +165,7 @@ struct State {
 struct Set {
     /// The state of the session file this was set from, which is what a
     /// reconnecting page reports back so the catch-up can be measured.
-    stamp: String,
+    stamp: Stamp,
     panels: Vec<(usize, String)>,
     facts: String,
     /// Which cut of the faces the page is dressed in. A panel that arrives
@@ -175,7 +197,7 @@ impl Listing {
 struct Listener {
     id: u64,
     watching: Watching,
-    frames: Sender<String>,
+    frames: SyncSender<String>,
 }
 
 /// What an open page is being told about.
@@ -332,7 +354,9 @@ impl<'a> Codex<'a> {
                             let _ = self.reset(id, &path);
                         }
                     }
-                    _ => self.relist(&watching),
+                    _ => {
+                        self.relist(&watching);
+                    }
                 }
             }
         }
@@ -361,9 +385,18 @@ impl<'a> Codex<'a> {
     /// file, so an unchanged stamp means the answer would be the same markup. Only
     /// the stamp is looked at on a tick, which is one `metadata` call per open
     /// folio, where setting one again is most of a render.
+    ///
+    /// A session that is no longer there is not read at all. [`read`] spends half
+    /// a second retrying, which is the right answer for a line caught half-written
+    /// and the wrong one for a file that has been deleted: nothing will finish it,
+    /// so a page left open on a deleted session would put this thread into a
+    /// permanent retry, ahead of every other folio and listing being watched. The
+    /// last good setting stands instead, which is what a reader is holding anyway.
     fn reset(&self, id: &str, path: &Path) -> Result<()> {
-        let stamp = stamp(path);
-        if self.holds(id, &stamp) {
+        let Some(stamp) = Stamp::of(path) else {
+            return Ok(());
+        };
+        if self.holds(id, stamp) {
             return Ok(());
         }
         let folio = read(path)?;
@@ -379,18 +412,28 @@ impl<'a> Codex<'a> {
             .faces(!render::reached(&folio, panel_reach).is_empty());
 
         let mut state = self.state();
+        // A tick and a subscription both come through here, and each reads and
+        // renders outside the lock so a render is never held under it, so two
+        // settings of one folio can be in flight at once. Whichever commits
+        // second may be the older read, and committing it would measure the
+        // newer panels as *gone* and take them back a tick later, under the
+        // reader. The stamp is ordered exactly so that can be recognised.
+        if state.folios.get(id).is_some_and(|held| held.stamp >= stamp) {
+            return Ok(());
+        }
         if let Some(held) = state.folios.get(id) {
             let patch = patch(&held.panels, &set);
             // The faces are named only when they change, so a folio that was
             // already dressed in the whole ones says nothing about them.
             let dress = (faces != held.faces).then(|| faces.url());
             if !patch.is_empty() || facts != held.facts || dress.is_some() {
-                let data = told(&stamp, &patch, &set, &facts, dress.as_deref());
+                let word = stamp.word();
+                let data = told(&word, &patch, &set, &facts, dress.as_deref());
                 state.tell(
                     &Watching::Folio(id.to_owned()),
                     "panels",
                     &data,
-                    Some(&stamp),
+                    Some(&word),
                 );
             }
         }
@@ -408,27 +451,34 @@ impl<'a> Codex<'a> {
 
     /// Whether the setting already held for this folio was made from the session
     /// as it now stands.
-    fn holds(&self, id: &str, stamp: &str) -> bool {
+    fn holds(&self, id: &str, stamp: Stamp) -> bool {
         let state = self.state();
         state.folios.get(id).is_some_and(|held| held.stamp == stamp)
     }
 
-    /// Gathers a listing again and sends it if it says anything new. A listing is
-    /// a few kilobytes, so it is replaced whole rather than picked apart: what
-    /// changes as a session is written is every row's "how long ago" as much as
-    /// the rows themselves.
-    fn relist(&self, watching: &Watching) {
+    /// Gathers a listing again and sends it to everyone watching if it says
+    /// anything new, answering whether it did. A listing is a few kilobytes, so
+    /// it is replaced whole rather than picked apart: what changes as a session
+    /// is written is every row's "how long ago" as much as the rows themselves.
+    ///
+    /// Telling and storing are one step, which is what keeps the store meaning
+    /// what [`State::listings`] says it means.
+    fn relist(&self, watching: &Watching) -> bool {
         let Some(listing) = self.listing(watching) else {
-            return;
+            return false;
         };
         let mut state = self.state();
-        if state.listings.get(watching) == Some(&listing.markup) {
-            return;
-        }
-        state
+        if state
             .listings
-            .insert(watching.clone(), listing.markup.clone());
-        state.tell(watching, "listing", &listing.told(), None);
+            .get(watching)
+            .is_some_and(|held| held.markup == listing.markup)
+        {
+            return false;
+        }
+        let told = listing.told();
+        state.listings.insert(watching.clone(), listing);
+        state.tell(watching, "listing", &told, None);
+        true
     }
 
     /// One listing's markup, gathered fresh. `None` when the quire a page names
@@ -543,6 +593,8 @@ impl<'a> Codex<'a> {
         }
     }
 
+    /// The codex's own listing page. What is stored as sent is left to the
+    /// subscription this page is about to open (see [`State::listings`]).
     fn shelf_page(&self) -> String {
         let now = SystemTime::now();
         let catalogue = self
@@ -553,11 +605,7 @@ impl<'a> Codex<'a> {
         state.peeks.keep_to(&catalogue);
         let shelf = Shelf::of(&catalogue, &mut state.peeks, now);
         state.catalogue = catalogue;
-        let page = self.scribe.codex(&shelf).into_string();
-        state
-            .listings
-            .insert(Watching::Shelf, self.scribe.shelf(&shelf).into_string());
-        page
+        self.scribe.codex(&shelf).into_string()
     }
 
     fn quire_page(&self, id: &str) -> Option<String> {
@@ -567,12 +615,7 @@ impl<'a> Codex<'a> {
         let quire = catalogue.quire(id)?;
         let shelved = Shelved::whole(quire, &mut state.peeks, now);
         state.catalogue = catalogue;
-        let page = self.scribe.quire(&shelved).into_string();
-        state.listings.insert(
-            Watching::Quire(id.to_owned()),
-            self.scribe.leaves(&shelved).into_string(),
-        );
-        Some(page)
+        Some(self.scribe.quire(&shelved).into_string())
     }
 
     /// A folio, set from the session as it stands, and told which state it was
@@ -581,9 +624,13 @@ impl<'a> Codex<'a> {
         let path = self
             .locate(id)
             .ok_or_else(|| anyhow!("no session named {id}"))?;
-        let stamp = stamp(&path);
+        // Asked before the read rather than after it, so a session that has been
+        // deleted since the listing was scanned says so at once instead of
+        // spending [`read`]'s whole patience on a file nothing will finish.
+        let stamp =
+            Stamp::of(&path).ok_or_else(|| anyhow!("{} is no longer there", path.display()))?;
         let folio = read(&path)?;
-        let set = render::set(self.scribe, &folio, &Colophon::now(), Some(&stamp));
+        let set = render::set(self.scribe, &folio, &Colophon::now(), Some(&stamp.word()));
         eprintln!(
             "{} {} in {}",
             id,
@@ -604,16 +651,12 @@ impl<'a> Codex<'a> {
     /// when the server no longer holds the state that page was set from.
     fn stream(&self, request: Request, watching: Watching, from: Option<String>) {
         let held = resumed(&request).or(from);
-        let (frames, waiting) = mpsc::channel();
+        let (frames, waiting) = mpsc::sync_channel(BACKLOG);
         let id = self.listeners.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut state = self.state();
-            state.listeners.push(Listener {
-                id,
-                watching: watching.clone(),
-                frames,
-            });
-        }
+        // Registered before it is greeted, so nothing about what this page is
+        // being caught up to can change between the two, and let go by the guard
+        // however this thread ends.
+        let _attending = Attending::new(self, id, watching.clone(), frames);
 
         // Bring this page up to date before anything else can change under it.
         self.greet(&watching, held.as_deref(), id);
@@ -622,24 +665,6 @@ impl<'a> Codex<'a> {
         let outcome = self.pour(&mut writer, &waiting);
         drop(writer);
 
-        let mut state = self.state();
-        state.listeners.retain(|listener| listener.id != id);
-        // A folio nobody is reading is not worth holding a setting of, and the
-        // next reader's page will be measured against their own load.
-        if !state
-            .listeners
-            .iter()
-            .any(|listener| listener.watching == watching)
-        {
-            match &watching {
-                Watching::Folio(session) => {
-                    state.folios.remove(session);
-                }
-                other => {
-                    state.listings.remove(other);
-                }
-            }
-        }
         if let Err(error) = outcome {
             // A reader closing a tab is an ordinary end to a stream, not a fault.
             if error.kind() != io::ErrorKind::BrokenPipe {
@@ -653,7 +678,7 @@ impl<'a> Codex<'a> {
     fn greet(&self, watching: &Watching, held: Option<&str>, id: u64) {
         let hello = json!({ "boot": self.boot }).to_string();
         {
-            let state = self.state();
+            let mut state = self.state();
             state.only(id, "hello", &hello, None);
         }
 
@@ -665,11 +690,12 @@ impl<'a> Codex<'a> {
                     // somebody else's page was served.
                     let _ = self.reset(session, &path);
                 }
-                let state = self.state();
+                let mut state = self.state();
                 let Some(set) = state.folios.get(session) else {
                     return;
                 };
-                if held == Some(set.stamp.as_str()) {
+                let word = set.stamp.word();
+                if held == Some(word.as_str()) {
                     return;
                 }
                 // The page holds a state this server does not, so the only honest
@@ -681,23 +707,29 @@ impl<'a> Codex<'a> {
                     gone: Vec::new(),
                 };
                 let data = told(
-                    &set.stamp,
+                    &word,
                     &whole,
                     &set.panels,
                     &set.facts,
                     Some(&set.faces.url()),
                 );
-                state.only(id, "panels", &data, Some(&set.stamp));
+                state.only(id, "panels", &data, Some(&word));
             }
             listing => {
-                let Some(gathered) = self.listing(listing) else {
+                // Bring every page already watching this listing up to date
+                // first, this one among them. What that leaves stored is what
+                // all of them hold, so a page arriving is never a page whose
+                // markup the others are then measured against without ever
+                // having been sent it.
+                if self.relist(listing) {
+                    return;
+                }
+                let mut state = self.state();
+                let Some(held) = state.listings.get(listing) else {
                     return;
                 };
-                let mut state = self.state();
-                state
-                    .listings
-                    .insert(listing.clone(), gathered.markup.clone());
-                state.only(id, "listing", &gathered.told(), None);
+                let told = held.told();
+                state.only(id, "listing", &told, None);
             }
         }
     }
@@ -719,24 +751,98 @@ impl<'a> Codex<'a> {
     }
 }
 
-impl State {
-    /// Tells every page watching the same thing. A listener whose reader has gone
-    /// is dropped by its own thread, so a failed send here is simply a race with
-    /// that and is nothing to answer for.
-    fn tell(&self, watching: &Watching, event: &str, data: &str, id: Option<&str>) {
-        let frame = frame(event, data, id);
-        for listener in &self.listeners {
-            if &listener.watching == watching {
-                let _ = listener.frames.send(frame.clone());
+/// One page's place among the listeners, held for as long as its thread is
+/// attending to it.
+///
+/// A guard rather than a pair of statements, because a panic has to clear it too.
+/// [`Codex::greet`] sets a whole folio (`Scribe::panels` runs under rayon, and
+/// weighing a panel against the cut faces carries an `expect`), and a listener
+/// left behind is one the watcher goes on setting a folio for while nothing ever
+/// drains what it is sent. [`run`] never returns, so nothing else would clear it.
+struct Attending<'a, 'scribe> {
+    codex: &'a Codex<'scribe>,
+    id: u64,
+    watching: Watching,
+}
+
+impl<'a, 'scribe> Attending<'a, 'scribe> {
+    fn new(
+        codex: &'a Codex<'scribe>,
+        id: u64,
+        watching: Watching,
+        frames: SyncSender<String>,
+    ) -> Self {
+        codex.state().listeners.push(Listener {
+            id,
+            watching: watching.clone(),
+            frames,
+        });
+        Self {
+            codex,
+            id,
+            watching,
+        }
+    }
+}
+
+impl Drop for Attending<'_, '_> {
+    fn drop(&mut self) {
+        let mut state = self.codex.state();
+        state.listeners.retain(|listener| listener.id != self.id);
+        // A folio nobody is reading is not worth holding a setting of, and the
+        // next reader's page will be measured against their own load.
+        if state
+            .listeners
+            .iter()
+            .any(|listener| listener.watching == self.watching)
+        {
+            return;
+        }
+        match &self.watching {
+            Watching::Folio(session) => {
+                state.folios.remove(session);
+            }
+            other => {
+                state.listings.remove(other);
             }
         }
+    }
+}
+
+impl State {
+    /// Tells every page watching the same thing, letting go of any that has
+    /// fallen a whole [`BACKLOG`] behind (see there for why that is the answer).
+    /// A listener whose reader has gone is dropped by its own thread, so a
+    /// disconnected channel here is simply a race with that and is nothing to
+    /// answer for.
+    fn tell(&mut self, watching: &Watching, event: &str, data: &str, id: Option<&str>) {
+        let frame = frame(event, data, id);
+        let mut sunk = Vec::new();
+        for listener in &self.listeners {
+            if &listener.watching != watching {
+                continue;
+            }
+            if let Err(TrySendError::Full(_)) = listener.frames.try_send(frame.clone()) {
+                sunk.push(listener.id);
+            }
+        }
+        self.listeners
+            .retain(|listener| !sunk.contains(&listener.id));
     }
 
     /// Tells one page, which is how a page that has just started listening is
     /// caught up without telling every other page what it already knows.
-    fn only(&self, id: u64, event: &str, data: &str, stamp: Option<&str>) {
-        if let Some(listener) = self.listeners.iter().find(|listener| listener.id == id) {
-            let _ = listener.frames.send(frame(event, data, stamp));
+    fn only(&mut self, id: u64, event: &str, data: &str, stamp: Option<&str>) {
+        let frame = frame(event, data, stamp);
+        let sunk = self
+            .listeners
+            .iter()
+            .find(|listener| listener.id == id)
+            .is_some_and(|listener| {
+                matches!(listener.frames.try_send(frame), Err(TrySendError::Full(_)))
+            });
+        if sunk {
+            self.listeners.retain(|listener| listener.id != id);
         }
     }
 }
@@ -828,15 +934,35 @@ fn resumed(request: &Request) -> Option<String> {
         .map(|header| header.value.as_str().to_owned())
 }
 
-/// The state of a session file, as one word: a page reports it back so a
-/// catch-up can be measured without the server keeping a history. A file that
-/// cannot be read has no state to name, which is not a state any render matches.
-fn stamp(path: &Path) -> String {
-    let Ok(metadata) = path.metadata() else {
-        return "gone".to_owned();
-    };
-    let modified = metadata.modified().map(nanos).unwrap_or(0);
-    format!("{modified}-{}", metadata.len())
+/// The state of a session file: when it was last written, and how long it was.
+/// A page reports it back in a word, so a catch-up can be measured without the
+/// server keeping any history.
+///
+/// It is *ordered*, and that is what lets two settings in flight at once be told
+/// apart. A session file is only ever appended to, so a later read is a larger
+/// stamp, and a setting made from an older read can be recognised as such rather
+/// than committed over a newer one.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct Stamp {
+    modified: u128,
+    length: u64,
+}
+
+impl Stamp {
+    /// `None` for a file that is not there to read, which is not a state any
+    /// render matches and so is never a setting anyone is holding.
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = path.metadata().ok()?;
+        Some(Self {
+            modified: metadata.modified().map(nanos).unwrap_or(0),
+            length: metadata.len(),
+        })
+    }
+
+    /// The one word a page carries and reports back.
+    fn word(&self) -> String {
+        format!("{}-{}", self.modified, self.length)
+    }
 }
 
 fn nanos(time: SystemTime) -> u128 {
@@ -1084,6 +1210,48 @@ mod tests {
                 changed: Vec::new(),
                 gone: vec![2]
             }
+        );
+    }
+
+    /// Two settings of one folio can be in flight at once, each read outside the
+    /// lock, so the one that commits second is not always the newer. A session
+    /// file is only ever appended to, so the stamp is what says which is which.
+    #[test]
+    fn a_session_that_grew_carries_the_larger_stamp() {
+        let read = Stamp {
+            modified: 17,
+            length: 400,
+        };
+        let appended = Stamp {
+            modified: 17,
+            length: 900,
+        };
+        let rewritten = Stamp {
+            modified: 18,
+            length: 400,
+        };
+
+        assert!(appended > read);
+        assert!(rewritten > appended);
+    }
+
+    /// A file that is not there has no state to name, which is what keeps a
+    /// deleted session from being read again on every tick for as long as
+    /// somebody has its page open.
+    #[test]
+    fn a_session_that_is_not_there_has_no_stamp() {
+        assert_eq!(Stamp::of(Path::new("nowhere/at/all.jsonl")), None);
+    }
+
+    #[test]
+    fn a_stamp_is_carried_as_one_word() {
+        assert_eq!(
+            Stamp {
+                modified: 17,
+                length: 42
+            }
+            .word(),
+            "17-42"
         );
     }
 

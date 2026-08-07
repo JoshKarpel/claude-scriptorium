@@ -109,6 +109,17 @@ When a change is user-visible (a new subcommand or flag, changed output, a bug
 fix), add an entry to `CHANGELOG.md` under the current unreleased version,
 grouped per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+**User-visible means visible between releases**, so a fix to code the unreleased
+version itself added takes no `Fixed` entry: nobody on the last tag could have
+met it, so the entry records how the feature came to be written rather than what
+changed for a reader, and a `Fixed` section that takes them becomes a running
+account of the branch. Settle it by asking whether the code being fixed was in
+the last tag (`git ls-tree v<last> src/`, `git show main:CHANGELOG.md`) before
+reaching for `Fixed`. Where such a fix establishes a property the reader does
+need, state it positively in the feature's own `Added` or `Changed` entry, which
+is what keeps that entry a description of the thing as it stands rather than as
+it was first written.
+
 ## Architecture
 
 One session JSONL in, one self-contained HTML file out. Three stages, one
@@ -120,8 +131,16 @@ module each:
   `all_quires` enumerates every project for the cross-project picker.
 - `catalogue`: what discovery found, as a *listing*: `Catalogue::scan` stats every
   session without reading one, and `Peeks` memoizes the titles, which cost a whole
-  file read each. `Shelf`/`Shelved`/`Leaf` are the same listing with every label
-  already looked up, so a page is a function of a value the way a folio is.
+  file read each. The memo is keyed on the session's stamp *and* rested for
+  `REPEEK`, which is what the throttle is for: the stamp of the session being
+  written right now changes faster than a codex gathers a listing, so keying on it
+  alone re-reads and re-parses megabytes several times a second for exactly the
+  one file the memo could never help with. A title is not what moves as a session
+  grows, so the cost of the rest is a mid-session title arriving within it rather
+  than at once. `Shelf`/`Shelved`/`Leaf` are the same listing with every label
+  already looked up, so a page is a function of a value the way a folio is; `now`
+  is passed in rather than read, so what a listing costs is a function of its
+  arguments too.
 - `transcript`: parses JSONL lines into a `Folio` of raw `Recorded`s (a `Turn`
   of the conversation, or a `Gloss` the harness wrote into it), then folds those
   into a stream of display `Panel`s (`Folio::panels`). `Folio::peek` is a
@@ -229,6 +248,20 @@ A comment heartbeat keeps an idle stream from being culled.
 `tiny_http` has no streaming response, so the stream is written through
 `Request::into_writer()`: the head by hand, then chunked frames flushed one at a
 time, since a frame in a buffer is a change the reader has not been told about.
+Its `Response` cannot stand in: it wraps the socket in a 1 KB `BufWriter` and
+`io::copy`s the body through a chunked encoder without flushing, so a frame would
+sit there until the next kilobyte of a stream that is mostly silence.
+
+**A page that has stopped reading is let go, not queued for.** Its frame channel
+is bounded (`BACKLOG`), because a frame is written with no deadline: a reader
+whose machine has suspended leaves its own thread blocked in a write while the
+watcher goes on producing patches for it, which for a session being appended to is
+a folio's worth of markup per tick. Full means the stream ends, and the browser
+reconnects and reports what it holds, which is the catch-up a dropped connection
+already takes, so nothing is lost by dropping a page rather than a frame.
+Registration is a guard (`Attending`) rather than a push and a matching pop, since
+`greet` sets a whole folio and a panic there would otherwise leave a listener
+nobody drains and `run` never returns to clear it.
 
 **A page reports the state it holds, so no history has to be kept.** The server
 holds only its own last setting of each folio; a page carries the `stamp` (the
@@ -249,12 +282,40 @@ a render. Measured: a 6.5 MB folio held open and unchanging costs the server no
 measurable CPU over five seconds, where re-setting it on every tick would have run
 a render continuously. Don't drop that check to simplify the tick.
 
+**The stamp is `Ord`, and that is what settles a race rather than a lock.** A
+subscription and a tick both go through `Codex::reset`, and each reads and renders
+*outside* the mutex, since a render under it would serialise every request behind
+one. So two settings of one folio can be in flight at once, and the one that
+commits second is not always the newer. A session file is only ever appended to,
+so a later read is a larger stamp, and `reset` declines to commit over a setting
+at least as new as its own. Without that the older read wins, `patch` measures the
+newest panels as `gone`, and the reader watches a panel vanish and return a tick
+later. Keep the read outside the lock and the check inside it.
+
 **Nothing reads a session on the request path.** One watcher thread holds the
 listing, the titles it has read, and the last setting of each folio being read,
 and looks for changes on a timer, only for what someone has open, so an idle codex
 does no work. A session caught mid-write is not a failure to show anybody: the
 read is retried (a half-written line is finished microseconds later), and until a
 whole setting succeeds the last good one stands and nobody is told anything.
+
+**A session with no stamp is not read at all**, and the retry is why. `Stamp::of`
+answers `None` for a file that cannot be stat'd, and `reset` stops there. The
+retry exists for a line caught between its bytes and its newline, which is
+finished microseconds later; nothing finishes a file that has been deleted, so a
+page left open on one would spend `PATIENCE * BREATH` failing on *every* tick,
+serialised ahead of every other folio and listing being watched, for as long as
+that page stayed open. `Codex::folio` asks the same question before reading, so a
+request for a deleted session answers at once instead of after half a second.
+
+**What is stored as sent has to have been sent.** `State::listings` is what every
+page watching a listing is holding, and only `Codex::relist` writes there, in the
+same step as telling them. A page load gathers a listing of its own and stores
+none of it: storing markup only that one page ever saw leaves every other page on
+an earlier listing, which the next tick then measures as unchanged and says
+nothing about, and for a quiet codex that is forever. `greet` relists rather than
+storing its own gathering for the same reason. The folio path avoids this by
+construction, since `reset` only ever stores along with telling.
 
 **A poisoned lock is recovered, not propagated.** Everything mutable sits behind
 one mutex, and it is held across real work (a listing reads and parses every
@@ -311,7 +372,18 @@ because a user unit inherits nothing from the installing shell and a
 served a different root than the one the command was given. `Standing::bound`
 then *recovers* the address by parsing the unit's own `ExecStart` rather than
 restating what an install once meant, so a hand-edited unit is reported as it now
-stands and no copy of the defaults exists here to drift from clap's.
+stands and no copy of the defaults exists here to drift from clap's. The flags
+themselves are one declaration too: `main.rs`'s `Bind` is what both `codex` and
+`cloister install` flatten, so a changed default cannot reach one and leave a unit
+file carrying the other.
+
+**Quoting an `ExecStart` argument is not only about whitespace.** systemd also
+resolves its own `%` specifiers and `$VAR`/`${VAR}` expansions there, and it does
+so *inside* double quotes as readily as outside, so `quoted` doubles both and
+`exec_start` undoes them on the way back. A `--root` under `/srv/%backup` would
+otherwise make a unit that refuses to load, or one that quietly serves a
+different directory than the one the command was given, which is the failure
+quoting exists to prevent.
 
 **The unit states the binary as well as the arguments**, as a comment carrying
 its mtime and size (`Charter::program_stamp`). `ExecStart` names a path and not a

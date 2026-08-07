@@ -22,6 +22,17 @@ use crate::{discovery, transcript::Folio};
 /// enough that a session put down for a coffee stops claiming to be live.
 const STILL_WARM: Duration = Duration::from_secs(90);
 
+/// How long a session that keeps changing waits before it is read again.
+///
+/// A stamp is what says a peek is stale, and for the session being written right
+/// now it changes faster than a listing is gathered, so the memo can never help
+/// with the one file it most needs to. What a peek answers with is a title and a
+/// working directory, neither of which moves as a session grows, so re-reading
+/// megabytes several times a second buys a label that is almost always the one
+/// already held. A title Claude writes mid-session reaches the listing within
+/// this rather than at once, which is the whole of what it costs.
+const REPEEK: Duration = Duration::from_secs(30);
+
 /// Every quire the projects root holds, most recently active first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalogue {
@@ -136,10 +147,23 @@ impl Listed {
 /// affordable once and not once per listing: a corpus is hundreds of megabytes
 /// and a codex re-lists on a timer. A session is unchanged when its stamp and
 /// its length are, and a session file is only ever appended to, so a stale entry
-/// is not a risk a length can hide.
+/// is not a risk a length can hide. A session that *has* changed is still read
+/// no more often than [`REPEEK`], which is what keeps the one being written now
+/// from being read on every listing.
 #[derive(Debug, Default)]
 pub struct Peeks {
-    held: HashMap<PathBuf, (Stamp, Peeked)>,
+    held: HashMap<PathBuf, Held>,
+}
+
+/// One session's label, and what says whether it still stands.
+#[derive(Debug)]
+struct Held {
+    /// The session as it was when this was read.
+    stamp: Stamp,
+    /// When it was read, which is what holds a session being written now to one
+    /// read per [`REPEEK`] rather than one per listing.
+    read: SystemTime,
+    peeked: Peeked,
 }
 
 /// What a peek recovered, reduced to the two things a listing shows.
@@ -153,33 +177,46 @@ type Stamp = (SystemTime, u64);
 
 impl Peeks {
     /// This session's title and working directory, read only if it has changed
-    /// since it was last read.
-    pub fn of(&mut self, session: &Listed) -> &Peeked {
+    /// since it was last read and has not been read within [`REPEEK`].
+    ///
+    /// `now` is passed in rather than read, so what a listing costs is a function
+    /// of its arguments and can be tested without waiting for a clock.
+    pub fn of(&mut self, session: &Listed, now: SystemTime) -> &Peeked {
         let stamp = (session.modified, session.bytes);
-        let entry = self.held.entry(session.path.clone());
-        let (held, peeked) = entry.or_insert_with(|| (stamp, peek(&session.path)));
-        if *held != stamp {
-            *held = stamp;
-            *peeked = peek(&session.path);
+        let held = self
+            .held
+            .entry(session.path.clone())
+            .or_insert_with(|| Held {
+                stamp,
+                read: now,
+                peeked: peek(&session.path),
+            });
+        let rested = now
+            .duration_since(held.read)
+            .is_ok_and(|since| since >= REPEEK);
+        if held.stamp != stamp && rested {
+            held.stamp = stamp;
+            held.read = now;
+            held.peeked = peek(&session.path);
         }
-        peeked
+        &held.peeked
     }
 
     /// What to call a quire: the working directory its most recent session ran
     /// in, since the encoded directory name is lossy (every separator and dot
     /// flattened to a dash). Falls back to that name when no session says.
-    pub fn project(&mut self, quire: &Gathering) -> String {
+    pub fn project(&mut self, quire: &Gathering, now: SystemTime) -> String {
         quire
             .latest()
-            .and_then(|session| self.of(session).project.clone())
+            .and_then(|session| self.of(session, now).project.clone())
             .map(|project| project.display().to_string())
             .unwrap_or_else(|| quire.dir.display().to_string())
     }
 
     /// How a session is labelled in a listing, which is Claude's own title for
     /// it, or its opening prompt, or an admission that it has neither.
-    pub fn title(&mut self, session: &Listed) -> String {
-        self.of(session)
+    pub fn title(&mut self, session: &Listed, now: SystemTime) -> String {
+        self.of(session, now)
             .title
             .as_deref()
             .map(condense)
@@ -273,7 +310,7 @@ impl Shelved {
             .take(most)
             .map(|session| Leaf {
                 id: session.id.clone(),
-                title: peeks.title(session),
+                title: peeks.title(session, now),
                 when: ago(now, session.modified),
                 bytes: session.bytes,
                 is_live: session.is_live(now),
@@ -281,7 +318,7 @@ impl Shelved {
             .collect();
         Self {
             id: quire.id.clone(),
-            project: peeks.project(quire),
+            project: peeks.project(quire, now),
             when: quire
                 .modified()
                 .map(|modified| ago(now, modified))
@@ -396,31 +433,63 @@ mod tests {
         assert!(!session.is_live(at(9_000)));
     }
 
-    #[test]
-    fn a_peek_is_reread_only_once_the_session_has_changed() {
-        let dir = std::env::temp_dir().join(format!("catalogue-{}", std::process::id()));
+    /// Writes a session file under a directory of this test's own, so two tests
+    /// running at once do not read each other's titles.
+    fn session_file(name: &str, title: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("catalogue-{}-{name}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("session.jsonl");
         fs::write(
             &path,
-            "{\"type\":\"ai-title\",\"aiTitle\":\"First light\"}\n",
+            format!("{{\"type\":\"ai-title\",\"aiTitle\":\"{title}\"}}\n"),
         )
         .unwrap();
+        path
+    }
 
+    #[test]
+    fn a_peek_is_reread_only_once_the_session_has_changed() {
+        let path = session_file("changed", "First light");
         let mut peeks = Peeks::default();
         let session = listed(&path, 1_000);
-        assert_eq!(peeks.title(&session), "First light");
+        assert_eq!(peeks.title(&session, at(100_000)), "First light");
 
         // The same stamp: whatever the file now says, the listing keeps what it
         // read, which is the whole point of holding it.
         fs::write(&path, "{\"type\":\"ai-title\",\"aiTitle\":\"Second\"}\n").unwrap();
-        assert_eq!(peeks.title(&session), "First light");
+        assert_eq!(peeks.title(&session, at(200_000)), "First light");
 
-        // A new stamp, so it is read again.
+        // A new stamp, and long enough since the last read, so it is read again.
         let grown = listed(&path, 2_000);
-        assert_eq!(peeks.title(&grown), "Second");
+        assert_eq!(peeks.title(&grown, at(300_000)), "Second");
 
-        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// The session being written right now changes its stamp faster than a codex
+    /// gathers a listing, so a memo keyed on the stamp alone would read the whole
+    /// file several times a second for a title that has not moved.
+    #[test]
+    fn a_session_being_written_is_not_reread_on_every_listing() {
+        let path = session_file("live", "First light");
+        let mut peeks = Peeks::default();
+        assert_eq!(
+            peeks.title(&listed(&path, 1_000), at(100_000)),
+            "First light"
+        );
+
+        fs::write(&path, "{\"type\":\"ai-title\",\"aiTitle\":\"Second\"}\n").unwrap();
+        // A fresh stamp on every gathering, as a growing session has, over a
+        // stretch shorter than the rest between reads.
+        for second in 1..REPEEK.as_secs() {
+            let grown = listed(&path, 1_000 + second);
+            assert_eq!(peeks.title(&grown, at(100_000 + second)), "First light");
+        }
+
+        // Once the rest has elapsed, the next changed stamp is read.
+        assert_eq!(peeks.title(&listed(&path, 2_000), at(100_030)), "Second");
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
@@ -428,7 +497,7 @@ mod tests {
         let mut peeks = Peeks::default();
 
         assert_eq!(
-            peeks.title(&listed(Path::new("nowhere.jsonl"), 1)),
+            peeks.title(&listed(Path::new("nowhere.jsonl"), 1), at(1_000)),
             "(untitled)"
         );
     }

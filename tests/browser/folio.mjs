@@ -98,6 +98,10 @@ export const codex = async () => {
     quire: `${at}/quire/${quire}`,
     folio: `${at}/folio/live`,
     grow: grower(session),
+    /** Files another session under the same quire, which changes the listing. */
+    add(id) {
+      copyFileSync(join(ROOT, "tests/fixtures/session.jsonl"), join(root, quire, `${id}.jsonl`));
+    },
     stop() {
       server.kill();
     },

@@ -128,6 +128,15 @@ pub fn stamped(program: &Path) -> String {
 /// Quotes an argument for a systemd `ExecStart`, which splits on whitespace
 /// unless a word is quoted. A home directory with a space in it is otherwise a
 /// unit that runs a different command than the one it was given.
+///
+/// Quoting is not the whole of it. systemd also resolves its own `%` specifiers
+/// and `$VAR`/`${VAR}` expansions in a command line, and it does so *inside*
+/// double quotes as readily as outside, so a literal of either has to be written
+/// twice over. A `--root` under `/srv/%backup` would otherwise be a unit that
+/// refuses to load, or one that quietly serves a different directory than the
+/// one this command was given, which is exactly what quoting exists to prevent.
+/// Neither character is in the unquoted set below, so anything carrying one
+/// takes the quoted branch.
 fn quoted(argument: &str) -> String {
     if !argument.is_empty()
         && argument
@@ -136,7 +145,20 @@ fn quoted(argument: &str) -> String {
     {
         return argument.to_owned();
     }
-    format!("\"{}\"", argument.replace('\\', r"\\").replace('"', "\\\""))
+    format!(
+        "\"{}\"",
+        argument
+            .replace('\\', r"\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+            .replace('$', "$$")
+    )
+}
+
+/// Undoes what [`quoted`] doubled, so what [`exec_start`] reads back is the
+/// argument as it was given rather than as systemd needs it spelled.
+fn literal(word: &str) -> String {
+    word.replace("%%", "%").replace("$$", "$")
 }
 
 /// What a codex binds.
@@ -195,14 +217,14 @@ fn exec_start(unit_file: &str) -> Option<Vec<String>> {
             '"' => quoting = !quoting,
             c if c.is_whitespace() && !quoting => {
                 if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
+                    words.push(literal(&std::mem::take(&mut word)));
                 }
             }
             c => word.push(c),
         }
     }
     if !word.is_empty() {
-        words.push(word);
+        words.push(literal(&word));
     }
     Some(words)
 }
@@ -500,6 +522,26 @@ mod tests {
         charter.arguments = vec!["codex".to_owned(), r#"--root=/a "quoted" dir"#.to_owned()];
         let recovered = exec_start(&charter.unit_file()).unwrap();
         assert_eq!(recovered.last().unwrap(), r#"--root=/a "quoted" dir"#);
+    }
+
+    /// systemd resolves these in a command line, inside quotes as readily as
+    /// outside, so quoting alone leaves a path holding one meaning something
+    /// other than itself.
+    #[test]
+    fn a_specifier_or_a_variable_in_a_path_is_written_as_a_literal() {
+        let mut charter = charter();
+        charter.arguments = vec![
+            "codex".to_owned(),
+            "--root".to_owned(),
+            "/srv/%backup/$HOME dir".to_owned(),
+        ];
+        let unit = charter.unit_file();
+
+        assert!(unit.contains(r#""/srv/%%backup/$$HOME dir""#));
+        assert_eq!(
+            exec_start(&unit).unwrap().last().unwrap(),
+            "/srv/%backup/$HOME dir"
+        );
     }
 
     #[test]
